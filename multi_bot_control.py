@@ -120,9 +120,15 @@ def create_bot(token, bot_index, is_main=False):
     @bot.gateway.command
     def on_ready(resp):
         if resp.event.ready:
-            user = resp.raw['user']
-            bot_type = "Main" if is_main else "Sub"
-            print(f"Đã đăng nhập: {user['username']} ({user['id']}) - Loại: {bot_type} #{bot_index}", flush=True)
+            # Lấy thông tin người dùng một cách an toàn để tránh lỗi KeyError
+            user = resp.raw.get('user')
+            if user:
+                bot_type = "Main" if is_main else "Sub"
+                username = user.get('username', 'Unknown')
+                user_id = user.get('id', 'Unknown')
+                print(f"Đã đăng nhập: {username} ({user_id}) - Loại: {bot_type} #{bot_index}", flush=True)
+            else:
+                print(f"[LỖI] Không thể lấy thông tin người dùng cho bot #{bot_index}. Token có thể không hợp lệ.", flush=True)
 
     if is_main:
         @bot.gateway.command
