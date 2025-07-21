@@ -101,12 +101,33 @@ def periodic_save_loop():
 
 # --- CÁC HÀM LOGIC BOT ---
 def create_bot(token, bot_index=-1):
-    bot = discum.Client(token=token, log=False)
+    """Tạo một instance bot với khả năng ghi log và xử lý lỗi kết nối tốt hơn."""
+    # Bật log của discum để có thêm thông tin gỡ lỗi
+    bot = discum.Client(token=token, log=True) 
+    bot_type_str = f"(NODE {bot_index + 1})" if bot_index >= 0 else "(Sub)"
+
     @bot.gateway.command
     def on_ready(resp):
         if resp.event.ready:
-            user_data = resp.raw.get("user", {}); user_id = user_data.get("id")
-            if user_id: print(f"Đã đăng nhập: {user_id} ({'NODE ' + str(bot_index + 1) if bot_index >= 0 else 'Sub'})", flush=True)
+            user_data = resp.raw.get("user", {})
+            user_id = user_data.get("id")
+            if user_id:
+                print(f"✅ KẾT NỐI THÀNH CÔNG: {user_id} {bot_type_str}", flush=True)
+
+    # THÊM MỚI: Hàm xử lý khi kết nối bị đóng, giúp nhận diện lỗi rõ ràng hơn
+    @bot.gateway.command
+    def on_close(resp):
+        if resp.event.close:
+            close_code = resp.raw.get('code')
+            print(f"❌ KẾT NỐI ĐÃ ĐÓNG với bot {bot_type_str}! Mã lỗi: {close_code}", flush=True)
+            if close_code == 4004:
+                print(f"    --> NGUYÊN NHÂN: TOKEN KHÔNG HỢP LỆ hoặc đã hết hạn. Hãy kiểm tra lại token này.", flush=True)
+            elif close_code in [4010, 4011, 4012, 4013, 4014]:
+                print(f"    --> NGUYÊN NHÂN: Lỗi từ phía Discord ({close_code}). Thường là tạm thời, hãy thử lại sau.", flush=True)
+            else:
+                print(f"    --> Không xác định rõ nguyên nhân. Có thể do token sai hoặc kết nối mạng bị chặn.", flush=True)
+
+    # Nếu là bot chính, gán handler auto-grab
     if bot_index >= 0:
         state = main_bot_states[bot_index]
         delay_configs = [[("1️⃣",0.5),("2️⃣",1.5),("3️⃣",2.2)],[("1️⃣",0.8),("2️⃣",1.8),("3️⃣",2.5)],[("1️⃣",1.0),("2️⃣",2.0),("3️⃣",2.7)]]
@@ -142,6 +163,7 @@ def create_bot(token, bot_index=-1):
                 threading.Thread(target=read_heart_bot).start()
             return on_message
         bot.gateway.command(create_grab_handler(bot, state, f"NODE {bot_index + 1}", reaction_config))
+        
     threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
 
