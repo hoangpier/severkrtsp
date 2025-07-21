@@ -127,67 +127,77 @@ def create_bot(token, bot_index, is_main=False):
     if is_main:
         @bot.gateway.command
         def on_message_main(resp):
-            # Lấy cài đặt cho bot này từ biến toàn cục
-            settings = main_bot_settings.get(bot_index, {'enabled': False, 'threshold': 50})
+            try:
+                settings = main_bot_settings.get(bot_index, {'enabled': False, 'threshold': 50})
+                if not settings.get('enabled'):
+                    return
 
-            # Nếu bot không được bật thì không làm gì cả
-            if not settings.get('enabled'):
-                return
+                if resp.event.message:
+                    msg = resp.parsed.auto()
+                    if (msg.get("author", {}).get("id") == karuta_id and
+                        msg.get("channel_id") in grab_channel_ids and
+                        "is dropping" not in msg.get("content", "") and
+                        not msg.get("mentions", [])):
 
-            if resp.event.message:
-                msg = resp.parsed.auto()
-                # KIỂM TRA:
-                # 1. Tác giả là Karuta
-                # 2. Channel ID nằm trong danh sách kênh để nhặt
-                # 3. Không phải tin nhắn "is dropping" (là tin nhắn drop thật)
-                # 4. Không có mention (thường là drop cho người khác)
-                if (msg.get("author", {}).get("id") == karuta_id and
-                    msg.get("channel_id") in grab_channel_ids and
-                    "is dropping" not in msg.get("content", "") and
-                    not msg.get("mentions", [])):
+                        last_drop_msg_id = msg["id"]
+                        drop_channel_id = msg["channel_id"]
 
-                    last_drop_msg_id = msg["id"]
-                    drop_channel_id = msg["channel_id"]
+                        def read_heart_and_grab():
+                            try:
+                                time.sleep(0.7)
+                                messages_response = bot.getMessages(drop_channel_id, num=5)
+                                if not messages_response.ok:
+                                    print(f"[Main Bot #{bot_index}] Lỗi API khi lấy tin nhắn: {messages_response.text}", flush=True)
+                                    return
+                                
+                                messages = messages_response.json()
+                                if not isinstance(messages, list):
+                                    print(f"[Main Bot #{bot_index}] Dữ liệu tin nhắn không hợp lệ.", flush=True)
+                                    return
 
-                    def read_heart_and_grab():
-                        time.sleep(0.7) # Chờ bot tim phản hồi
-                        try:
-                            messages = bot.getMessages(drop_channel_id, num=5).json()
-                            for msg_item in messages:
-                                if msg_item.get("author", {}).get("id") == heart_bot_id and "embeds" in msg_item:
-                                    desc = msg_item["embeds"][0].get("description", "")
-                                    lines = desc.split('\n')
-                                    heart_numbers = [0, 0, 0]
-                                    for i, line in enumerate(lines[:3]):
-                                        match = re.search(r'♡\s*(\d+)', line)
-                                        if match:
-                                            heart_numbers[i] = int(match.group(1))
+                                for msg_item in messages:
+                                    if (msg_item.get("author", {}).get("id") == heart_bot_id and 
+                                        isinstance(msg_item.get("embeds"), list) and 
+                                        len(msg_item["embeds"]) > 0):
+                                        
+                                        embed = msg_item["embeds"][0]
+                                        desc = embed.get("description", "")
+                                        lines = desc.split('\n')
+                                        heart_numbers = [0, 0, 0]
+                                        for i, line in enumerate(lines[:3]):
+                                            match = re.search(r'♡\s*(\d+)', line)
+                                            if match:
+                                                heart_numbers[i] = int(match.group(1))
 
-                                    max_num = max(heart_numbers)
-                                    if sum(heart_numbers) > 0 and max_num >= settings.get('threshold', 50):
-                                        max_index = heart_numbers.index(max_num)
-                                        emoji, delay = [("1️⃣", 0.5), ("2️⃣", 1.5), ("3️⃣", 2.2)][max_index]
-                                        final_delay = delay + random.uniform(-0.2, 0.2)
+                                        max_num = max(heart_numbers)
+                                        if sum(heart_numbers) > 0 and max_num >= settings.get('threshold', 50):
+                                            max_index = heart_numbers.index(max_num)
+                                            emoji, delay = [("1️⃣", 0.5), ("2️⃣", 1.5), ("3️⃣", 2.2)][max_index]
+                                            final_delay = delay + random.uniform(-0.2, 0.2)
 
-                                        print(f"[Main Bot #{bot_index}] Chọn dòng {max_index+1} ({max_num} tim). Nhấn {emoji} sau {final_delay:.2f}s", flush=True)
+                                            print(f"[Main Bot #{bot_index}] Chọn dòng {max_index+1} ({max_num} tim). Nhấn {emoji} sau {final_delay:.2f}s", flush=True)
 
-                                        def grab_action():
-                                            bot.addReaction(drop_channel_id, last_drop_msg_id, emoji)
-                                            print(f"[Main Bot #{bot_index}] ĐÃ NHẤN REACTION.", flush=True)
-                                            time.sleep(2)
-                                            # Gửi "kt b" đến TẤT CẢ các kênh trong danh sách ktb_channel_ids
-                                            for ktb_ch_id in ktb_channel_ids:
-                                                if ktb_ch_id:
-                                                    bot.sendMessage(ktb_ch_id, "kt b")
-                                                    time.sleep(0.5)
-                                            print(f"[Main Bot #{bot_index}] Đã gửi 'kt b' đến các kênh.", flush=True)
+                                            def grab_action():
+                                                try:
+                                                    bot.addReaction(drop_channel_id, last_drop_msg_id, emoji)
+                                                    print(f"[Main Bot #{bot_index}] ĐÃ NHẤN REACTION.", flush=True)
+                                                    time.sleep(2)
+                                                    for ktb_ch_id in ktb_channel_ids:
+                                                        if ktb_ch_id:
+                                                            bot.sendMessage(ktb_ch_id, "kt b")
+                                                            time.sleep(0.5)
+                                                    print(f"[Main Bot #{bot_index}] Đã gửi 'kt b' đến các kênh.", flush=True)
+                                                except Exception as e_grab:
+                                                    print(f"[Main Bot #{bot_index}] Lỗi khi thực hiện grab_action: {e_grab}", flush=True)
 
-                                        threading.Timer(final_delay, grab_action).start()
-                                    break # Đã tìm thấy và xử lý tin nhắn bot tim
-                        except Exception as e:
-                            print(f"[Main Bot #{bot_index}] Lỗi khi đọc tim: {e}", flush=True)
+                                            threading.Timer(final_delay, grab_action).start()
+                                        break
+                            except Exception as e_read:
+                                print(f"[Main Bot #{bot_index}] Lỗi nghiêm trọng trong read_heart_and_grab: {e_read}", flush=True)
 
-                    threading.Thread(target=read_heart_and_grab).start()
+                        threading.Thread(target=read_heart_and_grab).start()
+            except Exception as e_main:
+                print(f"[Main Bot #{bot_index}] Lỗi trong on_message_main: {e_main}", flush=True)
 
     threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
