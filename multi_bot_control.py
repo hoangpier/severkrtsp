@@ -1,4 +1,4 @@
-# PHIÊN BẢN NÂNG CẤP: THÊM PANEL TRẠNG THÁI BOT
+# PHIÊN BẢN NÂNG CẤP: THÊM PANEL TRẠNG THÁI BOT VÀ KHỞI ĐỘNG TUẦN TỰ
 import discum
 import threading
 import time
@@ -440,23 +440,37 @@ def api_update_channels():
 # --- KHỞI ĐỘNG ---
 if __name__ == "__main__":
     load_settings()
-    print("Đang khởi tạo các bot...", flush=True)
-    with bots_lock:
-        for i, token in enumerate(main_tokens):
-            bot_statuses[f'main_{i}'] = 'connecting'
-            main_bots.append(create_bot(token, bot_index=i, is_main=True))
-            if i not in main_bot_settings:
-                main_bot_settings[i] = {'enabled': False, 'threshold': 50, 'name': f'Main Account #{i+1}'}
-            elif 'name' not in main_bot_settings[i]:
-                 main_bot_settings[i]['name'] = f'Main Account #{i+1}'
-        for i, token in enumerate(sub_tokens):
-            bot_statuses[f'sub_{i}'] = 'connecting'
-            sub_bots.append(create_bot(token, bot_index=i, is_main=False))
+    
+    def initialize_bots():
+        """Khởi tạo các bot một cách tuần tự với độ trễ để tránh bị rate limit."""
+        print("Bắt đầu quá trình khởi tạo bot tuần tự...", flush=True)
+        with bots_lock:
+            for i, token in enumerate(main_tokens):
+                print(f"Chuẩn bị khởi tạo main_{i}...", flush=True)
+                bot_statuses[f'main_{i}'] = 'connecting'
+                main_bots.append(create_bot(token, bot_index=i, is_main=True))
+                if i not in main_bot_settings:
+                    main_bot_settings[i] = {'enabled': False, 'threshold': 50, 'name': f'Main Account #{i+1}'}
+                elif 'name' not in main_bot_settings[i]:
+                     main_bot_settings[i]['name'] = f'Main Account #{i+1}'
+                time.sleep(random.uniform(2, 5)) # Delay ngẫu nhiên từ 2-5 giây
+
+            for i, token in enumerate(sub_tokens):
+                print(f"Chuẩn bị khởi tạo sub_{i}...", flush=True)
+                bot_statuses[f'sub_{i}'] = 'connecting'
+                sub_bots.append(create_bot(token, bot_index=i, is_main=False))
+                time.sleep(random.uniform(2, 5)) # Delay ngẫu nhiên từ 2-5 giây
+        print("Tất cả các bot đã được đưa vào hàng đợi khởi tạo.", flush=True)
+
+    # Chạy khởi tạo trong một luồng riêng để không chặn server Flask
+    threading.Thread(target=initialize_bots).start()
+
     print("Đang khởi tạo các luồng nền...", flush=True)
     threading.Thread(target=periodic_save_loop, daemon=True).start()
     if spam_enabled:
         if spam_thread is None or not spam_thread.is_alive():
             spam_thread = threading.Thread(target=spam_loop, daemon=True); spam_thread.start()
+    
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
