@@ -294,14 +294,27 @@ document.addEventListener('DOMContentLoaded', function () {
             const response = await fetch('/status');
             const data = await response.json();
             renderMainBots(data.main_bot_settings);
-            document.getElementById('spam-message').value = data.spam_message;
-            document.getElementById('spam-delay').value = data.spam_delay;
+
+            // Helper function to update input/textarea value only if not focused
+            const updateInputValue = (elementId, newValue) => {
+                const element = document.getElementById(elementId);
+                // Chỉ cập nhật nếu element tồn tại và không phải là element đang được focus
+                if (element && document.activeElement !== element) {
+                    element.value = newValue;
+                }
+            };
+
+            updateInputValue('spam-message', data.spam_message);
+            updateInputValue('spam-delay', data.spam_delay);
+
             const spamBtn = document.getElementById('spam-toggle-btn');
             spamBtn.textContent = data.spam_enabled ? 'DISABLE SPAM' : 'ENABLE SPAM';
             spamBtn.className = `btn ${data.spam_enabled ? 'btn-blood' : 'btn-necro'}`;
-            document.getElementById('grab-channels-input').value = data.grab_channel_ids.join(',');
-            document.getElementById('ktb-channels-input').value = data.ktb_channel_ids.join(',');
-            document.getElementById('spam-channels-input').value = data.spam_channel_ids.join(',');
+            
+            updateInputValue('grab-channels-input', data.grab_channel_ids.join(','));
+            updateInputValue('ktb-channels-input', data.ktb_channel_ids.join(','));
+            updateInputValue('spam-channels-input', data.spam_channel_ids.join(','));
+
         } catch (error) { console.error('Error fetching status:', error); }
     }
 
