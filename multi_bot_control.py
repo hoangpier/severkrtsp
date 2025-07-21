@@ -1,4 +1,4 @@
-# PHIÊN BẢN TỔNG HỢP CUỐI CÙNG: LÕI LOGIC TỪ FILE LITE + CÁC TÍNH NĂNG MỚI
+# PHIÊN BẢN LITE - ĐÃ TÁI CẤU TRÚC ĐỂ HỖ TRỢ N TÀI KHOẢN CHÍNH
 import discum
 import threading
 import time
@@ -12,40 +12,67 @@ import uuid
 
 load_dotenv()
 
-# --- CẤU HÌNH ĐỘNG ---
-main_tokens = [token.strip() for token in os.getenv("MAIN_TOKENS", "").split(",") if token.strip()]
-sub_tokens = [token.strip() for token in os.getenv("SUB_TOKENS", "").split(",") if token.strip()]
+# --- CẤU HÌNH ---
+# Tái cấu trúc: Dùng một danh sách cho tất cả các token chính
+main_tokens = os.getenv("MAIN_TOKENS").split(",") if os.getenv("MAIN_TOKENS") else []
+tokens = os.getenv("TOKENS").split(",") if os.getenv("TOKENS") else []
 karuta_id = "646937666251915264"
-heart_bot_id = os.getenv("HEART_BOT_ID", "1274445226064220273")
+karibbit_id = "1311684840462225440"
+BOT_NAMES = [ # Tên để hiển thị trên giao diện, bạn có thể thêm nếu cần
+    "ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON", 
+    "ZETA", "ETA", "THETA", "IOTA", "KAPPA", 
+    "LAMBDA", "MU" 
+]
 
-# --- BIẾN TRẠNG THÁI TOÀN CỤC ---
-main_bots, sub_bots = [], []
-servers = []  # Cấu trúc dữ liệu chính, quản lý tất cả server
-bot_statuses = {}
+# --- BIẾN TRẠNG THÁI ---
+bots, acc_names = [], [
+    "Blacklist", "Khanh bang", "Dersale", "Venus", "WhyK", "Tan",
+    "Ylang", "Nina", "Nathan", "Ofer", "White", "the Wicker", "Leader", "Tess", "Wyatt", "Daisy", "CantStop", "Token",
+]
+# Tái cấu trúc: Dùng danh sách để quản lý các bot chính
+main_bots = [] 
+
+# Cấu hình đa server
+servers = [] 
+
+# Cài đặt toàn cục
+auto_reboot_enabled = False
+auto_reboot_delay = 3600
+last_reboot_cycle_time = 0
+
+# Các biến điều khiển luồng
+auto_reboot_stop_event = threading.Event()
+spam_thread, auto_reboot_thread = None, None
 bots_lock = threading.Lock()
-spam_thread = None
 server_start_time = time.time()
+bot_active_states = {}
 
 # --- HÀM LƯU VÀ TẢI CÀI ĐẶT ---
 def save_settings():
     api_key = os.getenv("JSONBIN_API_KEY")
     bin_id = os.getenv("JSONBIN_BIN_ID")
     if not api_key or not bin_id: return
-    settings = {'servers': servers}
+    settings = {
+        'servers': servers,
+        'auto_reboot_enabled': auto_reboot_enabled, 
+        'auto_reboot_delay': auto_reboot_delay,
+        'bot_active_states': bot_active_states,
+        'last_reboot_cycle_time': last_reboot_cycle_time
+    }
     headers = {'Content-Type': 'application/json', 'X-Master-Key': api_key}
     url = f"https://api.jsonbin.io/v3/b/{bin_id}"
     try:
         req = requests.put(url, json=settings, headers=headers, timeout=10)
-        if req.status_code == 200: print("[Settings] Đã lưu cài đặt.", flush=True)
-        else: print(f"[Settings] Lỗi khi lưu: {req.status_code}", flush=True)
-    except Exception as e: print(f"[Settings] Exception khi lưu: {e}", flush=True)
+        if req.status_code == 200: print("[Settings] Đã lưu cài đặt lên JSONBin.io thành công.", flush=True)
+        else: print(f"[Settings] Lỗi khi lưu cài đặt: {req.status_code} - {req.text}", flush=True)
+    except Exception as e: print(f"[Settings] Exception khi lưu cài đặt: {e}", flush=True)
 
 def load_settings():
-    global servers
+    global servers, auto_reboot_enabled, auto_reboot_delay, bot_active_states, last_reboot_cycle_time
     api_key = os.getenv("JSONBIN_API_KEY")
     bin_id = os.getenv("JSONBIN_BIN_ID")
     if not api_key or not bin_id:
-        print("[Settings] Thiếu API Key/Bin ID.", flush=True)
+        print("[Settings] Thiếu API Key hoặc Bin ID. Sử dụng cài đặt mặc định.", flush=True)
         return
     headers = {'X-Master-Key': api_key}
     url = f"https://api.jsonbin.io/v3/b/{bin_id}/latest"
@@ -53,110 +80,153 @@ def load_settings():
         req = requests.get(url, headers=headers, timeout=10)
         if req.status_code == 200:
             settings = req.json().get("record", {})
-            if settings and 'servers' in settings:
+            if settings:
                 servers = settings.get('servers', [])
-                print("[Settings] Đã tải cài đặt.", flush=True)
+                auto_reboot_enabled = settings.get('auto_reboot_enabled', False)
+                auto_reboot_delay = settings.get('auto_reboot_delay', 3600)
+                bot_active_states = settings.get('bot_active_states', {})
+                last_reboot_cycle_time = settings.get('last_reboot_cycle_time', 0)
+                print("[Settings] Đã tải cài đặt từ JSONBin.io.", flush=True)
             else:
-                print("[Settings] JSONBin rỗng, bắt đầu với cấu hình trống.", flush=True)
-        else: print(f"[Settings] Lỗi khi tải: {req.status_code}", flush=True)
-    except Exception as e: print(f"[Settings] Exception khi tải: {e}", flush=True)
+                print("[Settings] JSONBin rỗng, bắt đầu với cài đặt mặc định và lưu lại.", flush=True)
+                save_settings()
+        else: print(f"[Settings] Lỗi khi tải cài đặt: {req.status_code} - {req.text}", flush=True)
+    except Exception as e: print(f"[Settings] Exception khi tải cài đặt: {e}", flush=True)
 
-# --- LOGIC BOT ---
-def handle_grab(bot, msg, bot_index):
+# --- CÁC HÀM LOGIC BOT ---
+def handle_grab(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
-    target_server = next((s for s in servers if channel_id in s.get('grab_channel_ids', [])), None)
+    target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
     if not target_server: return
 
-    settings = target_server.get('main_bot_settings', {}).get(str(bot_index), {})
-    if not settings.get('enabled'): return
-
-    heart_threshold = settings.get('threshold', 50)
-    ktb_channel_ids = target_server.get('ktb_channel_ids', [])
+    # Tái cấu trúc: Key được tạo động, không cần map
+    auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
+    heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
+    ktb_channel_id = target_server.get('ktb_channel_id')
+    
+    if not auto_grab_enabled or not ktb_channel_id: return
 
     if msg.get("author", {}).get("id") == karuta_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
         last_drop_msg_id = msg["id"]
-        def read_heart_and_grab():
-            time.sleep(0.7)
+        
+        def read_karibbit():
+            time.sleep(0.5)
             try:
                 messages = bot.getMessages(channel_id, num=5).json()
                 for msg_item in messages:
-                    if msg_item.get("author", {}).get("id") == heart_bot_id and "embeds" in msg_item and msg_item["embeds"]:
+                    if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
                         desc = msg_item["embeds"][0].get("description", "")
-                        lines, heart_numbers = desc.split('\n'), [0, 0, 0]
-                        for i, line in enumerate(lines[:3]):
-                            match = re.search(r'♡\s*(\d+)', line)
-                            if match: heart_numbers[i] = int(match.group(1))
+                        lines = desc.split('\n')
+                        heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
                         
+                        if not any(heart_numbers): break
+
                         max_num = max(heart_numbers)
-                        if sum(heart_numbers) > 0 and max_num >= heart_threshold:
+                        if max_num >= heart_threshold:
                             max_index = heart_numbers.index(max_num)
-                            emoji, delay = [("1️⃣", 0.5), ("2️⃣", 1.5), ("3️⃣", 2.2)][max_index]
-                            final_delay = delay + random.uniform(-0.2, 0.2)
-                            print(f"[{target_server['name']}|main_{bot_index}] Chọn dòng {max_index+1} ({max_num} tim). Nhấn {emoji} sau {final_delay:.2f}s", flush=True)
+                            
+                            # Cấu hình delay động, có thể thêm nếu số bot_num > 4
+                            delays = {
+                                1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4],
+                                3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]
+                            }
+                            # Dùng delay mặc định nếu bot_num không có trong dict
+                            bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
+                            emojis = ["1️⃣", "2️⃣", "3️⃣"]
+                            
+                            emoji = emojis[max_index]
+                            delay = bot_delays[max_index]
+
+                            print(f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
                             
                             def grab_action():
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
-                                time.sleep(2)
-                                for ktb_ch_id in ktb_channel_ids:
-                                    if ktb_ch_id: bot.sendMessage(ktb_ch_id, "kt b"); time.sleep(0.5)
-                                print(f"[{target_server['name']}|main_{bot_index}] Đã gửi 'kt b'.", flush=True)
+                                time.sleep(1)
+                                bot.sendMessage(ktb_channel_id, "kt b")
                             
-                            threading.Timer(final_delay, grab_action).start()
+                            threading.Timer(delay, grab_action).start()
                         break
-            except Exception as e: print(f"Lỗi khi đọc tim (main_{bot_index} @ {target_server['name']}): {e}", flush=True)
-        threading.Thread(target=read_heart_and_grab).start()
+            except Exception as e:
+                print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
 
-def create_bot(token, bot_index, is_main=False):
+        threading.Thread(target=read_karibbit).start()
+
+# Tái cấu trúc: Hàm tạo bot linh hoạt hơn
+def create_bot(token, bot_identifier, is_main=False):
     bot = discum.Client(token=token, log=False)
-    bot_id_str = f"main_{bot_index}" if is_main else f"sub_{bot_index}"
-
+    
     @bot.gateway.command
     def on_ready(resp):
         if resp.event.ready:
-            user = resp.raw.get('user')
-            if user:
-                bot_statuses[bot_id_str] = 'online'
-                print(f"ONLINE: {user.get('username', 'Unknown')} ({user.get('id', 'Unknown')}) - ID: {bot_id_str}", flush=True)
-            else:
-                bot_statuses[bot_id_str] = 'failed'
-                print(f"FAILED: Không thể lấy thông tin cho bot {bot_id_str}. Token có thể không hợp lệ.", flush=True)
+            user = resp.raw.get("user", {})
+            if isinstance(user, dict) and (user_id := user.get("id")):
+                bot_name = bot_identifier if is_main else acc_names[bot_identifier] if bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}"
+                print(f"Đã đăng nhập: {user_id} ({bot_name})", flush=True)
 
     if is_main:
+        # Dùng closure để bắt giá trị bot_identifier
         @bot.gateway.command
         def on_message(resp):
-            if resp.event.message: handle_grab(bot, resp.parsed.auto(), bot_index)
+            if resp.event.message:
+                handle_grab(bot, resp.parsed.auto(), bot_identifier)
             
     threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
 
-# --- VÒNG LẶP NỀN ---
+# --- CÁC VÒNG LẶP NỀN ---
+def auto_reboot_loop():
+    global last_reboot_cycle_time, main_bots
+    while not auto_reboot_stop_event.is_set():
+        try:
+            if auto_reboot_stop_event.wait(timeout=60): break
+            if auto_reboot_enabled and (time.time() - last_reboot_cycle_time) >= auto_reboot_delay:
+                print("[Reboot] Hết thời gian chờ, tiến hành reboot các tài khoản chính.", flush=True)
+                with bots_lock:
+                    new_main_bots = []
+                    for i, bot in enumerate(main_bots):
+                        bot.gateway.close()
+                        time.sleep(2)
+                        bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
+                        new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
+                        new_main_bots.append(new_bot)
+                        print(f"Đã reboot bot {bot_name}", flush=True)
+                        time.sleep(5)
+                    main_bots = new_main_bots
+                last_reboot_cycle_time = time.time()
+                save_settings()
+        except Exception as e:
+            print(f"[ERROR in auto_reboot_loop] {e}", flush=True)
+            time.sleep(60)
+    print("[Reboot] Luồng tự động reboot đã dừng.", flush=True)
+
 def spam_loop():
     while True:
         try:
-            bots_to_spam = [bot for i, bot in enumerate(sub_bots) if bot_statuses.get(f"sub_{i}") == 'online']
+            with bots_lock:
+                bots_to_spam = [bot for i, bot in enumerate(bots) if bot and bot_active_states.get(f'sub_{i}', False)]
             for server in servers:
-                if server.get('spam_enabled') and server.get('spam_message') and server.get('spam_channel_ids'):
-                    last_spam_time = server.get('last_spam_time', 0)
-                    spam_delay = server.get('spam_delay', 10)
-                    if (time.time() - last_spam_time) >= spam_delay:
+                if server.get('spam_enabled') and server.get('spam_message') and server.get('spam_channel_id'):
+                    if (time.time() - server.get('last_spam_time', 0)) >= server.get('spam_delay', 10):
                         for bot in bots_to_spam:
                             if not server.get('spam_enabled'): break
-                            try:
-                                for channel_id in server['spam_channel_ids']:
-                                    bot.sendMessage(channel_id, server['spam_message'])
-                                    time.sleep(0.5) # Delay nhẹ giữa các kênh
-                            except Exception as e: print(f"Lỗi gửi spam tới server {server['name']}: {e}", flush=True)
-                            time.sleep(2) # Delay giữa các bot
+                            try: bot.sendMessage(server['spam_channel_id'], server['spam_message'])
+                            except Exception as e: print(f"Lỗi gửi spam tới {server['name']}: {e}", flush=True)
+                            time.sleep(2)
                         if server.get('spam_enabled'): server['last_spam_time'] = time.time()
             time.sleep(1)
-        except Exception as e: print(f"[ERROR in spam_loop] {e}", flush=True); time.sleep(1)
+        except Exception as e:
+            print(f"[ERROR in spam_loop] {e}", flush=True)
+            time.sleep(1)
 
 def periodic_save_loop():
-    while True: time.sleep(300); save_settings()
+    while True:
+        time.sleep(36000)
+        print("[Settings] Bắt đầu lưu định kỳ (10 giờ)...", flush=True)
+        save_settings()
         
 app = Flask(__name__)
 
-# --- GIAO DIỆN WEB ---
+# --- GIAO DIỆN WEB (REFACTORED) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -165,48 +235,42 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Karuta Deep - Shadow Network Control</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Nosifer&family=Orbitron:wght@400;700&family=Courier+Prime&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Creepster&family=Orbitron:wght@400;700;900&family=Courier+Prime:wght@400;700&family=Nosifer&display=swap" rel="stylesheet">
     <style>
-        :root {
-            --primary-bg: #0a0a0a; --panel-bg: #111111; --border-color: #333333;
-            --blood-red: #8b0000; --deep-purple: #2d1b69; --necro-green: #228b22; --gold-yellow: #ffc107;
-            --text-primary: #f0f0f0; --text-secondary: #cccccc;
-            --shadow-red: 0 0 20px rgba(139, 0, 0, 0.5);
-        }
-        body { font-family: 'Courier Prime', monospace; background: var(--primary-bg); color: var(--text-primary); margin: 0; padding: 20px; }
-        .container { max-width: 1600px; margin: 0 auto; }
-        .header { text-align: center; margin-bottom: 30px; padding: 20px; background: linear-gradient(135deg, #000, rgba(139, 0, 0, 0.2)); border: 2px solid var(--blood-red); border-radius: 15px; box-shadow: var(--shadow-red); }
-        .title { font-family: 'Nosifer', cursive; font-size: 3rem; color: var(--blood-red); text-shadow: 0 0 20px var(--blood-red); }
+        :root { --primary-bg: #0a0a0a; --secondary-bg: #1a1a1a; --panel-bg: #111111; --border-color: #333333; --blood-red: #8b0000; --dark-red: #550000; --bone-white: #f8f8ff; --necro-green: #228b22; --text-primary: #f0f0f0; --text-secondary: #cccccc; }
+        body { font-family: 'Courier Prime', monospace; background: var(--primary-bg); color: var(--text-primary); margin: 0; padding: 0;}
+        .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; margin-bottom: 30px; padding: 20px; border-bottom: 2px solid var(--blood-red); }
+        .title { font-family: 'Nosifer', cursive; font-size: 3rem; color: var(--blood-red); }
         .main-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 20px; }
         .panel { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 25px; position: relative;}
-        .panel h2 { font-family: 'Orbitron', cursive; font-size: 1.4rem; margin-bottom: 20px; text-transform: uppercase; border-bottom: 1px solid; padding-bottom: 10px; color: var(--bone-white); }
-        .panel h3 { font-family: 'Orbitron', monospace; }
-        .panel h2 i, .panel h3 i { margin-right: 10px; }
-        .btn { background: #1a1a1a; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 4px; cursor: pointer; font-family: 'Orbitron', monospace; font-weight: 700; text-transform: uppercase; width: 100%; }
-        .btn-blood { border-color: var(--blood-red); color: var(--blood-red); } .btn-blood:hover { background: var(--blood-red); color: var(--primary-bg); }
-        .btn-necro { border-color: var(--necro-green); color: var(--necro-green); } .btn-necro:hover { background: var(--necro-green); color: var(--primary-bg); }
-        .input-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px; }
-        .input-group label { color: var(--text-secondary); }
-        .input-group input, .input-group textarea { width: 100%; box-sizing: border-box; background: #000; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px; border-radius: 5px; font-family: 'Courier Prime', monospace; }
-        .grab-section { margin-bottom: 15px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 8px;}
-        .grab-section h4 { margin: 0 0 10px 0; display: flex; align-items: center; gap: 10px; }
-        .grab-controls { display: flex; align-items: center; gap: 10px; }
-        .grab-controls input { flex-grow: 1; }
+        .panel h2 { font-family: 'Orbitron', cursive; font-size: 1.4rem; margin-bottom: 20px; text-transform: uppercase; border-bottom: 2px solid; padding-bottom: 10px; color: var(--bone-white); }
+        .panel h2 i { margin-right: 10px; }
+        .btn { background: var(--secondary-bg); border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 4px; cursor: pointer; font-family: 'Orbitron', monospace; font-weight: 700; text-transform: uppercase; width: 100%; }
+        .btn-small { padding: 5px 10px; font-size: 0.9em;}
+        .input-group { display: flex; align-items: stretch; gap: 10px; margin-bottom: 15px; }
+        .input-group label { background: #000; border: 1px solid var(--border-color); border-right: 0; padding: 10px 15px; border-radius: 4px 0 0 4px; display:flex; align-items:center; min-width: 120px;}
+        .input-group input, .input-group textarea { flex-grow: 1; background: #000; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 0 4px 4px 0; font-family: 'Courier Prime', monospace; }
+        .grab-section { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 8px;}
+        .grab-section h3 { margin: 0; display: flex; align-items: center; gap: 10px; width: 80px; }
+        .grab-section .input-group { margin-bottom: 0; flex-grow: 1; margin-left: 20px;}
         .msg-status { text-align: center; color: var(--necro-green); padding: 12px; border: 1px dashed var(--border-color); border-radius: 4px; margin-bottom: 20px; display: none; }
         .status-panel { grid-column: 1 / -1; }
-        .bot-status-list { max-height: 200px; overflow-y: auto; padding: 10px; background: rgba(0,0,0,0.2); border-radius: 5px; }
-        .bot-status-item { display: flex; justify-content: space-between; align-items: center; padding: 5px; border-bottom: 1px solid var(--border-color); font-size: 0.9em; }
-        .bot-status-item:last-child { border-bottom: none; }
-        .bot-status-name { text-transform: capitalize; }
-        .bot-status-indicator { font-weight: bold; }
-        .bot-status-indicator.online { color: var(--necro-green); }
-        .bot-status-indicator.connecting { color: var(--gold-yellow); }
-        .bot-status-indicator.failed { color: var(--blood-red); }
+        .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .status-row { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; }
+        .timer-display { font-size: 1.2em; font-weight: 700; }
+        .bot-status-container { display: grid; grid-template-columns: 1fr 2fr; gap: 20px; margin-top: 15px; border-top: 1px solid var(--border-color); padding-top: 15px; }
+        .bot-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+        .bot-status-item { display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; background: rgba(0,0,0,0.3); border-radius: 4px; }
+        .btn-toggle-state { padding: 3px 5px; font-size: 0.9em; border-radius: 4px; cursor: pointer; text-transform: uppercase; background: transparent; font-weight: 700; border: none; }
+        .btn-rise { color: var(--necro-green); } .btn-rest { color: var(--dark-red); }
+        .bot-main span:first-child { color: #FF4500; font-weight: 700; }
         .add-server-btn { display: flex; align-items: center; justify-content: center; min-height: 200px; border: 2px dashed var(--border-color); cursor: pointer; transition: all 0.3s ease; }
-        .add-server-btn:hover { background: #1a1a1a; border-color: var(--blood-red); }
+        .add-server-btn:hover { background: var(--secondary-bg); border-color: var(--blood-red); }
         .add-server-btn i { font-size: 3rem; color: var(--text-secondary); }
-        .btn-delete-server { position: absolute; top: 15px; right: 15px; background: var(--blood-red); border: 1px solid var(--blood-red); color: #fff; width: 30px; height: 30px; padding: 0; border-radius: 50%; }
+        .btn-delete-server { position: absolute; top: 15px; right: 15px; background: var(--dark-red); border: 1px solid var(--blood-red); color: var(--bone-white); width: auto; padding: 5px 10px; border-radius: 50%; }
         .server-sub-panel { border-top: 1px solid var(--border-color); margin-top: 20px; padding-top: 20px;}
+        .flex-row { display:flex; gap: 10px; align-items: center;}
     </style>
 </head>
 <body>
@@ -216,7 +280,23 @@ HTML_TEMPLATE = """
         <div class="main-grid">
             <div class="panel status-panel">
                 <h2><i class="fas fa-heartbeat"></i> System Status</h2>
-                <div class="bot-status-list" id="bot-status-container"></div>
+                <div class="bot-status-container">
+                    <div class="status-grid">
+                         <div class="status-row">
+                            <span><i class="fas fa-redo"></i> Auto Reboot</span>
+                            <div class="flex-row">
+                                <input type="number" id="auto-reboot-delay" value="{{ auto_reboot_delay }}" style="width: 80px; text-align: right; padding: 5px;">
+                                <span id="reboot-timer" class="timer-display">--:--:--</span>
+                                <button type="button" id="auto-reboot-toggle-btn" class="btn btn-small">{{ 'DISABLE' if auto_reboot_enabled else 'ENABLE' }}</button>
+                            </div>
+                        </div>
+                        <div class="status-row">
+                            <span><i class="fas fa-server"></i> Uptime</span>
+                            <div><span id="uptime-timer" class="timer-display">--:--:--</span></div>
+                        </div>
+                    </div>
+                    <div id="bot-status-list" class="bot-status-grid"></div>
+                </div>
             </div>
 
             {% for server in servers %}
@@ -226,20 +306,34 @@ HTML_TEMPLATE = """
                 
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-cogs"></i> Channel Config</h3>
-                    <div class="input-group"><label>Grab Channel IDs (phẩy để ngăn cách)</label><textarea class="channel-input" data-field="grab_channel_ids" rows="2">{{ server.grab_channel_ids|join(',') }}</textarea></div>
-                    <div class="input-group"><label>KTB Channel IDs (phẩy để ngăn cách)</label><textarea class="channel-input" data-field="ktb_channel_ids" rows="2">{{ server.ktb_channel_ids|join(',') }}</textarea></div>
-                    <div class="input-group"><label>Spam Channel IDs (phẩy để ngăn cách)</label><textarea class="channel-input" data-field="spam_channel_ids" rows="2">{{ server.spam_channel_ids|join(',') }}</textarea></div>
+                    <div class="input-group"><label>Main Channel ID</label><input type="text" class="channel-input" data-field="main_channel_id" value="{{ server.main_channel_id or '' }}"></div>
+                    <div class="input-group"><label>KTB Channel ID</label><input type="text" class="channel-input" data-field="ktb_channel_id" value="{{ server.ktb_channel_id or '' }}"></div>
+                    <div class="input-group"><label>Spam Channel ID</label><input type="text" class="channel-input" data-field="spam_channel_id" value="{{ server.spam_channel_id or '' }}"></div>
                 </div>
 
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-crosshairs"></i> Soul Harvest</h3>
-                    <div id="main-bots-controls-{{server.id}}"></div>
+                    {% for bot in main_bots_info %}
+                    <div class="grab-section">
+                        <h3>{{ bot.name }}</h3>
+                        <div class="input-group">
+                            <input type="number" class="harvest-threshold" data-node="{{ bot.id }}" value="{{ server['heart_threshold_' + bot.id|string] or 50 }}" min="0">
+                            <button type="button" class="btn harvest-toggle" data-node="{{ bot.id }}">
+                                {{ 'DISABLE' if server['auto_grab_enabled_' + bot.id|string] else 'ENABLE' }}
+                            </button>
+                        </div>
+                    </div>
+                    {% endfor %}
                 </div>
                 
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-paper-plane"></i> Auto Broadcast</h3>
                     <div class="input-group"><label>Message</label><textarea class="spam-message" rows="2">{{ server.spam_message or '' }}</textarea></div>
-                    <div class="input-group"><label>Delay (s)</label><input type="number" class="spam-delay" value="{{ server.spam_delay or 10 }}"></div>
+                    <div class="input-group">
+                         <label>Delay (s)</label>
+                         <input type="number" class="spam-delay" value="{{ server.spam_delay or 10 }}">
+                         <span class="timer-display spam-timer">--:--:--</span>
+                    </div>
                     <button type="button" class="btn broadcast-toggle">{{ 'DISABLE' if server.spam_enabled else 'ENABLE' }}</button>
                 </div>
             </div>
@@ -251,161 +345,95 @@ HTML_TEMPLATE = """
         </div>
     </div>
 <script>
+    // PHẦN JAVASCRIPT GIỮ NGUYÊN, NÓ ĐỦ LINH HOẠT ĐỂ HOẠT ĐỘNG VỚI GIAO DIỆN MỚI
     document.addEventListener('DOMContentLoaded', function () {
         const msgStatusContainer = document.getElementById('msg-status-container');
+        const msgStatusText = document.getElementById('msg-status-text');
         const mainGrid = document.querySelector('.main-grid');
-
-        function showStatusMessage(message, isError = false) {
-            if (!message) return;
-            msgStatusText.textContent = message;
-            msgStatusContainer.style.color = isError ? 'var(--blood-red)' : 'var(--necro-green)';
-            msgStatusContainer.style.display = 'block';
-            setTimeout(() => { msgStatusContainer.style.display = 'none'; }, 4000);
-        }
-
+        function showStatusMessage(message, isError = false) { if (!message) return; msgStatusText.textContent = message; msgStatusContainer.style.color = isError ? 'var(--blood-red)' : 'var(--necro-green)'; msgStatusContainer.style.display = 'block'; setTimeout(() => { msgStatusContainer.style.display = 'none'; }, 4000); }
         async function postData(url = '', data = {}) {
             try {
                 const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
                 const result = await response.json();
                 showStatusMessage(result.message, result.status !== 'success');
-                if (result.status === 'success') {
-                    if (result.reload) { setTimeout(() => window.location.reload(), 500); }
-                    else { setTimeout(fetchStatus, 500); }
-                }
+                if (result.status === 'success' && url !== '/api/save_settings') { fetch('/api/save_settings', { method: 'POST' }); if (result.reload) { setTimeout(() => window.location.reload(), 500); } }
+                setTimeout(fetchStatus, 500);
                 return result;
             } catch (error) { console.error('Error:', error); showStatusMessage('Server communication error.', true); }
         }
-
-        const updateInputValue = (element, newValue) => {
-            if (element && document.activeElement !== element) {
-                element.value = newValue;
-            }
-        };
-
-        function renderBotStatus(statuses) {
-            const container = document.getElementById('bot-status-container');
-            container.innerHTML = '';
-            const sortedKeys = Object.keys(statuses).sort();
-            if (sortedKeys.length === 0) {
-                container.innerHTML = '<p>Đang chờ khởi tạo bot...</p>'; return;
-            }
-            for(const botId of sortedKeys) {
-                const status = statuses[botId];
-                const item = document.createElement('div');
-                item.className = 'bot-status-item';
-                item.innerHTML = `<span class="bot-status-name">${botId.replace('_', ' #')}</span> <span class="bot-status-indicator ${status}">${status.toUpperCase()}</span>`;
-                container.appendChild(item);
-            }
-        }
-
+        function formatTime(seconds) { if (isNaN(seconds) || seconds < 0) return "--:--:--"; seconds = Math.floor(seconds); const h = Math.floor(seconds / 3600).toString().padStart(2, '0'); const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0'); const s = (seconds % 60).toString().padStart(2, '0'); return `${h}:${m}:${s}`; }
+        function updateElement(element, { textContent, className, value }) { if (!element) return; if (textContent !== undefined) element.textContent = textContent; if (className !== undefined) element.className = className; if (value !== undefined) element.value = value; }
         async function fetchStatus() {
             try {
                 const response = await fetch('/status');
                 const data = await response.json();
-                renderBotStatus(data.bot_statuses);
-
+                updateElement(document.getElementById('reboot-timer'), { textContent: formatTime(data.reboot_countdown) });
+                updateElement(document.getElementById('auto-reboot-toggle-btn'), { textContent: data.reboot_enabled ? 'DISABLE' : 'ENABLE' });
+                const serverUptimeSeconds = (Date.now() / 1000) - data.server_start_time;
+                updateElement(document.getElementById('uptime-timer'), { textContent: formatTime(serverUptimeSeconds) });
+                const botListContainer = document.getElementById('bot-status-list');
+                botListContainer.innerHTML = ''; 
+                const allBots = [...data.bot_statuses.main_bots, ...data.bot_statuses.sub_accounts];
+                allBots.forEach(bot => {
+                    const item = document.createElement('div');
+                    item.className = 'bot-status-item';
+                    if (bot.type === 'main') item.classList.add('bot-main');
+                    const buttonText = bot.is_active ? 'ONLINE' : 'OFFLINE';
+                    const buttonClass = bot.is_active ? 'btn-rise' : 'btn-rest';
+                    item.innerHTML = `<span>${bot.name}</span><button type="button" data-target="${bot.reboot_id}" class="btn-toggle-state ${buttonClass}">${buttonText}</button>`;
+                    botListContainer.appendChild(item);
+                });
                 data.servers.forEach(serverData => {
                     const serverPanel = document.querySelector(`.server-panel[data-server-id="${serverData.id}"]`);
                     if (!serverPanel) return;
-
-                    const mainBotsContainer = document.getElementById(`main-bots-controls-${serverData.id}`);
-                    const mainBotSettings = serverData.main_bot_settings || {};
-                    
-                    if (mainBotsContainer.children.length !== Object.keys(mainBotSettings).length) {
-                        mainBotsContainer.innerHTML = '';
-                        Object.keys(mainBotSettings).sort((a,b) => parseInt(a) - parseInt(b)).forEach(botIndex => {
-                             mainBotsContainer.innerHTML += `
-                                <div class="grab-section">
-                                    <h4>Main Account #${parseInt(botIndex)+1}</h4>
-                                    <div class="grab-controls">
-                                        <input type="number" class="harvest-threshold" data-node="${botIndex}" value="${mainBotSettings[botIndex].threshold || 50}" min="0">
-                                        <button type="button" class="btn harvest-toggle" data-node="${botIndex}">
-                                            ${mainBotSettings[botIndex].enabled ? 'DISABLE' : 'ENABLE'}
-                                        </button>
-                                    </div>
-                                </div>`;
-                        });
-                    } else {
-                         Object.keys(mainBotSettings).forEach(botIndex => {
-                            const btn = serverPanel.querySelector(`.harvest-toggle[data-node="${botIndex}"]`);
-                            if(btn) btn.textContent = mainBotSettings[botIndex].enabled ? 'DISABLE' : 'ENABLE';
-                            const thresholdInput = serverPanel.querySelector(`.harvest-threshold[data-node="${botIndex}"]`);
-                            updateInputValue(thresholdInput, mainBotSettings[botIndex].threshold || 50);
-                        });
-                    }
-                    
+                    serverPanel.querySelectorAll('.harvest-toggle').forEach(btn => {
+                        const node = btn.dataset.node;
+                        updateElement(btn, { textContent: serverData[`auto_grab_enabled_${node}`] ? 'DISABLE' : 'ENABLE' });
+                    });
                     const spamToggleBtn = serverPanel.querySelector('.broadcast-toggle');
-                    if(spamToggleBtn) spamToggleBtn.textContent = serverData.spam_enabled ? 'DISABLE' : 'ENABLE';
-                    updateInputValue(serverPanel.querySelector('.spam-message'), serverData.spam_message || '');
-                    updateInputValue(serverPanel.querySelector('.spam-delay'), serverData.spam_delay || 10);
+                    updateElement(spamToggleBtn, { textContent: serverData.spam_enabled ? 'DISABLE' : 'ENABLE' });
+                    const spamTimer = serverPanel.querySelector('.spam-timer');
+                    updateElement(spamTimer, { textContent: formatTime(serverData.spam_countdown)});
                 });
-
             } catch (error) { console.error('Error fetching status:', error); }
         }
-        setInterval(fetchStatus, 3000);
-
+        setInterval(fetchStatus, 1000);
         mainGrid.addEventListener('click', e => {
             const target = e.target;
             const serverPanel = target.closest('.server-panel');
             if (!serverPanel) return;
             const serverId = serverPanel.dataset.serverId;
-            
-            if (target.classList.contains('harvest-toggle')) {
-                const node = target.dataset.node;
-                const thresholdInput = serverPanel.querySelector(`.harvest-threshold[data-node="${node}"]`);
-                postData('/api/harvest_toggle', { server_id: serverId, node: node, threshold: thresholdInput.value });
-            }
-            if (target.classList.contains('broadcast-toggle')) {
-                const message = serverPanel.querySelector('.spam-message').value;
-                const delay = serverPanel.querySelector('.spam-delay').value;
-                postData('/api/broadcast_toggle', { server_id: serverId, message: message, delay: delay });
-            }
-            if (target.closest('.btn-delete-server')) {
-                if(confirm('Are you sure you want to delete this server configuration?')) {
-                    postData('/api/delete_server', { server_id: serverId });
-                }
-            }
+            if (target.classList.contains('harvest-toggle')) { const node = target.dataset.node; const thresholdInput = serverPanel.querySelector(`.harvest-threshold[data-node="${node}"]`); postData('/api/harvest_toggle', { server_id: serverId, node: node, threshold: thresholdInput.value }); }
+            if (target.classList.contains('broadcast-toggle')) { const message = serverPanel.querySelector('.spam-message').value; const delay = serverPanel.querySelector('.spam-delay').value; postData('/api/broadcast_toggle', { server_id: serverId, message: message, delay: delay }); }
+            if (target.closest('.btn-delete-server')) { if(confirm('Are you sure?')) { postData('/api/delete_server', { server_id: serverId }); } }
         });
-
         mainGrid.addEventListener('change', e => {
             const target = e.target;
             const serverPanel = target.closest('.server-panel');
-            if (serverPanel && target.classList.contains('channel-input')) {
-                const payload = { server_id: serverPanel.dataset.serverId };
-                payload[target.dataset.field] = target.value;
-                postData('/api/update_server_channels', payload).then(() => save_settings());
-            }
+            if (!serverPanel) return;
+            const serverId = serverPanel.dataset.serverId;
+            if(target.classList.contains('channel-input')) { const payload = { server_id: serverId }; payload[target.dataset.field] = target.value; postData('/api/update_server_channels', payload); }
         });
-
-        document.getElementById('add-server-btn').addEventListener('click', () => {
-            const name = prompt("Enter a name for the new server:", "New Server");
-            if (name) { postData('/api/add_server', { name: name }); }
-        });
-
-        function save_settings() { postData('/api/save_settings'); }
+        document.getElementById('add-server-btn').addEventListener('click', () => { const name = prompt("Enter a name for the new server:", "New Server"); if (name) { postData('/api/add_server', { name: name }); } });
+        document.getElementById('auto-reboot-toggle-btn').addEventListener('click', () => { postData('/api/reboot_toggle_auto', { delay: document.getElementById('auto-reboot-delay').value }); });
+        document.getElementById('bot-status-list').addEventListener('click', e => { if(e.target.matches('button[data-target]')) { postData('/api/toggle_bot_state', { target: e.target.dataset.target }); } });
     });
 </script>
 </body>
 </html>
 """
 
-# --- FLASK API ENDPOINTS ---
+# --- FLASK ROUTES (REFACTORED) ---
 @app.route("/")
 def index():
     sorted_servers = sorted(servers, key=lambda s: s.get('name', ''))
-    return render_template_string(HTML_TEMPLATE, servers=sorted_servers)
+    # Tạo thông tin cho các bot chính để truyền vào template
+    main_bots_info = [
+        {"id": i + 1, "name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"}
+        for i in range(len(main_tokens))
+    ]
+    return render_template_string(HTML_TEMPLATE, servers=sorted_servers, auto_reboot_enabled=auto_reboot_enabled, auto_reboot_delay=auto_reboot_delay, main_bots_info=main_bots_info)
 
-@app.route("/status")
-def status():
-    # Add countdown to each server object for UI
-    for server in servers:
-        if server.get('spam_enabled'):
-            server['spam_countdown'] = (server.get('last_spam_time', 0) + server.get('spam_delay', 10) - time.time())
-        else:
-            server['spam_countdown'] = 0
-    return jsonify({'servers': servers, 'bot_statuses': bot_statuses})
-
-# --- SERVER MANAGEMENT API ---
 @app.route("/api/add_server", methods=['POST'])
 def api_add_server():
     data = request.get_json()
@@ -413,13 +441,21 @@ def api_add_server():
     if not name: return jsonify({'status': 'error', 'message': 'Server name is required.'}), 400
     
     new_server = {
-        "id": f"server_{uuid.uuid4().hex}", "name": name,
-        "grab_channel_ids": [], "ktb_channel_ids": [], "spam_channel_ids": [],
-        "main_bot_settings": {str(i): {"enabled": False, "threshold": 50} for i in range(len(main_tokens))},
+        "id": f"server_{uuid.uuid4().hex}",
+        "name": name,
+        "main_channel_id": "", "ktb_channel_id": "", "spam_channel_id": "",
         "spam_enabled": False, "spam_message": "", "spam_delay": 10, "last_spam_time": 0
     }
+    # Tái cấu trúc: Tự động thêm cấu hình cho tất cả các bot chính
+    for i in range(len(main_tokens)):
+        bot_num = i + 1
+        new_server[f'auto_grab_enabled_{bot_num}'] = False
+        new_server[f'heart_threshold_{bot_num}'] = 50
+
     servers.append(new_server)
     return jsonify({'status': 'success', 'message': f'Server "{name}" added.', 'reload': True})
+
+# --- CÁC API KHÁC GIỮ NGUYÊN HOẶC CHỈ CẦN THAY ĐỔI NHỎ ---
 
 @app.route("/api/delete_server", methods=['POST'])
 def api_delete_server():
@@ -437,80 +473,141 @@ def api_update_server_channels():
     server_id = data.get('server_id')
     server = next((s for s in servers if s.get('id') == server_id), None)
     if not server: return jsonify({'status': 'error', 'message': 'Server not found.'}), 404
-    
-    for field in ['grab_channel_ids', 'ktb_channel_ids', 'spam_channel_ids']:
+    updated_fields = []
+    for field in ['main_channel_id', 'ktb_channel_id', 'spam_channel_id']:
         if field in data:
-            server[field] = [cid.strip() for cid in data[field].split(',') if cid.strip()]
-    
-    return jsonify({'status': 'success', 'message': f'Channels updated for {server["name"]}.'})
+            server[field] = data[field]
+            updated_fields.append(field.replace('_', ' ').title())
+    return jsonify({'status': 'success', 'message': f'{", ".join(updated_fields)} updated for {server["name"]}.'})
 
-# --- CONTROL APIs ---
 @app.route("/api/harvest_toggle", methods=['POST'])
-def api_harvest_toggle():
+def api_harvest_toggle(): # Hàm này đủ linh hoạt, không cần sửa
     data = request.get_json()
-    server_id, node, threshold = data.get('server_id'), data.get('node'), int(data.get('threshold', 50))
-    server = next((s for s in servers if s.get('id') == server_id), None)
-    if not server or node is None: return jsonify({'status': 'error', 'message': 'Invalid request.'}), 400
-        
-    node_str = str(node)
-    if node_str not in server['main_bot_settings']: server['main_bot_settings'][node_str] = {}
-    
-    server['main_bot_settings'][node_str]['enabled'] = not server['main_bot_settings'][node_str].get('enabled', False)
-    server['main_bot_settings'][node_str]['threshold'] = threshold
-    
-    state = "ENABLED" if server['main_bot_settings'][node_str]['enabled'] else "DISABLED"
-    msg = f"Harvest Node {int(node)+1} was {state} for server {server['name']}."
+    server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
+    node = data.get('node')
+    if not server or not node: return jsonify({'status': 'error', 'message': 'Invalid request.'}), 400
+    grab_key = f'auto_grab_enabled_{node}'
+    threshold_key = f'heart_threshold_{node}'
+    server[grab_key] = not server.get(grab_key, False)
+    server[threshold_key] = int(data.get('threshold', 50))
+    state = "ENABLED" if server[grab_key] else "DISABLED"
+    bot_name = BOT_NAMES[int(node)-1] if int(node)-1 < len(BOT_NAMES) else f"MAIN_{node}"
+    msg = f"Harvest Node {bot_name} was {state} for server {server['name']}."
     return jsonify({'status': 'success', 'message': msg})
 
 @app.route("/api/broadcast_toggle", methods=['POST'])
 def api_broadcast_toggle():
     data = request.get_json()
-    server_id = data.get('server_id')
-    server = next((s for s in servers if s.get('id') == server_id), None)
+    server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
     if not server: return jsonify({'status': 'error', 'message': 'Server not found.'}), 404
-
+    server['spam_message'] = data.get("message", "").strip()
+    server['spam_delay'] = int(data.get("delay", 10))
     server['spam_enabled'] = not server.get('spam_enabled', False)
-    if server['spam_enabled']:
-        server['spam_message'] = data.get("message", "").strip()
-        server['spam_delay'] = int(data.get("delay", 10))
-        if not server['spam_message'] or not server['spam_channel_ids']:
-            server['spam_enabled'] = False
-            return jsonify({'status': 'error', 'message': 'Spam message and channel ID cannot be empty.'})
-        server['last_spam_time'] = time.time()
-        msg = f"Spam ENABLED for {server['name']}."
-    else:
-        msg = f"Spam DISABLED for {server['name']}."
+    if server['spam_enabled'] and (not server['spam_message'] or not server['spam_channel_id']):
+        server['spam_enabled'] = False
+        return jsonify({'status': 'error', 'message': f'Spam message/channel required for {server["name"]}.'})
+    msg = f"Spam {'ENABLED' if server['spam_enabled'] else 'DISABLED'} for {server['name']}."
     return jsonify({'status': 'success', 'message': msg})
+
+@app.route("/api/reboot_toggle_auto", methods=['POST'])
+def api_reboot_toggle_auto():
+    global auto_reboot_enabled, auto_reboot_delay, auto_reboot_thread, auto_reboot_stop_event, last_reboot_cycle_time
+    data = request.get_json()
+    auto_reboot_enabled = not auto_reboot_enabled
+    auto_reboot_delay = int(data.get("delay", 3600))
+    msg = ""
+    if auto_reboot_enabled:
+        last_reboot_cycle_time = time.time()
+        if auto_reboot_thread is None or not auto_reboot_thread.is_alive():
+            auto_reboot_stop_event = threading.Event()
+            auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
+            auto_reboot_thread.start()
+        msg = "Global Auto Reboot ENABLED."
+    else:
+        if auto_reboot_stop_event: auto_reboot_stop_event.set()
+        auto_reboot_thread = None
+        msg = "Global Auto Reboot DISABLED."
+    return jsonify({'status': 'success', 'message': msg})
+
+@app.route("/api/toggle_bot_state", methods=['POST'])
+def api_toggle_bot_state():
+    target = request.get_json().get('target')
+    if target in bot_active_states:
+        bot_active_states[target] = not bot_active_states[target]
+        state_text = "AWAKENED" if bot_active_states[target] else "DORMANT"
+        return jsonify({'status': 'success', 'message': f"Target {target.upper()} set to {state_text}."})
+    return jsonify({'status': 'error', 'message': 'Target not found.'}), 404
 
 @app.route("/api/save_settings", methods=['POST'])
 def api_save_settings():
     save_settings()
     return jsonify({'status': 'success', 'message': 'Settings saved.'})
 
-# --- MAIN EXECUTION ---
+@app.route("/status")
+def status():
+    now = time.time()
+    for server in servers:
+        server['spam_countdown'] = (server.get('last_spam_time', 0) + server.get('spam_delay', 10) - now) if server.get('spam_enabled') else 0
+
+    with bots_lock:
+        main_bot_statuses = [
+            {
+                "name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}",
+                "status": bot is not None,
+                "reboot_id": f"main_{i+1}",
+                "is_active": bot_active_states.get(f"main_{i+1}", False),
+                "type": "main"
+            } for i, bot in enumerate(main_bots)
+        ]
+        sub_bot_statuses = [
+            {
+                "name": acc_names[i] if i < len(acc_names) else f"Sub {i+1}",
+                "status": bot is not None,
+                "reboot_id": f"sub_{i}",
+                "is_active": bot_active_states.get(f"sub_{i}", False),
+                "type": "sub"
+            } for i, bot in enumerate(bots)
+        ]
+
+    return jsonify({
+        'reboot_enabled': auto_reboot_enabled, 
+        'reboot_countdown': (last_reboot_cycle_time + auto_reboot_delay - now) if auto_reboot_enabled else 0,
+        'bot_statuses': {"main_bots": main_bot_statuses, "sub_accounts": sub_bot_statuses},
+        'server_start_time': server_start_time,
+        'servers': servers
+    })
+
+# --- MAIN EXECUTION (REFACTORED) ---
 if __name__ == "__main__":
     load_settings()
     
-    def initialize_bots():
-        print("Bắt đầu quá trình khởi tạo bot tuần tự...", flush=True)
-        with bots_lock:
-            for i, token in enumerate(main_tokens):
-                bot_statuses[f'main_{i}'] = 'connecting'
-                main_bots.append(create_bot(token, bot_index=i, is_main=True))
-                time.sleep(random.uniform(3, 6))
+    print("Đang khởi tạo các bot...", flush=True)
+    with bots_lock:
+        # Tự động tạo các bot chính từ MAIN_TOKENS
+        for i, token in enumerate(main_tokens):
+            if token.strip():
+                bot_num = i + 1
+                bot_id = f"main_{bot_num}"
+                bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{bot_num}"
+                main_bots.append(create_bot(token.strip(), bot_identifier=bot_num, is_main=True))
+                if bot_id not in bot_active_states: bot_active_states[bot_id] = True
+        
+        # Tạo các bot phụ
+        for i, token in enumerate(tokens):
+            if token.strip():
+                bot_id = f'sub_{i}'
+                bots.append(create_bot(token.strip(), bot_identifier=i, is_main=False))
+                if bot_id not in bot_active_states: bot_active_states[bot_id] = True
 
-            for i, token in enumerate(sub_tokens):
-                bot_statuses[f'sub_{i}'] = 'connecting'
-                sub_bots.append(create_bot(token, bot_index=i, is_main=False))
-                time.sleep(random.uniform(3, 6))
-        print("Tất cả các bot đã được đưa vào hàng đợi khởi tạo.", flush=True)
-
-    threading.Thread(target=initialize_bots, daemon=True).start()
+    print("Đang khởi tạo các luồng nền...", flush=True)
     threading.Thread(target=periodic_save_loop, daemon=True).start()
-    spam_thread = threading.Thread(target=spam_loop, daemon=True)
-    spam_thread.start()
+    threading.Thread(target=spam_loop, daemon=True).start()
+    
+    if auto_reboot_enabled:
+        auto_reboot_stop_event = threading.Event()
+        auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
+        auto_reboot_thread.start()
     
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
