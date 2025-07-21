@@ -1,4 +1,4 @@
-# PHIÊN BẢN NÂNG CẤP: THÊM PANEL TRẠNG THÁI BOT VÀ KHỞI ĐỘNG TUẦN TỰ
+# PHIÊN BẢN TỔNG HỢP: GIAO DIỆN GỐC + LÕI LOGIC MỚI + KHỞI ĐỘNG ỔN ĐỊNH
 import discum
 import threading
 import time
@@ -22,7 +22,7 @@ heart_bot_id = os.getenv("HEART_BOT_ID", "1274445226064220273")
 main_bots, sub_bots = [], []
 grab_channel_ids, ktb_channel_ids, spam_channel_ids = [], [], []
 main_bot_settings = {}
-bot_statuses = {} # QUAN TRỌNG: Theo dõi trạng thái từng bot
+bot_statuses = {} 
 spam_enabled, spam_message, spam_delay = False, "", 10
 bots_lock = threading.Lock()
 spam_thread = None
@@ -43,16 +43,16 @@ def save_settings():
     url = f"https://api.jsonbin.io/v3/b/{bin_id}"
     try:
         req = requests.put(url, json=settings, headers=headers, timeout=10)
-        if req.status_code == 200: print("[Settings] Đã lưu cài đặt lên JSONBin.io.", flush=True)
-        else: print(f"[Settings] Lỗi khi lưu cài đặt: {req.status_code} - {req.text}", flush=True)
-    except Exception as e: print(f"[Settings] Exception khi lưu cài đặt: {e}", flush=True)
+        if req.status_code == 200: print("[Settings] Đã lưu cài đặt.", flush=True)
+        else: print(f"[Settings] Lỗi khi lưu: {req.status_code}", flush=True)
+    except Exception as e: print(f"[Settings] Exception khi lưu: {e}", flush=True)
 
 def load_settings():
     global main_bot_settings, grab_channel_ids, ktb_channel_ids, spam_channel_ids, spam_enabled, spam_message, spam_delay
     api_key = os.getenv("JSONBIN_API_KEY")
     bin_id = os.getenv("JSONBIN_BIN_ID")
     if not api_key or not bin_id:
-        print("[Settings] Thiếu API Key/Bin ID. Dùng cài đặt mặc định.", flush=True)
+        print("[Settings] Thiếu API Key/Bin ID.", flush=True)
         return
     headers = {'X-Master-Key': api_key}
     url = f"https://api.jsonbin.io/v3/b/{bin_id}/latest"
@@ -68,12 +68,12 @@ def load_settings():
                 spam_enabled = settings.get('spam_enabled', False)
                 spam_message = settings.get('spam_message', "")
                 spam_delay = settings.get('spam_delay', 10)
-                print("[Settings] Đã tải cài đặt từ JSONBin.io.", flush=True)
+                print("[Settings] Đã tải cài đặt.", flush=True)
             else:
-                print("[Settings] JSONBin rỗng. Bắt đầu với cài đặt mặc định.", flush=True)
+                print("[Settings] JSONBin rỗng, lưu cài đặt mặc định.", flush=True)
                 save_settings()
-        else: print(f"[Settings] Lỗi khi tải cài đặt: {req.status_code} - {req.text}", flush=True)
-    except Exception as e: print(f"[Settings] Exception khi tải cài đặt: {e}", flush=True)
+        else: print(f"[Settings] Lỗi khi tải: {req.status_code}", flush=True)
+    except Exception as e: print(f"[Settings] Exception khi tải: {e}", flush=True)
 
 # --- LOGIC BOT ---
 def create_bot(token, bot_index, is_main=False):
@@ -89,7 +89,7 @@ def create_bot(token, bot_index, is_main=False):
                 print(f"ONLINE: {user.get('username', 'Unknown')} ({user.get('id', 'Unknown')}) - ID: {bot_id_str}", flush=True)
             else:
                 bot_statuses[bot_id_str] = 'failed'
-                print(f"FAILED: Không thể lấy thông tin người dùng cho bot {bot_id_str}. Token có thể không hợp lệ.", flush=True)
+                print(f"FAILED: Không thể lấy thông tin cho bot {bot_id_str}. Token có thể không hợp lệ.", flush=True)
 
     if is_main:
         @bot.gateway.command
@@ -151,14 +151,12 @@ def spam_loop():
                 with bots_lock: bots_to_spam = list(sub_bots)
                 for i, bot in enumerate(bots_to_spam):
                     if not spam_enabled: break
-                    # Chỉ spam nếu bot online
                     if bot_statuses.get(f"sub_{i}") == 'online':
                         try:
                             for channel_id in spam_channel_ids:
-                                if channel_id:
-                                    bot.sendMessage(channel_id, spam_message)
+                                if channel_id: bot.sendMessage(channel_id, spam_message)
                             print(f"[sub_{i}] Đã spam '{spam_message}' đến {len(spam_channel_ids)} kênh.", flush=True)
-                            time.sleep(2) # Delay giữa các bot
+                            time.sleep(2)
                         except Exception as e: print(f"[sub_{i}] Lỗi gửi spam: {e}", flush=True)
                 if spam_enabled: last_spam_time = time.time()
             time.sleep(1)
@@ -177,31 +175,31 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Shadow Network Control</title>
+    <title>Karuta Deep - Shadow Network Control</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Nosifer&family=Orbitron:wght@400;700&family=Courier+Prime&display=swap" rel="stylesheet">
     <style>
         :root {
-            --primary-bg: #0a0a0a; --secondary-bg: #1a1a1a; --panel-bg: #111111; --border-color: #333333;
+            --primary-bg: #0a0a0a; --panel-bg: #111111; --border-color: #333333;
             --blood-red: #8b0000; --deep-purple: #2d1b69; --necro-green: #228b22; --gold-yellow: #ffc107;
             --text-primary: #f0f0f0; --text-secondary: #cccccc;
-            --shadow-red: 0 0 20px rgba(139, 0, 0, 0.5); --shadow-purple: 0 0 20px rgba(45, 27, 105, 0.5);
+            --shadow-red: 0 0 20px rgba(139, 0, 0, 0.5);
         }
         body { font-family: 'Courier Prime', monospace; background: var(--primary-bg); color: var(--text-primary); margin: 0; padding: 20px; }
         .container { max-width: 1600px; margin: 0 auto; }
         .header { text-align: center; margin-bottom: 30px; padding: 20px; background: linear-gradient(135deg, #000, rgba(139, 0, 0, 0.2)); border: 2px solid var(--blood-red); border-radius: 15px; box-shadow: var(--shadow-red); }
         .title { font-family: 'Nosifer', cursive; font-size: 3rem; color: var(--blood-red); text-shadow: 0 0 20px var(--blood-red); }
         .subtitle { font-size: 1.2rem; color: var(--text-secondary); font-family: 'Orbitron', monospace; }
-        .main-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
+        .main-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 20px; }
         .panel { background: linear-gradient(135deg, var(--panel-bg), rgba(26, 26, 26, 0.9)); border: 1px solid var(--border-color); border-radius: 10px; padding: 25px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5); }
         .panel h2 { font-family: 'Nosifer', cursive; font-size: 1.4rem; margin-bottom: 20px; border-bottom: 2px solid; padding-bottom: 10px; }
         .panel h2 i { margin-right: 10px; }
         .blood-panel { border-color: var(--blood-red); box-shadow: var(--shadow-red); }
         .blood-panel h2 { color: var(--blood-red); border-color: var(--blood-red); }
-        .dark-panel { border-color: var(--deep-purple); box-shadow: var(--shadow-purple); }
+        .dark-panel { border-color: var(--deep-purple); }
         .dark-panel h2 { color: var(--deep-purple); border-color: var(--deep-purple); }
-        .btn { background: linear-gradient(135deg, var(--secondary-bg), #333); border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 4px; cursor: pointer; font-family: 'Orbitron', monospace; font-weight: 700; text-transform: uppercase; }
-        .btn-blood { border-color: var(--blood-red); color: var(--blood-red); } .btn-blood:hover { background: var(--blood-red); color: var(--primary-bg); box-shadow: var(--shadow-red); }
+        .btn { background: #1a1a1a; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 4px; cursor: pointer; font-family: 'Orbitron', monospace; font-weight: 700; text-transform: uppercase; }
+        .btn-blood { border-color: var(--blood-red); color: var(--blood-red); } .btn-blood:hover { background: var(--blood-red); color: var(--primary-bg); }
         .btn-necro { border-color: var(--necro-green); color: var(--necro-green); } .btn-necro:hover { background: var(--necro-green); color: var(--primary-bg); }
         .input-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 15px; }
         .input-group label { color: var(--text-secondary); font-weight: 600; font-family: 'Orbitron', monospace; }
@@ -226,7 +224,7 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <div class="header"><h1 class="title">SHADOW NETWORK</h1><p class="subtitle">Karuta Control Interface</p></div>
+        <div class="header"><h1 class="title">KARUTA DEEP</h1><p class="subtitle">Shadow Network Control</p></div>
         <div id="msg-status-container" class="msg-status"></div>
         <div class="main-grid">
             <div class="panel blood-panel">
@@ -239,8 +237,8 @@ HTML_TEMPLATE = """
             </div>
             <div class="panel dark-panel">
                 <h2><i class="fas fa-broadcast-tower"></i> Shadow Broadcast</h2>
-                <div class="input-group"><label for="spam-message">Spam Message</label><textarea id="spam-message" rows="2">{{ spam_message }}</textarea></div>
-                <div class="input-group"><label for="spam-delay">Cycle Delay (s)</label><input type="number" id="spam-delay" value="{{ spam_delay }}"></div>
+                <div class="input-group"><label>Spam Message</label><textarea id="spam-message" rows="2">{{ spam_message }}</textarea></div>
+                <div class="input-group"><label>Cycle Delay (s)</label><input type="number" id="spam-delay" value="{{ spam_delay }}"></div>
                 <button type="button" id="spam-toggle-btn" class="btn {{ 'btn-blood' if spam_enabled else 'btn-necro' }}">{{ 'DISABLE SPAM' if spam_enabled else 'ENABLE SPAM' }}</button>
             </div>
             <div class="panel" style="grid-column: 1 / -1;">
@@ -269,7 +267,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
             const result = await response.json();
             if (result.message) showStatusMessage(result.message);
-            fetchStatus();
+            setTimeout(fetchStatus, 500); // Delay fetch to allow backend to update
             return result;
         } catch (error) { console.error('Error:', error); showStatusMessage('Lỗi giao tiếp với server.'); }
     }
@@ -285,6 +283,10 @@ document.addEventListener('DOMContentLoaded', function () {
         const container = document.getElementById('bot-status-container');
         container.innerHTML = '';
         const sortedKeys = Object.keys(statuses).sort();
+        if (sortedKeys.length === 0) {
+            container.innerHTML = '<p>Đang chờ khởi tạo bot...</p>';
+            return;
+        }
         for(const botId of sortedKeys) {
             const status = statuses[botId];
             const item = document.createElement('div');
@@ -294,22 +296,22 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function updateMainBots(settings) {
+    function updateMainBotsUI(settings) {
         const container = document.getElementById('main-bots-container');
         if (container.children.length !== Object.keys(settings).length) {
             container.innerHTML = '';
             if (Object.keys(settings).length === 0) {
-                container.innerHTML = '<p>Không tìm thấy tài khoản chính nào.</p>';
+                container.innerHTML = '<p>Không có tài khoản chính nào được cấu hình.</p>';
                 return;
             }
-            const sortedIndices = Object.keys(settings).sort((a, b) => a - b);
+            const sortedIndices = Object.keys(settings).sort((a, b) => parseInt(a) - parseInt(b));
             for (const index of sortedIndices) {
                 const botSetting = settings[index];
                 const botDiv = document.createElement('div');
                 botDiv.className = 'grab-section';
                 botDiv.id = `grab-section-${index}`;
                 botDiv.innerHTML = `
-                    <h3>${botSetting.name || `Main Bot #${index}`} <span id="status-badge-${index}" class="status-badge"></span></h3>
+                    <h3>${botSetting.name || `Main Account #${index}`} <span id="status-badge-${index}" class="status-badge"></span></h3>
                     <div class="grab-controls">
                         <input type="number" id="heart-threshold-${index}" title="Ngưỡng tim">
                         <button data-index="${index}" id="toggle-button-${index}" class="btn btn-toggle-grab"></button>
@@ -338,7 +340,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const response = await fetch('/status');
             const data = await response.json();
             renderBotStatus(data.bot_statuses);
-            updateMainBots(data.main_bot_settings);
+            updateMainBotsUI(data.main_bot_settings);
             const spamBtn = document.getElementById('spam-toggle-btn');
             spamBtn.textContent = data.spam_enabled ? 'DISABLE SPAM' : 'ENABLE SPAM';
             spamBtn.className = `btn ${data.spam_enabled ? 'btn-blood' : 'btn-necro'}`;
@@ -445,6 +447,7 @@ if __name__ == "__main__":
         """Khởi tạo các bot một cách tuần tự với độ trễ để tránh bị rate limit."""
         print("Bắt đầu quá trình khởi tạo bot tuần tự...", flush=True)
         with bots_lock:
+            # Khởi tạo main bots trước
             for i, token in enumerate(main_tokens):
                 print(f"Chuẩn bị khởi tạo main_{i}...", flush=True)
                 bot_statuses[f'main_{i}'] = 'connecting'
@@ -453,13 +456,14 @@ if __name__ == "__main__":
                     main_bot_settings[i] = {'enabled': False, 'threshold': 50, 'name': f'Main Account #{i+1}'}
                 elif 'name' not in main_bot_settings[i]:
                      main_bot_settings[i]['name'] = f'Main Account #{i+1}'
-                time.sleep(random.uniform(2, 5)) # Delay ngẫu nhiên từ 2-5 giây
+                time.sleep(random.uniform(3, 6)) # Delay ngẫu nhiên từ 3-6 giây
 
+            # Khởi tạo sub bots sau
             for i, token in enumerate(sub_tokens):
                 print(f"Chuẩn bị khởi tạo sub_{i}...", flush=True)
                 bot_statuses[f'sub_{i}'] = 'connecting'
                 sub_bots.append(create_bot(token, bot_index=i, is_main=False))
-                time.sleep(random.uniform(2, 5)) # Delay ngẫu nhiên từ 2-5 giây
+                time.sleep(random.uniform(3, 6)) # Delay ngẫu nhiên từ 3-6 giây
         print("Tất cả các bot đã được đưa vào hàng đợi khởi tạo.", flush=True)
 
     # Chạy khởi tạo trong một luồng riêng để không chặn server Flask
