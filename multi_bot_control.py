@@ -1,4 +1,4 @@
-# PHIÊN BẢN KẾT HỢP: BACKEND LINH HOẠT + GIAO DIỆN GỐC
+# PHIÊN BẢN NÂNG CẤP: THÊM PANEL TRẠNG THÁI BOT
 import discum
 import threading
 import time
@@ -22,6 +22,7 @@ heart_bot_id = os.getenv("HEART_BOT_ID", "1274445226064220273")
 main_bots, sub_bots = [], []
 grab_channel_ids, ktb_channel_ids, spam_channel_ids = [], [], []
 main_bot_settings = {}
+bot_statuses = {} # QUAN TRỌNG: Theo dõi trạng thái từng bot
 spam_enabled, spam_message, spam_delay = False, "", 10
 bots_lock = threading.Lock()
 spam_thread = None
@@ -77,20 +78,24 @@ def load_settings():
 # --- LOGIC BOT ---
 def create_bot(token, bot_index, is_main=False):
     bot = discum.Client(token=token, log=False)
+    bot_id_str = f"main_{bot_index}" if is_main else f"sub_{bot_index}"
+
     @bot.gateway.command
     def on_ready(resp):
         if resp.event.ready:
             user = resp.raw.get('user')
             if user:
-                bot_type = "Main" if is_main else "Sub"
-                print(f"Đã đăng nhập: {user.get('username', 'Unknown')} ({user.get('id', 'Unknown')}) - Loại: {bot_type} #{bot_index}", flush=True)
+                bot_statuses[bot_id_str] = 'online'
+                print(f"ONLINE: {user.get('username', 'Unknown')} ({user.get('id', 'Unknown')}) - ID: {bot_id_str}", flush=True)
             else:
-                print(f"[LỖI] Không thể lấy thông tin người dùng cho bot #{bot_index}. Token có thể không hợp lệ.", flush=True)
+                bot_statuses[bot_id_str] = 'failed'
+                print(f"FAILED: Không thể lấy thông tin người dùng cho bot {bot_id_str}. Token có thể không hợp lệ.", flush=True)
 
     if is_main:
         @bot.gateway.command
         def on_message_main(resp):
             try:
+                if bot_statuses.get(bot_id_str) != 'online': return
                 settings = main_bot_settings.get(bot_index, {'enabled': False, 'threshold': 50})
                 if not settings.get('enabled'): return
                 if resp.event.message:
@@ -120,20 +125,20 @@ def create_bot(token, bot_index, is_main=False):
                                             max_index = heart_numbers.index(max_num)
                                             emoji, delay = [("1️⃣", 0.5), ("2️⃣", 1.5), ("3️⃣", 2.2)][max_index]
                                             final_delay = delay + random.uniform(-0.2, 0.2)
-                                            print(f"[Main Bot #{bot_index}] Chọn dòng {max_index+1} ({max_num} tim). Nhấn {emoji} sau {final_delay:.2f}s", flush=True)
+                                            print(f"[{bot_id_str}] Chọn dòng {max_index+1} ({max_num} tim). Nhấn {emoji} sau {final_delay:.2f}s", flush=True)
                                             def grab_action():
                                                 try:
                                                     bot.addReaction(drop_channel_id, last_drop_msg_id, emoji)
                                                     time.sleep(2)
                                                     for ktb_ch_id in ktb_channel_ids:
                                                         if ktb_ch_id: bot.sendMessage(ktb_ch_id, "kt b"); time.sleep(0.5)
-                                                    print(f"[Main Bot #{bot_index}] Đã gửi 'kt b'.", flush=True)
-                                                except Exception as e_grab: print(f"[Main Bot #{bot_index}] Lỗi grab_action: {e_grab}", flush=True)
+                                                    print(f"[{bot_id_str}] Đã gửi 'kt b'.", flush=True)
+                                                except Exception as e_grab: print(f"[{bot_id_str}] Lỗi grab_action: {e_grab}", flush=True)
                                             threading.Timer(final_delay, grab_action).start()
                                         break
-                            except Exception as e_read: print(f"[Main Bot #{bot_index}] Lỗi read_heart: {e_read}", flush=True)
+                            except Exception as e_read: print(f"[{bot_id_str}] Lỗi read_heart: {e_read}", flush=True)
                         threading.Thread(target=read_heart_and_grab).start()
-            except Exception as e_main: print(f"[Main Bot #{bot_index}] Lỗi on_message: {e_main}", flush=True)
+            except Exception as e_main: print(f"[{bot_id_str}] Lỗi on_message: {e_main}", flush=True)
     threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
 
@@ -146,23 +151,22 @@ def spam_loop():
                 with bots_lock: bots_to_spam = list(sub_bots)
                 for i, bot in enumerate(bots_to_spam):
                     if not spam_enabled: break
-                    try:
-                        for channel_id in spam_channel_ids:
-                            if channel_id:
-                                bot.sendMessage(channel_id, spam_message)
-                                print(f"[Sub Bot #{i}] Đã spam '{spam_message}' đến kênh {channel_id}", flush=True)
-                                time.sleep(1)
-                        time.sleep(2)
-                    except Exception as e: print(f"[Sub Bot #{i}] Lỗi gửi spam: {e}", flush=True)
+                    # Chỉ spam nếu bot online
+                    if bot_statuses.get(f"sub_{i}") == 'online':
+                        try:
+                            for channel_id in spam_channel_ids:
+                                if channel_id:
+                                    bot.sendMessage(channel_id, spam_message)
+                            print(f"[sub_{i}] Đã spam '{spam_message}' đến {len(spam_channel_ids)} kênh.", flush=True)
+                            time.sleep(2) # Delay giữa các bot
+                        except Exception as e: print(f"[sub_{i}] Lỗi gửi spam: {e}", flush=True)
                 if spam_enabled: last_spam_time = time.time()
             time.sleep(1)
         except Exception as e: print(f"[ERROR in spam_loop] {e}", flush=True); time.sleep(1)
 
 def periodic_save_loop():
     while True:
-        time.sleep(300)
-        print("[Settings] Tự động lưu cài đặt...", flush=True)
-        save_settings()
+        time.sleep(300); save_settings()
 
 # --- GIAO DIỆN WEB (FLASK) ---
 app = Flask(__name__)
@@ -179,7 +183,7 @@ HTML_TEMPLATE = """
     <style>
         :root {
             --primary-bg: #0a0a0a; --secondary-bg: #1a1a1a; --panel-bg: #111111; --border-color: #333333;
-            --blood-red: #8b0000; --deep-purple: #2d1b69; --necro-green: #228b22;
+            --blood-red: #8b0000; --deep-purple: #2d1b69; --necro-green: #228b22; --gold-yellow: #ffc107;
             --text-primary: #f0f0f0; --text-secondary: #cccccc;
             --shadow-red: 0 0 20px rgba(139, 0, 0, 0.5); --shadow-purple: 0 0 20px rgba(45, 27, 105, 0.5);
         }
@@ -188,7 +192,7 @@ HTML_TEMPLATE = """
         .header { text-align: center; margin-bottom: 30px; padding: 20px; background: linear-gradient(135deg, #000, rgba(139, 0, 0, 0.2)); border: 2px solid var(--blood-red); border-radius: 15px; box-shadow: var(--shadow-red); }
         .title { font-family: 'Nosifer', cursive; font-size: 3rem; color: var(--blood-red); text-shadow: 0 0 20px var(--blood-red); }
         .subtitle { font-size: 1.2rem; color: var(--text-secondary); font-family: 'Orbitron', monospace; }
-        .main-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 20px; }
+        .main-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
         .panel { background: linear-gradient(135deg, var(--panel-bg), rgba(26, 26, 26, 0.9)); border: 1px solid var(--border-color); border-radius: 10px; padding: 25px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.5); }
         .panel h2 { font-family: 'Nosifer', cursive; font-size: 1.4rem; margin-bottom: 20px; border-bottom: 2px solid; padding-bottom: 10px; }
         .panel h2 i { margin-right: 10px; }
@@ -203,29 +207,38 @@ HTML_TEMPLATE = """
         .input-group label { color: var(--text-secondary); font-weight: 600; font-family: 'Orbitron', monospace; }
         .input-group input, .input-group textarea { width: 100%; box-sizing: border-box; background: rgba(0, 0, 0, 0.8); border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px; border-radius: 5px; font-family: 'Courier Prime', monospace; }
         .grab-section { margin-bottom: 15px; padding: 15px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); border-radius: 8px;}
-        .grab-section h3 { color: var(--text-secondary); margin-top:0; margin-bottom: 10px; font-family: 'Orbitron', monospace; }
+        .grab-section h3 { display: flex; justify-content: space-between; align-items: center; color: var(--text-secondary); margin-top:0; margin-bottom: 10px; font-family: 'Orbitron', monospace; }
         .grab-controls { display: flex; align-items: center; gap: 10px; }
         .grab-controls input { flex-grow: 1; }
         .status-badge { padding: 4px 10px; border-radius: 15px; text-transform: uppercase; font-size: 0.8em; }
         .status-badge.active { background: var(--necro-green); color: var(--primary-bg); }
         .status-badge.inactive { background: var(--blood-red); color: var(--text-secondary); }
         .msg-status { text-align: center; color: #00e5ff; padding: 12px; border: 1px dashed #00e5ff; border-radius: 4px; margin: 0 0 20px 0; display: none; background: rgba(0, 229, 255, 0.1); }
+        .bot-status-list { max-height: 250px; overflow-y: auto; padding-right: 10px; }
+        .bot-status-item { display: flex; justify-content: space-between; align-items: center; padding: 5px; border-bottom: 1px solid var(--border-color); font-size: 0.9em; }
+        .bot-status-item:last-child { border-bottom: none; }
+        .bot-status-name { text-transform: capitalize; }
+        .bot-status-indicator { font-weight: bold; }
+        .bot-status-indicator.online { color: var(--necro-green); }
+        .bot-status-indicator.connecting { color: var(--gold-yellow); }
+        .bot-status-indicator.failed { color: var(--blood-red); }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1 class="title">SHADOW NETWORK</h1>
-            <p class="subtitle">Karuta Control Interface</p>
-        </div>
+        <div class="header"><h1 class="title">SHADOW NETWORK</h1><p class="subtitle">Karuta Control Interface</p></div>
         <div id="msg-status-container" class="msg-status"></div>
         <div class="main-grid">
             <div class="panel blood-panel">
-                <h2 data-text="Soul Harvest"><i class="fas fa-crosshairs"></i> Soul Harvest</h2>
+                <h2><i class="fas fa-satellite-dish"></i> Bot Status</h2>
+                <div class="bot-status-list" id="bot-status-container"></div>
+            </div>
+            <div class="panel blood-panel">
+                <h2><i class="fas fa-crosshairs"></i> Soul Harvest</h2>
                 <div id="main-bots-container"></div>
             </div>
             <div class="panel dark-panel">
-                <h2 data-text="Shadow Broadcast"><i class="fas fa-broadcast-tower"></i> Shadow Broadcast</h2>
+                <h2><i class="fas fa-broadcast-tower"></i> Shadow Broadcast</h2>
                 <div class="input-group"><label for="spam-message">Spam Message</label><textarea id="spam-message" rows="2">{{ spam_message }}</textarea></div>
                 <div class="input-group"><label for="spam-delay">Cycle Delay (s)</label><input type="number" id="spam-delay" value="{{ spam_delay }}"></div>
                 <button type="button" id="spam-toggle-btn" class="btn {{ 'btn-blood' if spam_enabled else 'btn-necro' }}">{{ 'DISABLE SPAM' if spam_enabled else 'ENABLE SPAM' }}</button>
@@ -260,32 +273,63 @@ document.addEventListener('DOMContentLoaded', function () {
             return result;
         } catch (error) { console.error('Error:', error); showStatusMessage('Lỗi giao tiếp với server.'); }
     }
-
-    function renderMainBots(settings) {
-        const container = document.getElementById('main-bots-container');
-        container.innerHTML = '';
-        if (Object.keys(settings).length === 0) {
-            container.innerHTML = '<p>Không tìm thấy tài khoản chính nào. Hãy thêm token vào file .env.</p>';
-            return;
+    
+    const updateInputValue = (elementId, newValue) => {
+        const element = document.getElementById(elementId);
+        if (element && document.activeElement !== element) {
+            element.value = newValue;
         }
-        const sortedIndices = Object.keys(settings).sort((a, b) => a - b);
-        for (const index of sortedIndices) {
-            const botSetting = settings[index];
-            const botDiv = document.createElement('div');
-            botDiv.className = 'grab-section';
-            const buttonClass = botSetting.enabled ? 'btn-blood' : 'btn-necro';
-            const buttonText = botSetting.enabled ? 'DISABLE' : 'ENABLE';
-            const statusClass = botSetting.enabled ? 'active' : 'inactive';
-            const statusText = botSetting.enabled ? 'ON' : 'OFF';
+    };
 
-            botDiv.innerHTML = `
-                <h3>${botSetting.name || `Main Bot #${index}`} <span class="status-badge ${statusClass}">${statusText}</span></h3>
-                <div class="grab-controls">
-                    <input type="number" id="heart-threshold-${index}" value="${botSetting.threshold || 50}" title="Ngưỡng tim">
-                    <button data-index="${index}" class="btn btn-toggle-grab ${buttonClass}">${buttonText}</button>
-                </div>
-            `;
-            container.appendChild(botDiv);
+    function renderBotStatus(statuses) {
+        const container = document.getElementById('bot-status-container');
+        container.innerHTML = '';
+        const sortedKeys = Object.keys(statuses).sort();
+        for(const botId of sortedKeys) {
+            const status = statuses[botId];
+            const item = document.createElement('div');
+            item.className = 'bot-status-item';
+            item.innerHTML = `<span class="bot-status-name">${botId.replace('_', ' #')}</span> <span class="bot-status-indicator ${status}">${status.toUpperCase()}</span>`;
+            container.appendChild(item);
+        }
+    }
+
+    function updateMainBots(settings) {
+        const container = document.getElementById('main-bots-container');
+        if (container.children.length !== Object.keys(settings).length) {
+            container.innerHTML = '';
+            if (Object.keys(settings).length === 0) {
+                container.innerHTML = '<p>Không tìm thấy tài khoản chính nào.</p>';
+                return;
+            }
+            const sortedIndices = Object.keys(settings).sort((a, b) => a - b);
+            for (const index of sortedIndices) {
+                const botSetting = settings[index];
+                const botDiv = document.createElement('div');
+                botDiv.className = 'grab-section';
+                botDiv.id = `grab-section-${index}`;
+                botDiv.innerHTML = `
+                    <h3>${botSetting.name || `Main Bot #${index}`} <span id="status-badge-${index}" class="status-badge"></span></h3>
+                    <div class="grab-controls">
+                        <input type="number" id="heart-threshold-${index}" title="Ngưỡng tim">
+                        <button data-index="${index}" id="toggle-button-${index}" class="btn btn-toggle-grab"></button>
+                    </div>`;
+                container.appendChild(botDiv);
+            }
+        }
+        for (const index in settings) {
+            const botSetting = settings[index];
+            const statusBadge = document.getElementById(`status-badge-${index}`);
+            const toggleButton = document.getElementById(`toggle-button-${index}`);
+            if(statusBadge) {
+                statusBadge.className = `status-badge ${botSetting.enabled ? 'active' : 'inactive'}`;
+                statusBadge.textContent = botSetting.enabled ? 'ON' : 'OFF';
+            }
+            if(toggleButton) {
+                toggleButton.className = `btn btn-toggle-grab ${botSetting.enabled ? 'btn-blood' : 'btn-necro'}`;
+                toggleButton.textContent = botSetting.enabled ? 'DISABLE' : 'ENABLE';
+            }
+            updateInputValue(`heart-threshold-${index}`, botSetting.threshold || 50);
         }
     }
 
@@ -293,28 +337,16 @@ document.addEventListener('DOMContentLoaded', function () {
         try {
             const response = await fetch('/status');
             const data = await response.json();
-            renderMainBots(data.main_bot_settings);
-
-            // Helper function to update input/textarea value only if not focused
-            const updateInputValue = (elementId, newValue) => {
-                const element = document.getElementById(elementId);
-                // Chỉ cập nhật nếu element tồn tại và không phải là element đang được focus
-                if (element && document.activeElement !== element) {
-                    element.value = newValue;
-                }
-            };
-
-            updateInputValue('spam-message', data.spam_message);
-            updateInputValue('spam-delay', data.spam_delay);
-
+            renderBotStatus(data.bot_statuses);
+            updateMainBots(data.main_bot_settings);
             const spamBtn = document.getElementById('spam-toggle-btn');
             spamBtn.textContent = data.spam_enabled ? 'DISABLE SPAM' : 'ENABLE SPAM';
             spamBtn.className = `btn ${data.spam_enabled ? 'btn-blood' : 'btn-necro'}`;
-            
+            updateInputValue('spam-message', data.spam_message);
+            updateInputValue('spam-delay', data.spam_delay);
             updateInputValue('grab-channels-input', data.grab_channel_ids.join(','));
             updateInputValue('ktb-channels-input', data.ktb_channel_ids.join(','));
             updateInputValue('spam-channels-input', data.spam_channel_ids.join(','));
-
         } catch (error) { console.error('Error fetching status:', error); }
     }
 
@@ -325,14 +357,12 @@ document.addEventListener('DOMContentLoaded', function () {
             postData('/api/main_bot_toggle', { index: parseInt(index), threshold: parseInt(threshold) });
         }
     });
-
     document.getElementById('spam-toggle-btn').addEventListener('click', function() {
         postData('/api/spam_toggle', {
             message: document.getElementById('spam-message').value,
             delay: parseInt(document.getElementById('spam-delay').value)
         });
     });
-
     document.getElementById('save-channels-btn').addEventListener('click', function() {
         postData('/api/update_channels', {
             grab_channels: document.getElementById('grab-channels-input').value,
@@ -342,7 +372,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     fetchStatus();
-    setInterval(fetchStatus, 5000);
+    setInterval(fetchStatus, 3000);
 });
 </script>
 </body>
@@ -363,7 +393,7 @@ def status():
         'main_bot_settings': main_bot_settings, 'spam_enabled': spam_enabled,
         'spam_message': spam_message, 'spam_delay': spam_delay,
         'grab_channel_ids': grab_channel_ids, 'ktb_channel_ids': ktb_channel_ids,
-        'spam_channel_ids': spam_channel_ids, 'server_start_time': server_start_time,
+        'spam_channel_ids': spam_channel_ids, 'bot_statuses': bot_statuses
     })
 
 @app.route("/api/main_bot_toggle", methods=['POST'])
@@ -372,7 +402,7 @@ def api_main_bot_toggle():
     index, threshold = data.get('index'), data.get('threshold')
     if index in main_bot_settings:
         main_bot_settings[index]['enabled'] = not main_bot_settings[index].get('enabled', False)
-        main_bot_settings[index]['threshold'] = threshold
+        main_bot_settings[index]['threshold'] = int(threshold)
         state = "BẬT" if main_bot_settings[index]['enabled'] else "TẮT"
         msg = f"{main_bot_settings[index].get('name', f'Main Bot #{index}')} đã được {state}."
         save_settings()
@@ -385,7 +415,7 @@ def api_spam_toggle():
     data = request.get_json()
     spam_enabled = not spam_enabled
     if spam_enabled:
-        spam_message, spam_delay = data.get("message", "").strip(), data.get("delay", 10)
+        spam_message, spam_delay = data.get("message", "").strip(), int(data.get("delay", 10))
         if not spam_message:
             spam_enabled = False
             return jsonify({'status': 'error', 'message': 'Nội dung spam không được để trống.'})
@@ -413,12 +443,14 @@ if __name__ == "__main__":
     print("Đang khởi tạo các bot...", flush=True)
     with bots_lock:
         for i, token in enumerate(main_tokens):
+            bot_statuses[f'main_{i}'] = 'connecting'
             main_bots.append(create_bot(token, bot_index=i, is_main=True))
             if i not in main_bot_settings:
                 main_bot_settings[i] = {'enabled': False, 'threshold': 50, 'name': f'Main Account #{i+1}'}
             elif 'name' not in main_bot_settings[i]:
                  main_bot_settings[i]['name'] = f'Main Account #{i+1}'
         for i, token in enumerate(sub_tokens):
+            bot_statuses[f'sub_{i}'] = 'connecting'
             sub_bots.append(create_bot(token, bot_index=i, is_main=False))
     print("Đang khởi tạo các luồng nền...", flush=True)
     threading.Thread(target=periodic_save_loop, daemon=True).start()
