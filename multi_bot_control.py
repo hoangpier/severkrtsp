@@ -17,7 +17,7 @@ load_dotenv()
 main_tokens = os.getenv("MAIN_TOKENS").split(",") if os.getenv("MAIN_TOKENS") else []
 tokens = os.getenv("TOKENS").split(",") if os.getenv("TOKENS") else []
 karuta_id = "646937666251915264"
-karibbit_id = "1311684840462225440"
+karibbit_id = "1274445226064220273"
 BOT_NAMES = [ # Tên để hiển thị trên giao diện, bạn có thể thêm nếu cần
     "ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON", 
     "ZETA", "ETA", "THETA", "IOTA", "KAPPA", 
