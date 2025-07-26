@@ -1,4 +1,4 @@
-# PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG
+# PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG - SỬA LỖI LOGGING - THÊM DEBUG
 import discum
 import threading
 import time
@@ -90,34 +90,54 @@ def load_settings():
     except Exception as e: print(f"[Settings] Exception khi tải cài đặt: {e}", flush=True)
 
 # --- CÁC HÀM LOGIC BOT ---
+
+# ===================================================================
+# HÀM HANDLE_GRAB PHIÊN BẢN DEBUG
+# ===================================================================
 def handle_grab(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
+    print(f"[DEBUG Bot {bot_num}] Thấy tin nhắn trong kênh {channel_id}. Bắt đầu xử lý...", flush=True)
+
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
-    if not target_server: return
+    if not target_server:
+        print(f"[DEBUG Bot {bot_num}] Không tìm thấy server nào có main_channel_id này. Bỏ qua.", flush=True)
+        return
 
     auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
     heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
     ktb_channel_id = target_server.get('ktb_channel_id')
     
-    if not auto_grab_enabled or not ktb_channel_id: return
+    print(f"[DEBUG Bot {bot_num}] Cấu hình cho server '{target_server['name']}': grab_enabled={auto_grab_enabled}, threshold={heart_threshold}, ktb_id={ktb_channel_id}", flush=True)
+
+    if not auto_grab_enabled or not ktb_channel_id:
+        print(f"[DEBUG Bot {bot_num}] Grab bị tắt hoặc thiếu KTB channel. Dừng lại.", flush=True)
+        return
 
     if msg.get("author", {}).get("id") == karuta_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
         last_drop_msg_id = msg["id"]
+        print(f"[DEBUG Bot {bot_num}] Nhận diện được drop từ Karuta. Bắt đầu đọc tin nhắn Karibbit.", flush=True)
         
         def read_karibbit():
             time.sleep(0.5)
             try:
                 messages = bot.getMessages(channel_id, num=5).json()
+                found_karibbit_msg = False
                 for msg_item in messages:
                     if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
+                        found_karibbit_msg = True
                         desc = msg_item["embeds"][0].get("description", "")
                         lines = desc.split('\n')
                         heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
                         
-                        if not any(heart_numbers): break
+                        max_num = max(heart_numbers) if heart_numbers else 0
+                        print(f"[DEBUG Bot {bot_num}] Đã đọc Karibbit, số tim cao nhất thấy được là: {max_num}", flush=True)
+                        
+                        if not any(heart_numbers):
+                             print(f"[DEBUG Bot {bot_num}] Không thấy số tim nào trong tin nhắn Karibbit. Bỏ qua.", flush=True)
+                             break
 
-                        max_num = max(heart_numbers)
                         if max_num >= heart_threshold:
+                            print(f"[DEBUG Bot {bot_num}] Số tim {max_num} >= ngưỡng {heart_threshold}. Tiến hành nhặt.", flush=True)
                             max_index = heart_numbers.index(max_num)
                             
                             delays = {
@@ -130,6 +150,7 @@ def handle_grab(bot, msg, bot_num):
                             emoji = emojis[max_index]
                             delay = bot_delays[max_index]
 
+                            # Đây là dòng log gốc của bạn
                             print(f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
                             
                             def grab_action():
@@ -138,21 +159,39 @@ def handle_grab(bot, msg, bot_num):
                                 bot.sendMessage(ktb_channel_id, "kt b")
                             
                             threading.Timer(delay, grab_action).start()
-                        break
+                        else:
+                            print(f"[DEBUG Bot {bot_num}] Số tim {max_num} < ngưỡng {heart_threshold}. KHÔNG nhặt.", flush=True)
+                        break # Kết thúc sau khi xử lý tin nhắn Karibbit đầu tiên
+                
+                if not found_karibbit_msg:
+                    print(f"[DEBUG Bot {bot_num}] Không tìm thấy tin nhắn từ Karibbit trong 5 tin nhắn gần nhất.", flush=True)
+
             except Exception as e:
-                print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
+                print(f"[ERROR] Lỗi nghiêm trọng trong read_karibbit (Bot {bot_num}): {e}", flush=True)
 
         threading.Thread(target=read_karibbit).start()
+
 
 def create_bot(token, bot_identifier, is_main=False):
     bot = discum.Client(token=token, log=False)
     
+    # Xác định tên bot một lần và sử dụng lại để đảm bảo tính nhất quán
+    bot_name = ""
+    if is_main:
+        # Bot chính sử dụng định danh 1-based (1, 2, 3...)
+        idx = bot_identifier - 1
+        bot_name = BOT_NAMES[idx] if idx < len(BOT_NAMES) else f"MAIN_{bot_identifier}"
+    else:
+        # Bot phụ sử dụng định danh 0-based (0, 1, 2...)
+        idx = bot_identifier
+        bot_name = acc_names[idx] if idx < len(acc_names) else f"Sub {idx + 1}"
+
     @bot.gateway.command
     def on_ready(resp):
         if resp.event.ready:
             user = resp.raw.get("user", {})
             if isinstance(user, dict) and (user_id := user.get("id")):
-                bot_name = bot_identifier if is_main else acc_names[bot_identifier] if bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}"
+                # Sử dụng bot_name đã được xác định ở trên
                 print(f"Đã đăng nhập: {user_id} ({bot_name})", flush=True)
 
     if is_main:
@@ -161,10 +200,21 @@ def create_bot(token, bot_identifier, is_main=False):
             if resp.event.message:
                 handle_grab(bot, resp.parsed.auto(), bot_identifier)
             
-    threading.Thread(target=bot.gateway.run, daemon=True).start()
+    # Hàm bao bọc để bắt lỗi kết nối
+    def run_wrapper():
+        try:
+            bot.gateway.run()
+        except (BrokenPipeError, OSError, ConnectionResetError) as e:
+            # Sử dụng bot_name đã được xác định ở trên
+            print(f"[Connection Closed] Bot {bot_name} đã bị ngắt kết nối: {e}. Sẽ chờ auto-reboot...", flush=True)
+        except Exception as e:
+            # Sử dụng bot_name đã được xác định ở trên
+            print(f"[Unknown Error] Bot {bot_name} gặp lỗi không xác định: {e}", flush=True)
+
+    threading.Thread(target=run_wrapper, daemon=True).start()
     return bot
 
-# --- CÁC VÒNG LẶP NỀN (ĐÃ SỬA LỖI SPAM) ---
+# --- CÁC VÒNG LẶP NỀN ---
 def auto_reboot_loop():
     global last_reboot_cycle_time, main_bots
     while not auto_reboot_stop_event.is_set():
@@ -177,10 +227,9 @@ def auto_reboot_loop():
                     for i, bot in enumerate(main_bots):
                         bot.gateway.close()
                         time.sleep(2)
-                        bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
+                        # bot_identifier được truyền là 1-based
                         new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
                         new_main_bots.append(new_bot)
-                        print(f"Đã reboot bot {bot_name}", flush=True)
                         time.sleep(5)
                     main_bots = new_main_bots
                 last_reboot_cycle_time = time.time()
@@ -196,10 +245,15 @@ def spam_loop():
     while True:
         try:
             with bots_lock:
+                # Cập nhật danh sách bot spam mỗi lần lặp để thay đổi có hiệu lực
                 bots_to_spam = [bot for i, bot in enumerate(bots) if bot and bot_active_states.get(f'sub_{i}', False)]
 
+            current_active_server_ids = []
             for server in servers:
                 server_id = server.get('id')
+                if not server_id: continue
+                current_active_server_ids.append(server_id)
+
                 spam_is_on = server.get('spam_enabled') and server.get('spam_message') and server.get('spam_channel_id')
 
                 if spam_is_on and server_id not in active_server_threads:
@@ -207,7 +261,7 @@ def spam_loop():
                     stop_event = threading.Event()
                     thread = threading.Thread(
                         target=spam_for_server, 
-                        args=(server, bots_to_spam, stop_event), 
+                        args=(server.copy(), bots_to_spam, stop_event), 
                         daemon=True
                     )
                     thread.start()
@@ -215,13 +269,15 @@ def spam_loop():
 
                 elif not spam_is_on and server_id in active_server_threads:
                     print(f"[Spam Control] Dừng luồng spam cho server: {server.get('name')}", flush=True)
-                    thread, stop_event = active_server_threads[server_id]
+                    _, stop_event = active_server_threads.pop(server_id)
                     stop_event.set()
-                    del active_server_threads[server_id]
-
-            for server_id, (thread, _) in list(active_server_threads.items()):
-                if not thread.is_alive():
-                    del active_server_threads[server_id]
+            
+            # Dọn dẹp các luồng của server đã bị xóa
+            for server_id in list(active_server_threads.keys()):
+                if server_id not in current_active_server_ids:
+                    print(f"[Spam Control] Dọn dẹp luồng cho server đã xóa: {server_id}", flush=True)
+                    _, stop_event = active_server_threads.pop(server_id)
+                    stop_event.set()
 
             time.sleep(5)
         except Exception as e:
@@ -231,15 +287,14 @@ def spam_loop():
 def spam_for_server(server_config, bots_to_spam, stop_event):
     server_name = server_config.get('name')
     channel_id = server_config.get('spam_channel_id')
-    message = server_config.get('spam_message')
     
     while not stop_event.is_set():
         try:
-            delay = server_config.get('spam_delay', 10) # Lấy delay mới nhất mỗi lần lặp
+            message = server_config.get('spam_message')
+            delay = server_config.get('spam_delay', 10)
             
             for bot in bots_to_spam:
-                if stop_event.is_set():
-                    break
+                if stop_event.is_set(): break
                 try:
                     bot.sendMessage(channel_id, message)
                     time.sleep(2) 
@@ -439,7 +494,7 @@ HTML_TEMPLATE = """
             const serverId = serverPanel.dataset.serverId;
             if (target.classList.contains('harvest-toggle')) { const node = target.dataset.node; const thresholdInput = serverPanel.querySelector(`.harvest-threshold[data-node="${node}"]`); postData('/api/harvest_toggle', { server_id: serverId, node: node, threshold: thresholdInput.value }); }
             if (target.classList.contains('broadcast-toggle')) { const message = serverPanel.querySelector('.spam-message').value; const delay = serverPanel.querySelector('.spam-delay').value; postData('/api/broadcast_toggle', { server_id: serverId, message: message, delay: delay }); }
-            if (target.closest('.btn-delete-server')) { if(confirm('Are you sure?')) { postData('/api/delete_server', { server_id: serverId }); } }
+            if (target.closest('.btn-delete-server')) { if(confirm('Are you sure you want to delete this server?')) { postData('/api/delete_server', { server_id: serverId }); } }
         });
         mainGrid.addEventListener('change', e => {
             const target = e.target;
@@ -574,9 +629,8 @@ def api_save_settings():
 def status():
     now = time.time()
     for server in servers:
-        server['spam_countdown'] = 0 # Sẽ cập nhật từ client-side để đơn giản hóa
+        server['spam_countdown'] = 0 
         if server.get('spam_enabled'):
-            # Gửi thời gian spam cuối và delay để client tính toán
             server['last_spam_time'] = server.get('last_spam_time', 0)
         
     with bots_lock:
@@ -607,13 +661,14 @@ if __name__ == "__main__":
             if token.strip():
                 bot_num = i + 1
                 bot_id = f"main_{bot_num}"
-                bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{bot_num}"
+                # bot_identifier được truyền là 1-based cho bot chính
                 main_bots.append(create_bot(token.strip(), bot_identifier=bot_num, is_main=True))
                 if bot_id not in bot_active_states: bot_active_states[bot_id] = True
         
         for i, token in enumerate(tokens):
             if token.strip():
                 bot_id = f'sub_{i}'
+                # bot_identifier được truyền là 0-based cho bot phụ
                 bots.append(create_bot(token.strip(), bot_identifier=i, is_main=False))
                 if bot_id not in bot_active_states: bot_active_states[bot_id] = True
 
