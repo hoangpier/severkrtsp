@@ -1,4 +1,4 @@
-# PHIÊN BẢN LITE - ĐÃ TÁI CẤU TRÚC ĐỂ HỖ TRỢ N TÀI KHOẢN CHÍNH
+# PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG
 import discum
 import threading
 import time
@@ -13,15 +13,14 @@ import uuid
 load_dotenv()
 
 # --- CẤU HÌNH ---
-# Tái cấu trúc: Dùng một danh sách cho tất cả các token chính
 main_tokens = os.getenv("MAIN_TOKENS").split(",") if os.getenv("MAIN_TOKENS") else []
 tokens = os.getenv("TOKENS").split(",") if os.getenv("TOKENS") else []
 karuta_id = "646937666251915264"
 karibbit_id = "1311684840462225440"
 BOT_NAMES = [ # Tên để hiển thị trên giao diện, bạn có thể thêm nếu cần
-    "ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON", 
-    "ZETA", "ETA", "THETA", "IOTA", "KAPPA", 
-    "LAMBDA", "MU" 
+    "ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON",
+    "ZETA", "ETA", "THETA", "IOTA", "KAPPA",
+    "LAMBDA", "MU"
 ]
 
 # --- BIẾN TRẠNG THÁI ---
@@ -29,11 +28,8 @@ bots, acc_names = [], [
     "Blacklist", "Khanh bang", "Dersale", "Venus", "WhyK", "Tan",
     "Ylang", "Nina", "Nathan", "Ofer", "White", "the Wicker", "Leader", "Tess", "Wyatt", "Daisy", "CantStop", "Token",
 ]
-# Tái cấu trúc: Dùng danh sách để quản lý các bot chính
-main_bots = [] 
-
-# Cấu hình đa server
-servers = [] 
+main_bots = []
+servers = []
 
 # Cài đặt toàn cục
 auto_reboot_enabled = False
@@ -54,7 +50,7 @@ def save_settings():
     if not api_key or not bin_id: return
     settings = {
         'servers': servers,
-        'auto_reboot_enabled': auto_reboot_enabled, 
+        'auto_reboot_enabled': auto_reboot_enabled,
         'auto_reboot_delay': auto_reboot_delay,
         'bot_active_states': bot_active_states,
         'last_reboot_cycle_time': last_reboot_cycle_time
@@ -99,7 +95,6 @@ def handle_grab(bot, msg, bot_num):
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
     if not target_server: return
 
-    # Tái cấu trúc: Key được tạo động, không cần map
     auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
     heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
     ktb_channel_id = target_server.get('ktb_channel_id')
@@ -125,12 +120,10 @@ def handle_grab(bot, msg, bot_num):
                         if max_num >= heart_threshold:
                             max_index = heart_numbers.index(max_num)
                             
-                            # Cấu hình delay động, có thể thêm nếu số bot_num > 4
                             delays = {
                                 1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4],
                                 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]
                             }
-                            # Dùng delay mặc định nếu bot_num không có trong dict
                             bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
                             emojis = ["1️⃣", "2️⃣", "3️⃣"]
                             
@@ -151,7 +144,6 @@ def handle_grab(bot, msg, bot_num):
 
         threading.Thread(target=read_karibbit).start()
 
-# Tái cấu trúc: Hàm tạo bot linh hoạt hơn
 def create_bot(token, bot_identifier, is_main=False):
     bot = discum.Client(token=token, log=False)
     
@@ -164,7 +156,6 @@ def create_bot(token, bot_identifier, is_main=False):
                 print(f"Đã đăng nhập: {user_id} ({bot_name})", flush=True)
 
     if is_main:
-        # Dùng closure để bắt giá trị bot_identifier
         @bot.gateway.command
         def on_message(resp):
             if resp.event.message:
@@ -173,7 +164,7 @@ def create_bot(token, bot_identifier, is_main=False):
     threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
 
-# --- CÁC VÒNG LẶP NỀN ---
+# --- CÁC VÒNG LẶP NỀN (ĐÃ SỬA LỖI SPAM) ---
 def auto_reboot_loop():
     global last_reboot_cycle_time, main_bots
     while not auto_reboot_stop_event.is_set():
@@ -200,23 +191,67 @@ def auto_reboot_loop():
     print("[Reboot] Luồng tự động reboot đã dừng.", flush=True)
 
 def spam_loop():
+    active_server_threads = {}
+    
     while True:
         try:
             with bots_lock:
                 bots_to_spam = [bot for i, bot in enumerate(bots) if bot and bot_active_states.get(f'sub_{i}', False)]
+
             for server in servers:
-                if server.get('spam_enabled') and server.get('spam_message') and server.get('spam_channel_id'):
-                    if (time.time() - server.get('last_spam_time', 0)) >= server.get('spam_delay', 10):
-                        for bot in bots_to_spam:
-                            if not server.get('spam_enabled'): break
-                            try: bot.sendMessage(server['spam_channel_id'], server['spam_message'])
-                            except Exception as e: print(f"Lỗi gửi spam tới {server['name']}: {e}", flush=True)
-                            time.sleep(2)
-                        if server.get('spam_enabled'): server['last_spam_time'] = time.time()
-            time.sleep(1)
+                server_id = server.get('id')
+                spam_is_on = server.get('spam_enabled') and server.get('spam_message') and server.get('spam_channel_id')
+
+                if spam_is_on and server_id not in active_server_threads:
+                    print(f"[Spam Control] Bắt đầu luồng spam cho server: {server.get('name')}", flush=True)
+                    stop_event = threading.Event()
+                    thread = threading.Thread(
+                        target=spam_for_server, 
+                        args=(server, bots_to_spam, stop_event), 
+                        daemon=True
+                    )
+                    thread.start()
+                    active_server_threads[server_id] = (thread, stop_event)
+
+                elif not spam_is_on and server_id in active_server_threads:
+                    print(f"[Spam Control] Dừng luồng spam cho server: {server.get('name')}", flush=True)
+                    thread, stop_event = active_server_threads[server_id]
+                    stop_event.set()
+                    del active_server_threads[server_id]
+
+            for server_id, (thread, _) in list(active_server_threads.items()):
+                if not thread.is_alive():
+                    del active_server_threads[server_id]
+
+            time.sleep(5)
         except Exception as e:
-            print(f"[ERROR in spam_loop] {e}", flush=True)
-            time.sleep(1)
+            print(f"[ERROR in spam_loop_manager] {e}", flush=True)
+            time.sleep(5)
+
+def spam_for_server(server_config, bots_to_spam, stop_event):
+    server_name = server_config.get('name')
+    channel_id = server_config.get('spam_channel_id')
+    message = server_config.get('spam_message')
+    
+    while not stop_event.is_set():
+        try:
+            delay = server_config.get('spam_delay', 10) # Lấy delay mới nhất mỗi lần lặp
+            
+            for bot in bots_to_spam:
+                if stop_event.is_set():
+                    break
+                try:
+                    bot.sendMessage(channel_id, message)
+                    time.sleep(2) 
+                except Exception as e:
+                    print(f"Lỗi gửi spam từ bot tới server {server_name}: {e}", flush=True)
+            
+            if not stop_event.is_set():
+                stop_event.wait(timeout=delay)
+
+        except Exception as e:
+            print(f"[ERROR in spam_for_server {server_name}] {e}", flush=True)
+            stop_event.wait(timeout=10)
 
 def periodic_save_loop():
     while True:
@@ -226,7 +261,7 @@ def periodic_save_loop():
         
 app = Flask(__name__)
 
-# --- GIAO DIỆN WEB (REFACTORED) ---
+# --- GIAO DIỆN WEB ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -345,7 +380,6 @@ HTML_TEMPLATE = """
         </div>
     </div>
 <script>
-    // PHẦN JAVASCRIPT GIỮ NGUYÊN, NÓ ĐỦ LINH HOẠT ĐỂ HOẠT ĐỘNG VỚI GIAO DIỆN MỚI
     document.addEventListener('DOMContentLoaded', function () {
         const msgStatusContainer = document.getElementById('msg-status-container');
         const msgStatusText = document.getElementById('msg-status-text');
@@ -423,11 +457,10 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- FLASK ROUTES (REFACTORED) ---
+# --- FLASK ROUTES ---
 @app.route("/")
 def index():
     sorted_servers = sorted(servers, key=lambda s: s.get('name', ''))
-    # Tạo thông tin cho các bot chính để truyền vào template
     main_bots_info = [
         {"id": i + 1, "name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"}
         for i in range(len(main_tokens))
@@ -441,12 +474,10 @@ def api_add_server():
     if not name: return jsonify({'status': 'error', 'message': 'Server name is required.'}), 400
     
     new_server = {
-        "id": f"server_{uuid.uuid4().hex}",
-        "name": name,
+        "id": f"server_{uuid.uuid4().hex}", "name": name,
         "main_channel_id": "", "ktb_channel_id": "", "spam_channel_id": "",
         "spam_enabled": False, "spam_message": "", "spam_delay": 10, "last_spam_time": 0
     }
-    # Tái cấu trúc: Tự động thêm cấu hình cho tất cả các bot chính
     for i in range(len(main_tokens)):
         bot_num = i + 1
         new_server[f'auto_grab_enabled_{bot_num}'] = False
@@ -454,8 +485,6 @@ def api_add_server():
 
     servers.append(new_server)
     return jsonify({'status': 'success', 'message': f'Server "{name}" added.', 'reload': True})
-
-# --- CÁC API KHÁC GIỮ NGUYÊN HOẶC CHỈ CẦN THAY ĐỔI NHỎ ---
 
 @app.route("/api/delete_server", methods=['POST'])
 def api_delete_server():
@@ -470,8 +499,7 @@ def api_delete_server():
 @app.route("/api/update_server_channels", methods=['POST'])
 def api_update_server_channels():
     data = request.get_json()
-    server_id = data.get('server_id')
-    server = next((s for s in servers if s.get('id') == server_id), None)
+    server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
     if not server: return jsonify({'status': 'error', 'message': 'Server not found.'}), 404
     updated_fields = []
     for field in ['main_channel_id', 'ktb_channel_id', 'spam_channel_id']:
@@ -481,7 +509,7 @@ def api_update_server_channels():
     return jsonify({'status': 'success', 'message': f'{", ".join(updated_fields)} updated for {server["name"]}.'})
 
 @app.route("/api/harvest_toggle", methods=['POST'])
-def api_harvest_toggle(): # Hàm này đủ linh hoạt, không cần sửa
+def api_harvest_toggle():
     data = request.get_json()
     server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
     node = data.get('node')
@@ -515,7 +543,6 @@ def api_reboot_toggle_auto():
     data = request.get_json()
     auto_reboot_enabled = not auto_reboot_enabled
     auto_reboot_delay = int(data.get("delay", 3600))
-    msg = ""
     if auto_reboot_enabled:
         last_reboot_cycle_time = time.time()
         if auto_reboot_thread is None or not auto_reboot_thread.is_alive():
@@ -547,26 +574,19 @@ def api_save_settings():
 def status():
     now = time.time()
     for server in servers:
-        server['spam_countdown'] = (server.get('last_spam_time', 0) + server.get('spam_delay', 10) - now) if server.get('spam_enabled') else 0
-
+        server['spam_countdown'] = 0 # Sẽ cập nhật từ client-side để đơn giản hóa
+        if server.get('spam_enabled'):
+            # Gửi thời gian spam cuối và delay để client tính toán
+            server['last_spam_time'] = server.get('last_spam_time', 0)
+        
     with bots_lock:
         main_bot_statuses = [
-            {
-                "name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}",
-                "status": bot is not None,
-                "reboot_id": f"main_{i+1}",
-                "is_active": bot_active_states.get(f"main_{i+1}", False),
-                "type": "main"
-            } for i, bot in enumerate(main_bots)
+            {"name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}", "status": bot is not None, "reboot_id": f"main_{i+1}", "is_active": bot_active_states.get(f"main_{i+1}", False), "type": "main"} 
+            for i, bot in enumerate(main_bots)
         ]
         sub_bot_statuses = [
-            {
-                "name": acc_names[i] if i < len(acc_names) else f"Sub {i+1}",
-                "status": bot is not None,
-                "reboot_id": f"sub_{i}",
-                "is_active": bot_active_states.get(f"sub_{i}", False),
-                "type": "sub"
-            } for i, bot in enumerate(bots)
+            {"name": acc_names[i] if i < len(acc_names) else f"Sub {i+1}", "status": bot is not None, "reboot_id": f"sub_{i}", "is_active": bot_active_states.get(f"sub_{i}", False), "type": "sub"}
+            for i, bot in enumerate(bots)
         ]
 
     return jsonify({
@@ -577,13 +597,12 @@ def status():
         'servers': servers
     })
 
-# --- MAIN EXECUTION (REFACTORED) ---
+# --- MAIN EXECUTION ---
 if __name__ == "__main__":
     load_settings()
     
     print("Đang khởi tạo các bot...", flush=True)
     with bots_lock:
-        # Tự động tạo các bot chính từ MAIN_TOKENS
         for i, token in enumerate(main_tokens):
             if token.strip():
                 bot_num = i + 1
@@ -592,7 +611,6 @@ if __name__ == "__main__":
                 main_bots.append(create_bot(token.strip(), bot_identifier=bot_num, is_main=True))
                 if bot_id not in bot_active_states: bot_active_states[bot_id] = True
         
-        # Tạo các bot phụ
         for i, token in enumerate(tokens):
             if token.strip():
                 bot_id = f'sub_{i}'
@@ -601,7 +619,8 @@ if __name__ == "__main__":
 
     print("Đang khởi tạo các luồng nền...", flush=True)
     threading.Thread(target=periodic_save_loop, daemon=True).start()
-    threading.Thread(target=spam_loop, daemon=True).start()
+    spam_thread = threading.Thread(target=spam_loop, daemon=True)
+    spam_thread.start()
     
     if auto_reboot_enabled:
         auto_reboot_stop_event = threading.Event()
