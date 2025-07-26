@@ -9,6 +9,7 @@ import json
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
 import uuid
+from websocket._exceptions import WebSocketConnectionClosedException
 
 load_dotenv()
 
@@ -145,6 +146,8 @@ def handle_grab(bot, msg, bot_num):
         threading.Thread(target=read_karibbit).start()
 
 def create_bot(token, bot_identifier, is_main=False):
+    bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else (acc_names[bot_identifier] if not is_main and bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}")
+    
     bot = discum.Client(token=token, log=False)
     
     @bot.gateway.command
@@ -152,16 +155,28 @@ def create_bot(token, bot_identifier, is_main=False):
         if resp.event.ready:
             user = resp.raw.get("user", {})
             if isinstance(user, dict) and (user_id := user.get("id")):
-                bot_name = bot_identifier if is_main else acc_names[bot_identifier] if bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}"
-                print(f"Đã đăng nhập: {user_id} ({bot_name})", flush=True)
+                print(f"Đã đăng nhập và sẵn sàng: {user_id} ({bot_name})", flush=True)
 
     if is_main:
         @bot.gateway.command
         def on_message(resp):
             if resp.event.message:
                 handle_grab(bot, resp.parsed.auto(), bot_identifier)
-            
-    threading.Thread(target=bot.gateway.run, daemon=True).start()
+    
+    # *** FIX: Added a reconnection loop ***
+    def run_gateway_with_reconnect():
+        while True:
+            try:
+                print(f"[{bot_name}] Bắt đầu kết nối gateway...", flush=True)
+                bot.gateway.run()
+            except (WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError) as e:
+                print(f"[{bot_name}] Mất kết nối ({type(e).__name__}). Đang thử kết nối lại sau 30 giây...", flush=True)
+                time.sleep(30)
+            except Exception as e:
+                print(f"[{bot_name}] Lỗi gateway không xác định: {e}. Đang thử kết nối lại sau 60 giây...", flush=True)
+                time.sleep(60)
+
+    threading.Thread(target=run_gateway_with_reconnect, daemon=True).start()
     return bot
 
 # --- CÁC VÒNG LẶP NỀN (ĐÃ SỬA LỖI SPAM) ---
@@ -173,17 +188,11 @@ def auto_reboot_loop():
             if auto_reboot_enabled and (time.time() - last_reboot_cycle_time) >= auto_reboot_delay:
                 print("[Reboot] Hết thời gian chờ, tiến hành reboot các tài khoản chính.", flush=True)
                 with bots_lock:
-                    new_main_bots = []
-                    for i, bot in enumerate(main_bots):
+                    for bot in main_bots:
+                        # Closing the gateway will trigger the reconnection loop in create_bot
                         bot.gateway.close()
-                        time.sleep(2)
-                        bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
-                        new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
-                        new_main_bots.append(new_bot)
-                        print(f"Đã reboot bot {bot_name}", flush=True)
-                        time.sleep(5)
-                    main_bots = new_main_bots
                 last_reboot_cycle_time = time.time()
+                print("[Reboot] Đã gửi tín hiệu khởi động lại cho tất cả các bot chính.", flush=True)
                 save_settings()
         except Exception as e:
             print(f"[ERROR in auto_reboot_loop] {e}", flush=True)
@@ -196,7 +205,10 @@ def spam_loop():
     while True:
         try:
             with bots_lock:
-                bots_to_spam = [bot for i, bot in enumerate(bots) if bot and bot_active_states.get(f'sub_{i}', False)]
+                # Create a copy of the bots list for thread safety
+                current_bots = list(bots)
+
+            bots_to_spam = [bot for i, bot in enumerate(current_bots) if bot and bot_active_states.get(f'sub_{i}', False)]
 
             for server in servers:
                 server_id = server.get('id')
@@ -217,10 +229,14 @@ def spam_loop():
                     print(f"[Spam Control] Dừng luồng spam cho server: {server.get('name')}", flush=True)
                     thread, stop_event = active_server_threads[server_id]
                     stop_event.set()
+                    # Wait for the thread to finish
+                    thread.join(timeout=5) 
                     del active_server_threads[server_id]
 
+            # Clean up dead threads
             for server_id, (thread, _) in list(active_server_threads.items()):
                 if not thread.is_alive():
+                    print(f"[Spam Control] Luồng spam cho server ID {server_id} đã dừng. Dọn dẹp.", flush=True)
                     del active_server_threads[server_id]
 
             time.sleep(5)
@@ -242,15 +258,18 @@ def spam_for_server(server_config, bots_to_spam, stop_event):
                     break
                 try:
                     bot.sendMessage(channel_id, message)
-                    time.sleep(2) 
+                    # Use a smaller, non-blocking delay between individual bot messages
+                    time.sleep(1) 
                 except Exception as e:
                     print(f"Lỗi gửi spam từ bot tới server {server_name}: {e}", flush=True)
             
+            # Wait for the main delay after all bots have sent their message
             if not stop_event.is_set():
                 stop_event.wait(timeout=delay)
 
         except Exception as e:
             print(f"[ERROR in spam_for_server {server_name}] {e}", flush=True)
+            # Wait before retrying in case of a major error
             stop_event.wait(timeout=10)
 
 def periodic_save_loop():
@@ -573,20 +592,22 @@ def api_save_settings():
 @app.route("/status")
 def status():
     now = time.time()
-    for server in servers:
-        server['spam_countdown'] = 0 # Sẽ cập nhật từ client-side để đơn giản hóa
+    # Create a deep copy to avoid race conditions while iterating
+    current_servers = json.loads(json.dumps(servers))
+
+    for server in current_servers:
+        server['spam_countdown'] = 0 
         if server.get('spam_enabled'):
-            # Gửi thời gian spam cuối và delay để client tính toán
             server['last_spam_time'] = server.get('last_spam_time', 0)
         
     with bots_lock:
         main_bot_statuses = [
-            {"name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}", "status": bot is not None, "reboot_id": f"main_{i+1}", "is_active": bot_active_states.get(f"main_{i+1}", False), "type": "main"} 
-            for i, bot in enumerate(main_bots)
+            {"name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}", "status": bot.gateway.ws.connected, "reboot_id": f"main_{i+1}", "is_active": bot_active_states.get(f"main_{i+1}", False), "type": "main"} 
+            for i, bot in enumerate(main_bots) if bot and hasattr(bot, 'gateway') and hasattr(bot.gateway, 'ws')
         ]
         sub_bot_statuses = [
-            {"name": acc_names[i] if i < len(acc_names) else f"Sub {i+1}", "status": bot is not None, "reboot_id": f"sub_{i}", "is_active": bot_active_states.get(f"sub_{i}", False), "type": "sub"}
-            for i, bot in enumerate(bots)
+            {"name": acc_names[i] if i < len(acc_names) else f"Sub {i+1}", "status": bot.gateway.ws.connected, "reboot_id": f"sub_{i}", "is_active": bot_active_states.get(f"sub_{i}", False), "type": "sub"}
+            for i, bot in enumerate(bots) if bot and hasattr(bot, 'gateway') and hasattr(bot.gateway, 'ws')
         ]
 
     return jsonify({
@@ -594,7 +615,7 @@ def status():
         'reboot_countdown': (last_reboot_cycle_time + auto_reboot_delay - now) if auto_reboot_enabled else 0,
         'bot_statuses': {"main_bots": main_bot_statuses, "sub_accounts": sub_bot_statuses},
         'server_start_time': server_start_time,
-        'servers': servers
+        'servers': current_servers
     })
 
 # --- MAIN EXECUTION ---
@@ -607,7 +628,6 @@ if __name__ == "__main__":
             if token.strip():
                 bot_num = i + 1
                 bot_id = f"main_{bot_num}"
-                bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{bot_num}"
                 main_bots.append(create_bot(token.strip(), bot_identifier=bot_num, is_main=True))
                 if bot_id not in bot_active_states: bot_active_states[bot_id] = True
         
@@ -629,4 +649,5 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    from waitress import serve
+    serve(app, host="0.0.0.0", port=port)
