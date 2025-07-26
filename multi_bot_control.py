@@ -176,12 +176,12 @@ def auto_reboot_loop():
                     new_main_bots = []
                     for i, bot in enumerate(main_bots):
                         bot.gateway.close()
-                        time.sleep(5)
+                        time.sleep(2)
                         bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
                         new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
                         new_main_bots.append(new_bot)
                         print(f"Đã reboot bot {bot_name}", flush=True)
-                        time.sleep(8)
+                        time.sleep(5)
                     main_bots = new_main_bots
                 last_reboot_cycle_time = time.time()
                 save_settings()
