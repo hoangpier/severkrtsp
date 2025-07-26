@@ -104,69 +104,79 @@ def handle_grab(bot, msg, bot_num):
     if msg.get("author", {}).get("id") == karuta_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
         last_drop_msg_id = msg["id"]
         
+        # ===================================================================================
+        # HÀM CHẨN ĐOÁN - BẮT ĐẦU
+        # ===================================================================================
         def read_karibbit():
-    print(f"[{target_server['name']} | Bot {bot_num}] Đã phát hiện drop, đang chờ Karibbit...", flush=True)
-    time.sleep(0.8) # Tăng nhẹ thời gian chờ
-    try:
-        messages = bot.getMessages(channel_id, num=5).json()
-        print(f"[{target_server['name']} | Bot {bot_num}] Đã lấy 5 tin nhắn gần nhất. Bắt đầu kiểm tra...", flush=True)
-        karibbit_found = False
-        for i, msg_item in enumerate(messages):
-            author_id = msg_item.get("author", {}).get("id")
-            content = msg_item.get("content", "Không có nội dung")
-            # In ra thông tin cơ bản của mỗi tin nhắn để kiểm tra
-            print(f"  > Đang quét tin nhắn {i+1}: Author ID = {author_id}", flush=True)
-            
-            # Kiểm tra nếu đúng là tin nhắn từ Karibbit
-            if author_id == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
-                karibbit_found = True
-                print(f"    [!!!] ĐÃ TÌM THẤY TIN NHẮN KARIBBIT!", flush=True)
-                desc = msg_item["embeds"][0].get("description", "")
-                
-                # In ra toàn bộ nội dung embed của Karibbit
-                print(f"    [NỘI DUNG EMBED CỦA KARIBBIT]:\n---\n{desc}\n---", flush=True)
-                
-                lines = desc.split('\n')
-                heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
-                
-                # In ra số tim trích xuất được
-                print(f"    [Số tim trích xuất được]: {heart_numbers}", flush=True)
-                
-                if not any(heart_numbers):
-                    print(f"    [LỖI] Không trích xuất được số tim nào. Dừng xử lý.", flush=True)
-                    break 
-
-                max_num = max(heart_numbers)
-                print(f"    [So sánh] Tim cao nhất: {max_num} | Ngưỡng yêu cầu: {heart_threshold}", flush=True)
-                
-                if max_num >= heart_threshold:
-                    max_index = heart_numbers.index(max_num)
-                    delays = {
-                        1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4],
-                        3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]
-                    }
-                    bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
-                    emojis = ["1️⃣", "2️⃣", "3️⃣"]
-                    emoji = emojis[max_index]
-                    delay = bot_delays[max_index]
-
-                    print(f"    [QUYẾT ĐỊNH] Đủ điều kiện. Sẽ chọn dòng {max_index+1} với emoji {emoji} sau {delay}s.", flush=True)
+            # Khối code này đã được thụt đầu dòng đúng
+            print(f"[{target_server['name']} | Bot {bot_num}] Đã phát hiện drop, đang chờ Karibbit...", flush=True)
+            time.sleep(0.8) # Tăng nhẹ thời gian chờ
+            try:
+                messages = bot.getMessages(channel_id, num=5).json()
+                print(f"[{target_server['name']} | Bot {bot_num}] Đã lấy 5 tin nhắn gần nhất. Bắt đầu kiểm tra...", flush=True)
+                karibbit_found = False
+                for i, msg_item in enumerate(messages):
+                    author_id = msg_item.get("author", {}).get("id")
+                    # In ra thông tin cơ bản của mỗi tin nhắn để kiểm tra
+                    print(f"  > Đang quét tin nhắn {i+1}: Author ID = {author_id}", flush=True)
                     
-                    def grab_action():
-                        bot.addReaction(channel_id, last_drop_msg_id, emoji)
-                        time.sleep(1)
-                        bot.sendMessage(ktb_channel_id, "kt b")
+                    # Kiểm tra nếu đúng là tin nhắn từ Karibbit
+                    if author_id == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
+                        karibbit_found = True
+                        print(f"    [!!!] ĐÃ TÌM THẤY TIN NHẮN KARIBBIT!", flush=True)
+                        desc = msg_item["embeds"][0].get("description", "")
+                        
+                        # In ra toàn bộ nội dung embed của Karibbit
+                        print(f"    [NỘI DUNG EMBED CỦA KARIBBIT]:\n---\n{desc}\n---", flush=True)
+                        
+                        lines = desc.split('\n')
+                        heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
+                        
+                        # In ra số tim trích xuất được
+                        print(f"    [Số tim trích xuất được]: {heart_numbers}", flush=True)
+                        
+                        if not any(heart_numbers):
+                            print(f"    [LỖI] Không trích xuất được số tim nào. Dừng xử lý.", flush=True)
+                            break 
+
+                        max_num = max(heart_numbers)
+                        print(f"    [So sánh] Tim cao nhất: {max_num} | Ngưỡng yêu cầu: {heart_threshold}", flush=True)
+                        
+                        if max_num >= heart_threshold:
+                            max_index = heart_numbers.index(max_num)
+                            delays = {
+                                1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4],
+                                3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]
+                            }
+                            bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
+                            emojis = ["1️⃣", "2️⃣", "3️⃣"]
+                            emoji = emojis[max_index]
+                            delay = bot_delays[max_index]
+
+                            print(f"    [QUYẾT ĐỊNH] Đủ điều kiện. Sẽ chọn dòng {max_index+1} với emoji {emoji} sau {delay}s.", flush=True)
+                            
+                            def grab_action():
+                                bot.addReaction(channel_id, last_drop_msg_id, emoji)
+                                time.sleep(1)
+                                bot.sendMessage(ktb_channel_id, "kt b")
+                            
+                            threading.Timer(delay, grab_action).start()
+                        else:
+                            print(f"    [QUYẾT ĐỊNH] Không đủ tim. Bỏ qua.", flush=True)
+                        break 
+                        
+                if not karibbit_found:
+                    print(f"[{target_server['name']} | Bot {bot_num}] KHÔNG TÌM THẤY tin nhắn từ Karibbit trong 5 tin nhắn gần nhất.", flush=True)
                     
-                    threading.Timer(delay, grab_action).start()
-                else:
-                    print(f"    [QUYẾT ĐỊNH] Không đủ tim. Bỏ qua.", flush=True)
-                break 
-                
-        if not karibbit_found:
-            print(f"[{target_server['name']} | Bot {bot_num}] KHÔNG TÌM THẤY tin nhắn từ Karibbit trong 5 tin nhắn gần nhất.", flush=True)
-            
-    except Exception as e:
-        print(f"[CATASTROPHIC ERROR] Lỗi nghiêm trọng khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
+            except Exception as e:
+                print(f"[CATASTROPHIC ERROR] Lỗi nghiêm trọng khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
+
+        # ===================================================================================
+        # HÀM CHẨN ĐOÁN - KẾT THÚC
+        # ===================================================================================
+
+        threading.Thread(target=read_karibbit).start()
+
 def create_bot(token, bot_identifier, is_main=False):
     bot = discum.Client(token=token, log=False)
     
@@ -205,7 +215,7 @@ def auto_reboot_loop():
                         
                         # Chờ 10 giây trước khi kết nối lại
                         print(f"Đang chờ 10 giây trước khi kết nối lại bot {i+1}...", flush=True)
-                        time.sleep(10) # <-- Đã thay đổi theo đề xuất của bạn
+                        time.sleep(10)
 
                         bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
                         new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
@@ -214,7 +224,7 @@ def auto_reboot_loop():
 
                         # Chờ 10 giây trước khi reboot bot tiếp theo
                         print("Đang chờ 10 giây trước khi reboot bot tiếp theo...", flush=True)
-                        time.sleep(10) # <-- Đã thay đổi theo đề xuất của bạn
+                        time.sleep(10)
 
                     main_bots = new_main_bots
                 last_reboot_cycle_time = time.time()
@@ -612,7 +622,7 @@ def status():
         if server.get('spam_enabled'):
             # Gửi thời gian spam cuối và delay để client tính toán
             server['last_spam_time'] = server.get('last_spam_time', 0)
-        
+    
     with bots_lock:
         main_bot_statuses = [
             {"name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}", "status": bot is not None, "reboot_id": f"main_{i+1}", "is_active": bot_active_states.get(f"main_{i+1}", False), "type": "main"} 
