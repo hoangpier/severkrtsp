@@ -175,13 +175,24 @@ def auto_reboot_loop():
                 with bots_lock:
                     new_main_bots = []
                     for i, bot in enumerate(main_bots):
-                        bot.gateway.close()
-                        time.sleep(2)
+                        # Đóng kết nối hiện tại một cách an toàn
+                        if bot and hasattr(bot, 'gateway') and bot.gateway.ws and bot.gateway.ws.sock and bot.gateway.ws.sock.connected:
+                            print(f"Đóng kết nối cho bot {i+1}...", flush=True)
+                            bot.gateway.close()
+                        
+                        # Chờ 10 giây trước khi kết nối lại
+                        print(f"Đang chờ 10 giây trước khi kết nối lại bot {i+1}...", flush=True)
+                        time.sleep(10) # <-- Đã thay đổi theo đề xuất của bạn
+
                         bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
                         new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
                         new_main_bots.append(new_bot)
-                        print(f"Đã reboot bot {bot_name}", flush=True)
-                        time.sleep(5)
+                        print(f"Đã reboot thành công bot {bot_name}", flush=True)
+
+                        # Chờ 10 giây trước khi reboot bot tiếp theo
+                        print("Đang chờ 10 giây trước khi reboot bot tiếp theo...", flush=True)
+                        time.sleep(10) # <-- Đã thay đổi theo đề xuất của bạn
+
                     main_bots = new_main_bots
                 last_reboot_cycle_time = time.time()
                 save_settings()
