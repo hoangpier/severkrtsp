@@ -149,12 +149,10 @@ def handle_grab(bot, msg, bot_num):
 def create_bot(token, bot_identifier, is_main=False):
     bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else (acc_names[bot_identifier] if not is_main and bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}")
     
-    # *** FIX: Removed invalid 'browser' argument ***
+    # *** FIX: Removed all invalid arguments, leaving only valid ones ***
     bot = discum.Client(
         token=token,
-        log={'console': False, 'file': False},
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
-        client_build_number=109911
+        log={'console': False, 'file': False}
     )
 
     @bot.gateway.command
