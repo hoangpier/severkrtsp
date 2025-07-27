@@ -6,12 +6,9 @@ import os
 import re
 import requests
 import json
-import random
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
 import uuid
-from websocket._exceptions import WebSocketConnectionClosedException
-from waitress import serve
 
 load_dotenv()
 
@@ -131,12 +128,9 @@ def handle_grab(bot, msg, bot_num):
                             emojis = ["1️⃣", "2️⃣", "3️⃣"]
                             
                             emoji = emojis[max_index]
-                            # *** FIX: Add random jitter to delay ***
-                            base_delay = bot_delays[max_index]
-                            random_jitter = random.uniform(0, 0.3)
-                            delay = base_delay + random_jitter
+                            delay = bot_delays[max_index]
 
-                            print(f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay:.2f}s", flush=True)
+                            print(f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
                             
                             def grab_action():
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
@@ -151,59 +145,23 @@ def handle_grab(bot, msg, bot_num):
         threading.Thread(target=read_karibbit).start()
 
 def create_bot(token, bot_identifier, is_main=False):
-    bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else (acc_names[bot_identifier] if not is_main and bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}")
+    bot = discum.Client(token=token, log=False)
     
-    # *** FIX: Set super_properties to mimic a real browser for better connection stability ***
-    bot = discum.Client(
-        token=token,
-        log={'console': False, 'file': False}
-    )
-    
-    s = {
-        "os": "Windows",
-        "browser": "Chrome",
-        "device": "",
-        "system_locale": "en-US",
-        "browser_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
-        "browser_version": "96.0.4664.110",
-        "os_version": "10",
-        "referrer": "",
-        "referring_domain": "",
-        "referrer_current": "",
-        "referring_domain_current": "",
-        "release_channel": "stable",
-        "client_build_number": 109911,
-        "client_event_source": None,
-    }
-    # This is an internal method, but it's the most reliable way to set these properties
-    bot.setSuperProperties(s)
-
     @bot.gateway.command
     def on_ready(resp):
         if resp.event.ready:
             user = resp.raw.get("user", {})
             if isinstance(user, dict) and (user_id := user.get("id")):
-                print(f"Đã đăng nhập và sẵn sàng: {user_id} ({bot_name})", flush=True)
+                bot_name = bot_identifier if is_main else acc_names[bot_identifier] if bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}"
+                print(f"Đã đăng nhập: {user_id} ({bot_name})", flush=True)
 
     if is_main:
         @bot.gateway.command
         def on_message(resp):
             if resp.event.message:
                 handle_grab(bot, resp.parsed.auto(), bot_identifier)
-    
-    def run_gateway_with_reconnect():
-        while True:
-            try:
-                print(f"[{bot_name}] Bắt đầu kết nối gateway...", flush=True)
-                bot.gateway.run()
-            except (WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError, KeyError) as e:
-                print(f"[{bot_name}] Mất kết nối ({type(e).__name__}). Đang thử kết nối lại sau 30 giây...", flush=True)
-                time.sleep(30)
-            except Exception as e:
-                print(f"[{bot_name}] Lỗi gateway không xác định: {e}. Đang thử kết nối lại sau 60 giây...", flush=True)
-                time.sleep(60)
-
-    threading.Thread(target=run_gateway_with_reconnect, daemon=True).start()
+            
+    threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
 
 # --- CÁC VÒNG LẶP NỀN (ĐÃ SỬA LỖI SPAM) ---
@@ -215,10 +173,17 @@ def auto_reboot_loop():
             if auto_reboot_enabled and (time.time() - last_reboot_cycle_time) >= auto_reboot_delay:
                 print("[Reboot] Hết thời gian chờ, tiến hành reboot các tài khoản chính.", flush=True)
                 with bots_lock:
-                    for bot in main_bots:
+                    new_main_bots = []
+                    for i, bot in enumerate(main_bots):
                         bot.gateway.close()
+                        time.sleep(2)
+                        bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
+                        new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
+                        new_main_bots.append(new_bot)
+                        print(f"Đã reboot bot {bot_name}", flush=True)
+                        time.sleep(5)
+                    main_bots = new_main_bots
                 last_reboot_cycle_time = time.time()
-                print("[Reboot] Đã gửi tín hiệu khởi động lại cho tất cả các bot chính.", flush=True)
                 save_settings()
         except Exception as e:
             print(f"[ERROR in auto_reboot_loop] {e}", flush=True)
@@ -231,9 +196,7 @@ def spam_loop():
     while True:
         try:
             with bots_lock:
-                current_bots = list(bots)
-
-            bots_to_spam = [bot for i, bot in enumerate(current_bots) if bot and bot_active_states.get(f'sub_{i}', False)]
+                bots_to_spam = [bot for i, bot in enumerate(bots) if bot and bot_active_states.get(f'sub_{i}', False)]
 
             for server in servers:
                 server_id = server.get('id')
@@ -254,12 +217,10 @@ def spam_loop():
                     print(f"[Spam Control] Dừng luồng spam cho server: {server.get('name')}", flush=True)
                     thread, stop_event = active_server_threads[server_id]
                     stop_event.set()
-                    thread.join(timeout=5) 
                     del active_server_threads[server_id]
 
             for server_id, (thread, _) in list(active_server_threads.items()):
                 if not thread.is_alive():
-                    print(f"[Spam Control] Luồng spam cho server ID {server_id} đã dừng. Dọn dẹp.", flush=True)
                     del active_server_threads[server_id]
 
             time.sleep(5)
@@ -274,14 +235,14 @@ def spam_for_server(server_config, bots_to_spam, stop_event):
     
     while not stop_event.is_set():
         try:
-            delay = server_config.get('spam_delay', 10)
+            delay = server_config.get('spam_delay', 10) # Lấy delay mới nhất mỗi lần lặp
             
             for bot in bots_to_spam:
                 if stop_event.is_set():
                     break
                 try:
                     bot.sendMessage(channel_id, message)
-                    time.sleep(1) 
+                    time.sleep(2) 
                 except Exception as e:
                     print(f"Lỗi gửi spam từ bot tới server {server_name}: {e}", flush=True)
             
@@ -609,31 +570,22 @@ def api_save_settings():
     save_settings()
     return jsonify({'status': 'success', 'message': 'Settings saved.'})
 
-def get_bot_connection_status(bot):
-    try:
-        if bot and hasattr(bot, 'gateway') and hasattr(bot.gateway, 'ws') and bot.gateway.ws and hasattr(bot.gateway.ws, 'sock') and bot.gateway.ws.sock:
-            return bot.gateway.ws.sock.connected
-    except Exception:
-        return False
-    return False
-
 @app.route("/status")
 def status():
     now = time.time()
-    current_servers = json.loads(json.dumps(servers))
-
-    for server in current_servers:
-        server['spam_countdown'] = 0 
+    for server in servers:
+        server['spam_countdown'] = 0 # Sẽ cập nhật từ client-side để đơn giản hóa
         if server.get('spam_enabled'):
+            # Gửi thời gian spam cuối và delay để client tính toán
             server['last_spam_time'] = server.get('last_spam_time', 0)
         
     with bots_lock:
         main_bot_statuses = [
-            {"name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}", "status": get_bot_connection_status(bot), "reboot_id": f"main_{i+1}", "is_active": bot_active_states.get(f"main_{i+1}", False), "type": "main"} 
+            {"name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}", "status": bot is not None, "reboot_id": f"main_{i+1}", "is_active": bot_active_states.get(f"main_{i+1}", False), "type": "main"} 
             for i, bot in enumerate(main_bots)
         ]
         sub_bot_statuses = [
-            {"name": acc_names[i] if i < len(acc_names) else f"Sub {i+1}", "status": get_bot_connection_status(bot), "reboot_id": f"sub_{i}", "is_active": bot_active_states.get(f"sub_{i}", False), "type": "sub"}
+            {"name": acc_names[i] if i < len(acc_names) else f"Sub {i+1}", "status": bot is not None, "reboot_id": f"sub_{i}", "is_active": bot_active_states.get(f"sub_{i}", False), "type": "sub"}
             for i, bot in enumerate(bots)
         ]
 
@@ -642,7 +594,7 @@ def status():
         'reboot_countdown': (last_reboot_cycle_time + auto_reboot_delay - now) if auto_reboot_enabled else 0,
         'bot_statuses': {"main_bots": main_bot_statuses, "sub_accounts": sub_bot_statuses},
         'server_start_time': server_start_time,
-        'servers': current_servers
+        'servers': servers
     })
 
 # --- MAIN EXECUTION ---
@@ -655,6 +607,7 @@ if __name__ == "__main__":
             if token.strip():
                 bot_num = i + 1
                 bot_id = f"main_{bot_num}"
+                bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{bot_num}"
                 main_bots.append(create_bot(token.strip(), bot_identifier=bot_num, is_main=True))
                 if bot_id not in bot_active_states: bot_active_states[bot_id] = True
         
@@ -676,5 +629,4 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
-    # *** FIX: Added closing parenthesis to fix SyntaxError ***
-    serve(app, host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
