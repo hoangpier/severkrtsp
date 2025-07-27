@@ -10,6 +10,7 @@ from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
 import uuid
 from websocket._exceptions import WebSocketConnectionClosedException
+from waitress import serve
 
 load_dotenv()
 
@@ -163,13 +164,11 @@ def create_bot(token, bot_identifier, is_main=False):
             if resp.event.message:
                 handle_grab(bot, resp.parsed.auto(), bot_identifier)
     
-    # *** FIX: Added a reconnection loop ***
     def run_gateway_with_reconnect():
         while True:
             try:
                 print(f"[{bot_name}] Bắt đầu kết nối gateway...", flush=True)
                 bot.gateway.run()
-            # *** FIX: Added OSError to handle "Bad file descriptor" error ***
             except (WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError) as e:
                 print(f"[{bot_name}] Mất kết nối ({type(e).__name__}). Đang thử kết nối lại sau 30 giây...", flush=True)
                 time.sleep(30)
@@ -190,7 +189,6 @@ def auto_reboot_loop():
                 print("[Reboot] Hết thời gian chờ, tiến hành reboot các tài khoản chính.", flush=True)
                 with bots_lock:
                     for bot in main_bots:
-                        # Closing the gateway will trigger the reconnection loop in create_bot
                         bot.gateway.close()
                 last_reboot_cycle_time = time.time()
                 print("[Reboot] Đã gửi tín hiệu khởi động lại cho tất cả các bot chính.", flush=True)
@@ -206,7 +204,6 @@ def spam_loop():
     while True:
         try:
             with bots_lock:
-                # Create a copy of the bots list for thread safety
                 current_bots = list(bots)
 
             bots_to_spam = [bot for i, bot in enumerate(current_bots) if bot and bot_active_states.get(f'sub_{i}', False)]
@@ -230,11 +227,9 @@ def spam_loop():
                     print(f"[Spam Control] Dừng luồng spam cho server: {server.get('name')}", flush=True)
                     thread, stop_event = active_server_threads[server_id]
                     stop_event.set()
-                    # Wait for the thread to finish
                     thread.join(timeout=5) 
                     del active_server_threads[server_id]
 
-            # Clean up dead threads
             for server_id, (thread, _) in list(active_server_threads.items()):
                 if not thread.is_alive():
                     print(f"[Spam Control] Luồng spam cho server ID {server_id} đã dừng. Dọn dẹp.", flush=True)
@@ -252,25 +247,22 @@ def spam_for_server(server_config, bots_to_spam, stop_event):
     
     while not stop_event.is_set():
         try:
-            delay = server_config.get('spam_delay', 10) # Lấy delay mới nhất mỗi lần lặp
+            delay = server_config.get('spam_delay', 10)
             
             for bot in bots_to_spam:
                 if stop_event.is_set():
                     break
                 try:
                     bot.sendMessage(channel_id, message)
-                    # Use a smaller, non-blocking delay between individual bot messages
                     time.sleep(1) 
                 except Exception as e:
                     print(f"Lỗi gửi spam từ bot tới server {server_name}: {e}", flush=True)
             
-            # Wait for the main delay after all bots have sent their message
             if not stop_event.is_set():
                 stop_event.wait(timeout=delay)
 
         except Exception as e:
             print(f"[ERROR in spam_for_server {server_name}] {e}", flush=True)
-            # Wait before retrying in case of a major error
             stop_event.wait(timeout=10)
 
 def periodic_save_loop():
@@ -590,21 +582,18 @@ def api_save_settings():
     save_settings()
     return jsonify({'status': 'success', 'message': 'Settings saved.'})
 
-# *** FIX: Helper function for safer status checking ***
 def get_bot_connection_status(bot):
     try:
-        # Check attributes sequentially to avoid errors
-        if bot and hasattr(bot, 'gateway') and hasattr(bot.gateway, 'ws') and bot.gateway.ws:
-            return bot.gateway.ws.connected
+        # *** FIX: Check the underlying socket's connected status ***
+        if bot and hasattr(bot, 'gateway') and hasattr(bot.gateway, 'ws') and bot.gateway.ws and hasattr(bot.gateway.ws, 'sock') and bot.gateway.ws.sock:
+            return bot.gateway.ws.sock.connected
     except Exception:
-        # If any attribute access fails, assume disconnected
         return False
     return False
 
 @app.route("/status")
 def status():
     now = time.time()
-    # Create a deep copy to avoid race conditions while iterating
     current_servers = json.loads(json.dumps(servers))
 
     for server in current_servers:
@@ -613,7 +602,6 @@ def status():
             server['last_spam_time'] = server.get('last_spam_time', 0)
         
     with bots_lock:
-        # *** FIX: Use helper function for safer status checking ***
         main_bot_statuses = [
             {"name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}", "status": get_bot_connection_status(bot), "reboot_id": f"main_{i+1}", "is_active": bot_active_states.get(f"main_{i+1}", False), "type": "main"} 
             for i, bot in enumerate(main_bots)
@@ -662,5 +650,4 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
-    from waitress import serve
     serve(app, host="0.0.0.0", port=port)
