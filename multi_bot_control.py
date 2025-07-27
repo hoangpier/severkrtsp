@@ -6,6 +6,7 @@ import os
 import re
 import requests
 import json
+import random
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
 import uuid
@@ -130,9 +131,12 @@ def handle_grab(bot, msg, bot_num):
                             emojis = ["1️⃣", "2️⃣", "3️⃣"]
                             
                             emoji = emojis[max_index]
-                            delay = bot_delays[max_index]
+                            # *** FIX: Add random jitter to delay ***
+                            base_delay = bot_delays[max_index]
+                            random_jitter = random.uniform(0, 0.3)
+                            delay = base_delay + random_jitter
 
-                            print(f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
+                            print(f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay:.2f}s", flush=True)
                             
                             def grab_action():
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
@@ -149,11 +153,30 @@ def handle_grab(bot, msg, bot_num):
 def create_bot(token, bot_identifier, is_main=False):
     bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else (acc_names[bot_identifier] if not is_main and bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}")
     
-    # *** FIX: Reverted to the simplest client initialization to avoid TypeErrors ***
+    # *** FIX: Set super_properties to mimic a real browser for better connection stability ***
     bot = discum.Client(
         token=token,
         log={'console': False, 'file': False}
     )
+    
+    s = {
+        "os": "Windows",
+        "browser": "Chrome",
+        "device": "",
+        "system_locale": "en-US",
+        "browser_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
+        "browser_version": "96.0.4664.110",
+        "os_version": "10",
+        "referrer": "",
+        "referring_domain": "",
+        "referrer_current": "",
+        "referring_domain_current": "",
+        "release_channel": "stable",
+        "client_build_number": 109911,
+        "client_event_source": None,
+    }
+    # This is an internal method, but it's the most reliable way to set these properties
+    bot.setSuperProperties(s)
 
     @bot.gateway.command
     def on_ready(resp):
