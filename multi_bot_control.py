@@ -1,20 +1,4 @@
-# ==========================================================================================
-# MULTI-BOT CONTROL SCRIPT - PHIÊN BẢN LAI TẠO (FEATURES + STABILITY)
-# Tác giả: Gemini
-# Ngày cập nhật: 27/07/2024
-#
-# Mô tả:
-# Script này kết hợp các tính năng quản lý nâng cao (Giao diện Web, Karuta Grab, Spam)
-# từ file gốc của người dùng với các cơ chế đảm bảo hoạt động ổn định và tự động
-# kết nối lại (auto_reconnect, luồng giám sát).
-#
-# Lịch sử thay đổi:
-# - v3.2: Sửa lỗi AttributeError: 'GatewayServer' object has no attribute 'running'.
-#         Thay thế việc kiểm tra `bot.gateway.running` bằng cách kiểm tra trạng thái
-#         của luồng heartbeat (`bot.gateway.hb_thread.is_alive()`).
-# - v3.1: Sửa lỗi AttributeError bằng cách loại bỏ hàm on_disconnect không hợp lệ.
-# ==========================================================================================
-
+# PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG
 import discum
 import threading
 import time
@@ -106,38 +90,6 @@ def load_settings():
     except Exception as e: print(f"[Settings] Exception khi tải cài đặt: {e}", flush=True)
 
 # --- CÁC HÀM LOGIC BOT ---
-
-# ==========================================================================================
-# HÀM GIÁM SÁT VÀ KHỞI ĐỘNG LẠI BOT (TÍCH HỢP TỪ PHIÊN BẢN ỔN ĐỊNH)
-# Chức năng: Hoạt động như một "người bảo vệ", kiểm tra định kỳ xem bot có còn chạy không.
-# Nếu không, nó sẽ cố gắng khởi động lại. Đây là lớp bảo vệ cuối cùng.
-# ==========================================================================================
-def monitor_bot(bot, bot_identifier):
-    """
-    Kiểm tra trạng thái của bot mỗi 30 giây và khởi động lại nếu cần.
-    """
-    # Đợi một chút để gateway có thời gian khởi tạo luồng heartbeat
-    time.sleep(10)
-    while True:
-        time.sleep(30)
-        
-        # SỬA LỖI: Thay thế bot.gateway.running bằng cách kiểm tra luồng heartbeat.
-        # Đây là cách đáng tin cậy hơn để xác định xem gateway có còn hoạt động hay không.
-        gateway_is_alive = hasattr(bot.gateway, 'hb_thread') and bot.gateway.hb_thread and bot.gateway.hb_thread.is_alive()
-        
-        if not gateway_is_alive:
-            print(f"[{bot_identifier}][Monitor] Phát hiện gateway không hoạt động. Đang thử khởi động lại...", flush=True)
-            try:
-                bot.gateway.close()
-            except Exception as e:
-                print(f"[{bot_identifier}][Monitor] Lỗi khi đóng gateway cũ (có thể bỏ qua): {e}", flush=True)
-            
-            time.sleep(3)
-            print(f"[{bot_identifier}][Monitor] Đang khởi chạy lại gateway...", flush=True)
-            # Khởi động lại gateway trong một luồng mới
-            threading.Thread(target=lambda: bot.gateway.run(auto_reconnect=True), daemon=True).start()
-
-
 def handle_grab(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
@@ -168,7 +120,10 @@ def handle_grab(bot, msg, bot_num):
                         if max_num >= heart_threshold:
                             max_index = heart_numbers.index(max_num)
                             
-                            delays = { 1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5] }
+                            delays = {
+                                1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4],
+                                3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]
+                            }
                             bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
                             emojis = ["1️⃣", "2️⃣", "3️⃣"]
                             
@@ -189,23 +144,16 @@ def handle_grab(bot, msg, bot_num):
 
         threading.Thread(target=read_karibbit).start()
 
-# ==========================================================================================
-# HÀM TẠO BOT ĐƯỢC NÂNG CẤP VỚI CÁC CƠ CHẾ ỔN ĐỊNH
-# ==========================================================================================
-def create_bot(token, bot_identifier, is_main=False, custom_name=""):
-    """
-    Tạo một instance bot với các cơ chế tự phục hồi và giám sát.
-    """
-    log_name = custom_name if custom_name else f"Bot-{bot_identifier}"
-    
+def create_bot(token, bot_identifier, is_main=False):
     bot = discum.Client(token=token, log=False)
-
+    
     @bot.gateway.command
     def on_ready(resp):
         if resp.event.ready:
-            user = bot.gateway.session.user
-            username = user.get('username', 'Không xác định')
-            print(f"[{log_name}] Bot '{username}' đã kết nối và sẵn sàng.", flush=True)
+            user = resp.raw.get("user", {})
+            if isinstance(user, dict) and (user_id := user.get("id")):
+                bot_name = bot_identifier if is_main else acc_names[bot_identifier] if bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}"
+                print(f"Đã đăng nhập: {user_id} ({bot_name})", flush=True)
 
     if is_main:
         @bot.gateway.command
@@ -213,15 +161,10 @@ def create_bot(token, bot_identifier, is_main=False, custom_name=""):
             if resp.event.message:
                 handle_grab(bot, resp.parsed.auto(), bot_identifier)
             
-    print(f"[{log_name}] Đang khởi tạo và kết nối...", flush=True)
-    # Khởi động gateway với auto-reconnect được bật
-    threading.Thread(target=lambda: bot.gateway.run(auto_reconnect=True), daemon=True).start()
-    # Khởi động luồng giám sát độc lập làm phương án dự phòng cuối cùng
-    threading.Thread(target=lambda: monitor_bot(bot, log_name), daemon=True).start()
-    
+    threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
 
-# --- CÁC VÒNG LẶP NỀN ---
+# --- CÁC VÒNG LẶP NỀN (ĐÃ SỬA LỖI SPAM) ---
 def auto_reboot_loop():
     global last_reboot_cycle_time, main_bots
     while not auto_reboot_stop_event.is_set():
@@ -235,8 +178,7 @@ def auto_reboot_loop():
                         bot.gateway.close()
                         time.sleep(2)
                         bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
-                        # Sử dụng hàm create_bot đã được nâng cấp
-                        new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True, custom_name=bot_name)
+                        new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
                         new_main_bots.append(new_bot)
                         print(f"Đã reboot bot {bot_name}", flush=True)
                         time.sleep(5)
@@ -293,10 +235,11 @@ def spam_for_server(server_config, bots_to_spam, stop_event):
     
     while not stop_event.is_set():
         try:
-            delay = server_config.get('spam_delay', 10)
+            delay = server_config.get('spam_delay', 10) # Lấy delay mới nhất mỗi lần lặp
             
             for bot in bots_to_spam:
-                if stop_event.is_set(): break
+                if stop_event.is_set():
+                    break
                 try:
                     bot.sendMessage(channel_id, message)
                     time.sleep(2) 
@@ -318,7 +261,7 @@ def periodic_save_loop():
         
 app = Flask(__name__)
 
-# --- GIAO DIỆN WEB (Không thay đổi) ---
+# --- GIAO DIỆN WEB ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -514,7 +457,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- FLASK ROUTES (Không thay đổi) ---
+# --- FLASK ROUTES ---
 @app.route("/")
 def index():
     sorted_servers = sorted(servers, key=lambda s: s.get('name', ''))
@@ -631,8 +574,9 @@ def api_save_settings():
 def status():
     now = time.time()
     for server in servers:
-        server['spam_countdown'] = 0
+        server['spam_countdown'] = 0 # Sẽ cập nhật từ client-side để đơn giản hóa
         if server.get('spam_enabled'):
+            # Gửi thời gian spam cuối và delay để client tính toán
             server['last_spam_time'] = server.get('last_spam_time', 0)
         
     with bots_lock:
@@ -659,23 +603,18 @@ if __name__ == "__main__":
     
     print("Đang khởi tạo các bot...", flush=True)
     with bots_lock:
-        # Khởi tạo các bot chính
         for i, token in enumerate(main_tokens):
             if token.strip():
                 bot_num = i + 1
                 bot_id = f"main_{bot_num}"
                 bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{bot_num}"
-                new_bot = create_bot(token.strip(), bot_identifier=bot_num, is_main=True, custom_name=bot_name)
-                main_bots.append(new_bot)
+                main_bots.append(create_bot(token.strip(), bot_identifier=bot_num, is_main=True))
                 if bot_id not in bot_active_states: bot_active_states[bot_id] = True
         
-        # Khởi tạo các bot phụ
         for i, token in enumerate(tokens):
             if token.strip():
                 bot_id = f'sub_{i}'
-                bot_name = acc_names[i] if i < len(acc_names) else f"Sub {i+1}"
-                new_bot = create_bot(token.strip(), bot_identifier=i, is_main=False, custom_name=bot_name)
-                bots.append(new_bot)
+                bots.append(create_bot(token.strip(), bot_identifier=i, is_main=False))
                 if bot_id not in bot_active_states: bot_active_states[bot_id] = True
 
     print("Đang khởi tạo các luồng nền...", flush=True)
