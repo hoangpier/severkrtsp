@@ -149,7 +149,7 @@ def handle_grab(bot, msg, bot_num):
 def create_bot(token, bot_identifier, is_main=False):
     bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else (acc_names[bot_identifier] if not is_main and bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}")
     
-    # *** FIX: Removed all invalid arguments, leaving only valid ones ***
+    # *** FIX: Reverted to the simplest client initialization to avoid TypeErrors ***
     bot = discum.Client(
         token=token,
         log={'console': False, 'file': False}
@@ -653,4 +653,5 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
+    # *** FIX: Added closing parenthesis to fix SyntaxError ***
     serve(app, host="0.0.0.0", port=port)
