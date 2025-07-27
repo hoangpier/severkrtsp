@@ -149,7 +149,6 @@ def handle_grab(bot, msg, bot_num):
 def create_bot(token, bot_identifier, is_main=False):
     bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else (acc_names[bot_identifier] if not is_main and bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}")
     
-    # *** FIX: Provide full super_properties to stabilize connection ***
     s = {
         "os": "Windows",
         "browser": "Chrome",
@@ -167,11 +166,12 @@ def create_bot(token, bot_identifier, is_main=False):
         "client_event_source": None,
     }
 
+    # *** FIX: Initialize client first, then set super_properties ***
     bot = discum.Client(
         token=token,
-        log={'console': False, 'file': False},
-        super_properties=s,
+        log={'console': False, 'file': False}
     )
+    bot.super_properties = s
 
     @bot.gateway.command
     def on_ready(resp):
