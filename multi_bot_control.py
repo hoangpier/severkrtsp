@@ -149,29 +149,14 @@ def handle_grab(bot, msg, bot_num):
 def create_bot(token, bot_identifier, is_main=False):
     bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else (acc_names[bot_identifier] if not is_main and bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}")
     
-    s = {
-        "os": "Windows",
-        "browser": "Chrome",
-        "device": "",
-        "system_locale": "en-US",
-        "browser_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
-        "browser_version": "96.0.4664.110",
-        "os_version": "10",
-        "referrer": "",
-        "referring_domain": "",
-        "referrer_current": "",
-        "referring_domain_current": "",
-        "release_channel": "stable",
-        "client_build_number": 109911,
-        "client_event_source": None,
-    }
-
-    # *** FIX: Initialize client first, then set super_properties ***
+    # *** FIX: Pass browser properties directly to the Client constructor ***
     bot = discum.Client(
         token=token,
-        log={'console': False, 'file': False}
+        log={'console': False, 'file': False},
+        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
+        browser="chrome",
+        client_build_number=109911
     )
-    bot.super_properties = s
 
     @bot.gateway.command
     def on_ready(resp):
@@ -671,4 +656,4 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
-    serve(app, host="0.0.0.0", port=port)
+    serve(app, host="0.0.0.0", port=port
