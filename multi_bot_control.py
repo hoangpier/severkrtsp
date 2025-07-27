@@ -149,7 +149,8 @@ def handle_grab(bot, msg, bot_num):
 def create_bot(token, bot_identifier, is_main=False):
     bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else (acc_names[bot_identifier] if not is_main and bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}")
     
-    bot = discum.Client(token=token, log=False)
+    # *** FIX: Changed log parameter to handle 'user_settings' error ***
+    bot = discum.Client(token=token, log={'console': False, 'file': False})
     
     @bot.gateway.command
     def on_ready(resp):
@@ -584,7 +585,6 @@ def api_save_settings():
 
 def get_bot_connection_status(bot):
     try:
-        # *** FIX: Check the underlying socket's connected status ***
         if bot and hasattr(bot, 'gateway') and hasattr(bot.gateway, 'ws') and bot.gateway.ws and hasattr(bot.gateway.ws, 'sock') and bot.gateway.ws.sock:
             return bot.gateway.ws.sock.connected
     except Exception:
