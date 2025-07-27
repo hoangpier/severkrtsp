@@ -149,8 +149,9 @@ def handle_grab(bot, msg, bot_num):
 def create_bot(token, bot_identifier, is_main=False):
     bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else (acc_names[bot_identifier] if not is_main and bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}")
     
-    # *** FIX: Changed log parameter to handle 'user_settings' error ***
-    bot = discum.Client(token=token, log={'console': False, 'file': False})
+    # *** FIX: Added user_agent to potentially fix connection issues ***
+    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    bot = discum.Client(token=token, log={'console': False, 'file': False}, user_agent=user_agent)
     
     @bot.gateway.command
     def on_ready(resp):
