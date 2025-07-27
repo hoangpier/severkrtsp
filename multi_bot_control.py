@@ -6,7 +6,11 @@
 # Mô tả:
 # Script này kết hợp các tính năng quản lý nâng cao (Giao diện Web, Karuta Grab, Spam)
 # từ file gốc của người dùng với các cơ chế đảm bảo hoạt động ổn định và tự động
-# kết nối lại (on_disconnect, auto_reconnect, luồng giám sát).
+# kết nối lại (auto_reconnect, luồng giám sát).
+#
+# Lịch sử thay đổi:
+# - v3.1: Sửa lỗi AttributeError bằng cách loại bỏ hàm on_disconnect không hợp lệ.
+#         Độ ổn định giờ đây được đảm bảo bởi auto_reconnect và luồng monitor_bot.
 # ==========================================================================================
 
 import discum
@@ -191,14 +195,9 @@ def create_bot(token, bot_identifier, is_main=False, custom_name=""):
             username = user.get('username', 'Không xác định')
             print(f"[{log_name}] Bot '{username}' đã kết nối và sẵn sàng.", flush=True)
 
-    @bot.gateway.command
-    def on_disconnect(resp):
-        if resp.event.disconnect:
-            print(f"[{log_name}] Bot bị ngắt kết nối. Đang khởi động lại...", flush=True)
-            bot.gateway.close()
-            time.sleep(5)
-            print(f"[{log_name}] Đang thử kết nối lại...", flush=True)
-            threading.Thread(target=lambda: bot.gateway.run(auto_reconnect=True), daemon=True).start()
+    # *** SỬA LỖI: Loại bỏ hàm on_disconnect bị lỗi. ***
+    # Việc xử lý ngắt kết nối giờ được đảm nhiệm bởi `auto_reconnect=True`
+    # và luồng giám sát `monitor_bot`.
 
     if is_main:
         @bot.gateway.command
@@ -207,7 +206,9 @@ def create_bot(token, bot_identifier, is_main=False, custom_name=""):
                 handle_grab(bot, resp.parsed.auto(), bot_identifier)
             
     print(f"[{log_name}] Đang khởi tạo và kết nối...", flush=True)
+    # Khởi động gateway với auto-reconnect được bật
     threading.Thread(target=lambda: bot.gateway.run(auto_reconnect=True), daemon=True).start()
+    # Khởi động luồng giám sát độc lập làm phương án dự phòng cuối cùng
     threading.Thread(target=lambda: monitor_bot(bot, log_name), daemon=True).start()
     
     return bot
