@@ -1,7 +1,7 @@
 # ==========================================================================================
 # MULTI-BOT CONTROL SCRIPT - PHIÊN BẢN LAI TẠO (FEATURES + STABILITY)
 # Tác giả: Gemini
-# Ngày cập nhật: 26/07/2024
+# Ngày cập nhật: 27/07/2024
 #
 # Mô tả:
 # Script này kết hợp các tính năng quản lý nâng cao (Giao diện Web, Karuta Grab, Spam)
@@ -9,8 +9,10 @@
 # kết nối lại (auto_reconnect, luồng giám sát).
 #
 # Lịch sử thay đổi:
+# - v3.2: Sửa lỗi AttributeError: 'GatewayServer' object has no attribute 'running'.
+#         Thay thế việc kiểm tra `bot.gateway.running` bằng cách kiểm tra trạng thái
+#         của luồng heartbeat (`bot.gateway.hb_thread.is_alive()`).
 # - v3.1: Sửa lỗi AttributeError bằng cách loại bỏ hàm on_disconnect không hợp lệ.
-#         Độ ổn định giờ đây được đảm bảo bởi auto_reconnect và luồng monitor_bot.
 # ==========================================================================================
 
 import discum
@@ -114,17 +116,27 @@ def monitor_bot(bot, bot_identifier):
     """
     Kiểm tra trạng thái của bot mỗi 30 giây và khởi động lại nếu cần.
     """
+    # Đợi một chút để gateway có thời gian khởi tạo luồng heartbeat
+    time.sleep(10)
     while True:
         time.sleep(30)
-        if not bot.gateway.running:
-            print(f"[{bot_identifier}][Monitor] Phát hiện bot đã dừng hoạt động. Đang thử khởi động lại...", flush=True)
+        
+        # SỬA LỖI: Thay thế bot.gateway.running bằng cách kiểm tra luồng heartbeat.
+        # Đây là cách đáng tin cậy hơn để xác định xem gateway có còn hoạt động hay không.
+        gateway_is_alive = hasattr(bot.gateway, 'hb_thread') and bot.gateway.hb_thread and bot.gateway.hb_thread.is_alive()
+        
+        if not gateway_is_alive:
+            print(f"[{bot_identifier}][Monitor] Phát hiện gateway không hoạt động. Đang thử khởi động lại...", flush=True)
             try:
                 bot.gateway.close()
             except Exception as e:
                 print(f"[{bot_identifier}][Monitor] Lỗi khi đóng gateway cũ (có thể bỏ qua): {e}", flush=True)
+            
             time.sleep(3)
             print(f"[{bot_identifier}][Monitor] Đang khởi chạy lại gateway...", flush=True)
+            # Khởi động lại gateway trong một luồng mới
             threading.Thread(target=lambda: bot.gateway.run(auto_reconnect=True), daemon=True).start()
+
 
 def handle_grab(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
@@ -194,10 +206,6 @@ def create_bot(token, bot_identifier, is_main=False, custom_name=""):
             user = bot.gateway.session.user
             username = user.get('username', 'Không xác định')
             print(f"[{log_name}] Bot '{username}' đã kết nối và sẵn sàng.", flush=True)
-
-    # *** SỬA LỖI: Loại bỏ hàm on_disconnect bị lỗi. ***
-    # Việc xử lý ngắt kết nối giờ được đảm nhiệm bởi `auto_reconnect=True`
-    # và luồng giám sát `monitor_bot`.
 
     if is_main:
         @bot.gateway.command
