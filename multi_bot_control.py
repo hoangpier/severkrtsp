@@ -149,10 +149,30 @@ def handle_grab(bot, msg, bot_num):
 def create_bot(token, bot_identifier, is_main=False):
     bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else (acc_names[bot_identifier] if not is_main and bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}")
     
-    # *** FIX: Added user_agent to potentially fix connection issues ***
-    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    bot = discum.Client(token=token, log={'console': False, 'file': False}, user_agent=user_agent)
-    
+    # *** FIX: Provide full super_properties to stabilize connection ***
+    s = {
+        "os": "Windows",
+        "browser": "Chrome",
+        "device": "",
+        "system_locale": "en-US",
+        "browser_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36",
+        "browser_version": "96.0.4664.110",
+        "os_version": "10",
+        "referrer": "",
+        "referring_domain": "",
+        "referrer_current": "",
+        "referring_domain_current": "",
+        "release_channel": "stable",
+        "client_build_number": 109911,
+        "client_event_source": None,
+    }
+
+    bot = discum.Client(
+        token=token,
+        log={'console': False, 'file': False},
+        super_properties=s,
+    )
+
     @bot.gateway.command
     def on_ready(resp):
         if resp.event.ready:
@@ -171,7 +191,7 @@ def create_bot(token, bot_identifier, is_main=False):
             try:
                 print(f"[{bot_name}] Bắt đầu kết nối gateway...", flush=True)
                 bot.gateway.run()
-            except (WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError) as e:
+            except (WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError, KeyError) as e:
                 print(f"[{bot_name}] Mất kết nối ({type(e).__name__}). Đang thử kết nối lại sau 30 giây...", flush=True)
                 time.sleep(30)
             except Exception as e:
