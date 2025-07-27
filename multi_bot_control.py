@@ -169,7 +169,8 @@ def create_bot(token, bot_identifier, is_main=False):
             try:
                 print(f"[{bot_name}] Bắt đầu kết nối gateway...", flush=True)
                 bot.gateway.run()
-            except (WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError) as e:
+            # *** FIX: Added OSError to handle "Bad file descriptor" error ***
+            except (WebSocketConnectionClosedException, ConnectionResetError, BrokenPipeError, OSError) as e:
                 print(f"[{bot_name}] Mất kết nối ({type(e).__name__}). Đang thử kết nối lại sau 30 giây...", flush=True)
                 time.sleep(30)
             except Exception as e:
@@ -589,6 +590,17 @@ def api_save_settings():
     save_settings()
     return jsonify({'status': 'success', 'message': 'Settings saved.'})
 
+# *** FIX: Helper function for safer status checking ***
+def get_bot_connection_status(bot):
+    try:
+        # Check attributes sequentially to avoid errors
+        if bot and hasattr(bot, 'gateway') and hasattr(bot.gateway, 'ws') and bot.gateway.ws:
+            return bot.gateway.ws.connected
+    except Exception:
+        # If any attribute access fails, assume disconnected
+        return False
+    return False
+
 @app.route("/status")
 def status():
     now = time.time()
@@ -601,13 +613,14 @@ def status():
             server['last_spam_time'] = server.get('last_spam_time', 0)
         
     with bots_lock:
+        # *** FIX: Use helper function for safer status checking ***
         main_bot_statuses = [
-            {"name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}", "status": bot.gateway.ws.connected, "reboot_id": f"main_{i+1}", "is_active": bot_active_states.get(f"main_{i+1}", False), "type": "main"} 
-            for i, bot in enumerate(main_bots) if bot and hasattr(bot, 'gateway') and hasattr(bot.gateway, 'ws')
+            {"name": BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}", "status": get_bot_connection_status(bot), "reboot_id": f"main_{i+1}", "is_active": bot_active_states.get(f"main_{i+1}", False), "type": "main"} 
+            for i, bot in enumerate(main_bots)
         ]
         sub_bot_statuses = [
-            {"name": acc_names[i] if i < len(acc_names) else f"Sub {i+1}", "status": bot.gateway.ws.connected, "reboot_id": f"sub_{i}", "is_active": bot_active_states.get(f"sub_{i}", False), "type": "sub"}
-            for i, bot in enumerate(bots) if bot and hasattr(bot, 'gateway') and hasattr(bot.gateway, 'ws')
+            {"name": acc_names[i] if i < len(acc_names) else f"Sub {i+1}", "status": get_bot_connection_status(bot), "reboot_id": f"sub_{i}", "is_active": bot_active_states.get(f"sub_{i}", False), "type": "sub"}
+            for i, bot in enumerate(bots)
         ]
 
     return jsonify({
