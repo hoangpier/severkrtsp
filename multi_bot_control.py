@@ -99,50 +99,91 @@ def handle_grab(bot, msg, bot_num):
     heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
     ktb_channel_id = target_server.get('ktb_channel_id')
     
-    if not auto_grab_enabled or not ktb_channel_id: return
+    if not auto_grab_enabled:
+        return
 
     if msg.get("author", {}).get("id") == karuta_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
         last_drop_msg_id = msg["id"]
         
-        def read_karibbit():
-            time.sleep(0.5)
+        def grab_handler():
+            card_picked = False
+            
+            # --- BƯỚC 1: Ưu tiên nhặt thẻ theo tim ---
+            if ktb_channel_id:
+                # Thử tìm tin nhắn Karibbit trong tối đa 3 giây
+                for _ in range(6): # Thử 6 lần, mỗi lần cách nhau 0.5s
+                    time.sleep(0.5)
+                    try:
+                        messages = bot.getMessages(channel_id, num=5).json()
+                        # Tìm tin nhắn Karibbit mới hơn tin nhắn drop
+                        for msg_item in messages:
+                            if msg_item.get("author", {}).get("id") == karibbit_id and int(msg_item["id"]) > int(last_drop_msg_id):
+                                if "embeds" in msg_item and len(msg_item["embeds"]) > 0:
+                                    desc = msg_item["embeds"][0].get("description", "")
+                                    
+                                    if '♡' not in desc:
+                                        continue
+
+                                    lines = desc.split('\n')
+                                    heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
+                                    
+                                    if not any(heart_numbers):
+                                        break 
+
+                                    max_num = max(heart_numbers)
+                                    if max_num >= heart_threshold:
+                                        max_index = heart_numbers.index(max_num)
+                                        
+                                        delays = {
+                                            1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4],
+                                            3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]
+                                        }
+                                        bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
+                                        emojis = ["1️⃣", "2️⃣", "3️⃣"]
+                                        
+                                        emoji = emojis[max_index]
+                                        delay = bot_delays[max_index]
+
+                                        print(f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
+                                        
+                                        def grab_action():
+                                            bot.addReaction(channel_id, last_drop_msg_id, emoji)
+                                            time.sleep(1)
+                                            bot.sendMessage(ktb_channel_id, "kt b")
+                                        
+                                        threading.Timer(delay, grab_action).start()
+                                        card_picked = True
+                                # Thoát khỏi vòng lặp message một khi đã xử lý
+                                if card_picked: break
+                        # Thoát khỏi vòng lặp getMessages một khi đã xử lý
+                        if card_picked: break
+                    except Exception as e:
+                        print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
+                    # Thoát khỏi vòng lặp chính một khi đã xử lý
+                    if card_picked: break
+
+            # --- BƯỚC 2: Kiểm tra và nhặt sự kiện Dưa hấu (luôn chạy sau khi kiểm tra thẻ) ---
             try:
-                messages = bot.getMessages(channel_id, num=5).json()
-                for msg_item in messages:
-                    if msg_item.get("author", {}).get("id") == karibbit_id and "embeds" in msg_item and len(msg_item["embeds"]) > 0:
-                        desc = msg_item["embeds"][0].get("description", "")
-                        lines = desc.split('\n')
-                        heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
-                        
-                        if not any(heart_numbers): break
+                # Chờ một chút để reaction 🍉 (nếu có) xuất hiện
+                time.sleep(0.25)
+                full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
+                if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
+                    full_msg_obj = full_msg_obj[0]
 
-                        max_num = max(heart_numbers)
-                        if max_num >= heart_threshold:
-                            max_index = heart_numbers.index(max_num)
-                            
-                            delays = {
-                                1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4],
-                                3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]
-                            }
-                            bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
-                            emojis = ["1️⃣", "2️⃣", "3️⃣"]
-                            
-                            emoji = emojis[max_index]
-                            delay = bot_delays[max_index]
-
-                            print(f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
-                            
-                            def grab_action():
-                                bot.addReaction(channel_id, last_drop_msg_id, emoji)
-                                time.sleep(1)
-                                bot.sendMessage(ktb_channel_id, "kt b")
-                            
-                            threading.Timer(delay, grab_action).start()
-                        break
+                if 'reactions' in full_msg_obj:
+                    for reaction in full_msg_obj['reactions']:
+                        if reaction['emoji']['name'] == '🍉':
+                            print(f"[{target_server['name']} | Bot {bot_num}] Phát hiện sự kiện dưa hấu! Đang nhặt 🍉...", flush=True)
+                            bot.addReaction(channel_id, last_drop_msg_id, "🍉")
+                            break 
             except Exception as e:
-                print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
+                print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
 
-        threading.Thread(target=read_karibbit).start()
+            if not card_picked:
+                print(f"[{target_server['name']} | Bot {bot_num}] Không tìm thấy thẻ phù hợp sau 3 giây.", flush=True)
+
+
+        threading.Thread(target=grab_handler).start()
 
 def create_bot(token, bot_identifier, is_main=False):
     bot = discum.Client(token=token, log=False)
@@ -195,8 +236,8 @@ def spam_loop():
     
     while True:
         try:
-            with bots_lock:
-                bots_to_spam = [bot for i, bot in enumerate(bots) if bot and bot_active_states.get(f'sub_{i}', False)]
+            # The logic to select bots is now moved to spam_for_server
+            # to allow real-time changes of bot states.
 
             for server in servers:
                 server_id = server.get('id')
@@ -207,7 +248,7 @@ def spam_loop():
                     stop_event = threading.Event()
                     thread = threading.Thread(
                         target=spam_for_server, 
-                        args=(server, bots_to_spam, stop_event), 
+                        args=(server, stop_event), # Pass server config and stop event only
                         daemon=True
                     )
                     thread.start()
@@ -228,14 +269,20 @@ def spam_loop():
             print(f"[ERROR in spam_loop_manager] {e}", flush=True)
             time.sleep(5)
 
-def spam_for_server(server_config, bots_to_spam, stop_event):
+def spam_for_server(server_config, stop_event):
     server_name = server_config.get('name')
     channel_id = server_config.get('spam_channel_id')
     message = server_config.get('spam_message')
     
     while not stop_event.is_set():
         try:
-            delay = server_config.get('spam_delay', 10) # Lấy delay mới nhất mỗi lần lặp
+            # Get the latest list of active bots for spamming in each cycle
+            with bots_lock:
+                active_main_bots = [bot for i, bot in enumerate(main_bots) if bot and bot_active_states.get(f'main_{i+1}', False)]
+                active_sub_bots = [bot for i, bot in enumerate(bots) if bot and bot_active_states.get(f'sub_{i}', False)]
+                bots_to_spam = active_main_bots + active_sub_bots
+
+            delay = server_config.get('spam_delay', 10)
             
             for bot in bots_to_spam:
                 if stop_event.is_set():
