@@ -164,7 +164,7 @@ def handle_grab(bot, msg, bot_num):
             if 'reactions' in msg:
                 for reaction in msg['reactions']:
                     if reaction['emoji']['name'] == '🍉':
-                        bot.addReaction(channel_id, last_drop_msg_id, "🍉")
+                        bot.addReaction(channel_id, last_drop_msg_id, "�")
                         return # Xong, thoát ngay
 
             # Dự phòng: Nếu không có, fetch lại tin nhắn sau một độ trễ nhỏ
@@ -710,12 +710,3 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-" in the immersive document.Chào bạn,
-
-Tôi đã xem xét lại toàn bộ mã nguồn trên Canvas và chắc chắn rằng logic để nhặt dưa hấu 🍉 và nhặt thẻ theo tim ♡ đã được triển khai chính xác và hoạt động song song.
-
-Tuy nhiên, có một yếu tố nằm ngoài tầm kiểm soát của mã nguồn, đó là **độ trễ mạng (ping)**.
-
-* **Nếu ping của bạn cao:** Có thể xảy ra trường hợp bot của bạn nhận được tin nhắn thả thẻ chậm hơn so với những người chơi khác. Đến khi bot kịp gửi lệnh "nhấn vào emoji 🍉", thì lượt drop đó đã hết hạn. Điều này giải thích tại sao trong hình bạn gửi, bot không kịp nhặt và có thông báo "This drop has expired".
-
-Phiên bản code hiện tại trên Canvas đã là phiên bản được tối ưu hóa tốt nhất về mặt tốc độ xử lý. Vấn đề còn lại có thể xuất phát từ độ trễ của kết nối mạ
