@@ -39,7 +39,8 @@ auto_clan_drop_settings = {
     "ktb_channel_id": "",
     "last_cycle_start_time": 0,
     "cycle_interval": 1800, # 30 phút
-    "bot_delay": 30 # 30 giây
+    "bot_delay": 30, # 30 giây
+    "heart_thresholds": {} # --- NEW --- Thêm ngưỡng tim cho từng bot
 }
 
 # Cài đặt toàn cục
@@ -101,6 +102,9 @@ def load_settings():
                 # --- NEW ---
                 loaded_clan_settings = settings.get('auto_clan_drop_settings', {})
                 if loaded_clan_settings: # Check if settings were loaded
+                    # Make sure heart_thresholds key exists
+                    if 'heart_thresholds' not in loaded_clan_settings:
+                        loaded_clan_settings['heart_thresholds'] = {}
                     auto_clan_drop_settings.update(loaded_clan_settings)
                 print("[Settings] Đã tải cài đặt từ JSONBin.io.", flush=True)
             else:
@@ -144,9 +148,9 @@ def handle_clan_drop(bot, msg, bot_num):
                                 heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
                                 if not any(heart_numbers): break 
                                 max_num = max(heart_numbers)
-                                # Lấy heart_threshold từ bot tương ứng (nếu có) hoặc mặc định
-                                target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
-                                heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50) if target_server else 50
+                                # --- NEW --- Lấy heart_threshold từ cài đặt clan drop của bot
+                                bot_id_str = f'main_{bot_num}'
+                                heart_threshold = auto_clan_drop_settings.get("heart_thresholds", {}).get(bot_id_str, 50)
                                 
                                 if max_num >= heart_threshold:
                                     max_index = heart_numbers.index(max_num)
@@ -485,8 +489,20 @@ HTML_TEMPLATE = """
                     <h3><i class="fas fa-cogs"></i> Configuration</h3>
                     <div class="input-group"><label>Drop Channel ID</label><input type="text" id="clan-drop-channel-id" value="{{ auto_clan_drop_settings.channel_id or '' }}"></div>
                     <div class="input-group"><label>KTB Channel ID</label><input type="text" id="clan-drop-ktb-channel-id" value="{{ auto_clan_drop_settings.ktb_channel_id or '' }}"></div>
-                    <button type="button" id="clan-drop-save-btn" class="btn">Save Clan Drop Settings</button>
                 </div>
+                <!-- --- NEW --- Thêm mục cài đặt tim cho Clan Drop -->
+                <div class="server-sub-panel">
+                    <h3><i class="fas fa-crosshairs"></i> Soul Harvest (Clan Drop)</h3>
+                    {% for bot in main_bots_info %}
+                    <div class="grab-section">
+                        <h3>{{ bot.name }}</h3>
+                        <div class="input-group">
+                            <input type="number" class="clan-drop-threshold" data-node="main_{{ bot.id }}" value="{{ auto_clan_drop_settings.heart_thresholds[('main_' + bot.id|string)]|default(50) }}" min="0">
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <button type="button" id="clan-drop-save-btn" class="btn" style="margin-top: 20px;">Save Clan Drop Settings</button>
             </div>
 
             <div class="panel global-settings-panel">
@@ -636,7 +652,12 @@ HTML_TEMPLATE = """
             if (button.id === 'clan-drop-save-btn') {
                 const channel_id = document.getElementById('clan-drop-channel-id').value;
                 const ktb_channel_id = document.getElementById('clan-drop-ktb-channel-id').value;
-                postData('/api/clan_drop_update', { channel_id, ktb_channel_id });
+                // --- NEW --- Lấy giá trị ngưỡng tim
+                const thresholds = {};
+                document.querySelectorAll('.clan-drop-threshold').forEach(input => {
+                    thresholds[input.dataset.node] = parseInt(input.value, 10);
+                });
+                postData('/api/clan_drop_update', { channel_id, ktb_channel_id, heart_thresholds: thresholds });
                 return;
             }
 
@@ -734,6 +755,11 @@ def api_clan_drop_update():
     data = request.get_json()
     auto_clan_drop_settings['channel_id'] = data.get('channel_id', '').strip()
     auto_clan_drop_settings['ktb_channel_id'] = data.get('ktb_channel_id', '').strip()
+    # --- NEW --- Cập nhật ngưỡng tim
+    if 'heart_thresholds' in data:
+        for key, value in data['heart_thresholds'].items():
+            if isinstance(value, int):
+                auto_clan_drop_settings['heart_thresholds'][key] = value
     return jsonify({'status': 'success', 'message': 'Clan Drop settings updated.'})
 
 
@@ -908,6 +934,9 @@ if __name__ == "__main__":
                 main_bots.append(create_bot(token.strip(), bot_identifier=bot_num, is_main=True))
                 if bot_id not in bot_active_states: bot_active_states[bot_id] = True
                 if bot_id not in watermelon_grab_states: watermelon_grab_states[bot_id] = False
+                # --- NEW --- Khởi tạo ngưỡng tim mặc định cho clan drop
+                if bot_id not in auto_clan_drop_settings['heart_thresholds']:
+                    auto_clan_drop_settings['heart_thresholds'][bot_id] = 50
         
         for i, token in enumerate(tokens):
             if token.strip():
