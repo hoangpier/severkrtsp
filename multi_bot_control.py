@@ -304,7 +304,7 @@ def auto_clan_drop_loop():
                             bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
                             print(f"[Clan Drop] Bot {bot_name} đang gửi 'kd'...", flush=True)
                             bot.sendMessage(channel_id, "kd")
-                            time.sleep(settings.get("bot_delay", 30))
+                            time.sleep(settings.get("bot_delay", 70))
                         except Exception as e:
                             print(f"[Clan Drop] Lỗi khi gửi 'kd' từ bot {bot_num}: {e}", flush=True)
                 
