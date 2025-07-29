@@ -1,4 +1,4 @@
-# PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG - THÊM TỰ ĐỘNG DROP CLAN
+# PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG - TÍCH HỢP DROP CLAN
 import discum
 import threading
 import time
@@ -32,15 +32,15 @@ main_bots = []
 servers = []
 watermelon_grab_states = {} # Cài đặt nhặt dưa hấu toàn cục
 
-# --- Cài đặt cho tính năng tự động drop clan
+# --- CHỨC NĂNG MỚI: Cài đặt cho tính năng tự động drop clan ---
 auto_clan_drop_settings = {
     "enabled": False,
     "channel_id": "",
     "ktb_channel_id": "",
     "last_cycle_start_time": 0,
     "cycle_interval": 1800, # 30 phút
-    "bot_delay": 30, # 30 giây
-    "heart_thresholds": {} # Thêm ngưỡng tim cho từng bot
+    "bot_delay": 70, # 70 giây
+    "heart_thresholds": {}
 }
 
 # Cài đặt toàn cục
@@ -98,6 +98,7 @@ def load_settings():
                 bot_active_states = settings.get('bot_active_states', {})
                 last_reboot_cycle_time = settings.get('last_reboot_cycle_time', 0)
                 watermelon_grab_states = settings.get('watermelon_grab_states', {})
+                # Tải cài đặt cho chức năng mới
                 loaded_clan_settings = settings.get('auto_clan_drop_settings', {})
                 if loaded_clan_settings:
                     if 'heart_thresholds' not in loaded_clan_settings:
@@ -112,6 +113,7 @@ def load_settings():
 
 # --- CÁC HÀM LOGIC BOT ---
 
+# --- CHỨC NĂNG MỚI: Xử lý nhặt thẻ từ drop clan ---
 def handle_clan_drop(bot, msg, bot_num):
     if not (auto_clan_drop_settings.get("enabled") and auto_clan_drop_settings.get("ktb_channel_id")):
         return
@@ -164,6 +166,7 @@ def handle_clan_drop(bot, msg, bot_num):
     
     threading.Thread(target=grab_handler).start()
 
+# --- CHỨC NĂNG CŨ: Xử lý nhặt thẻ server ---
 def handle_grab(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
@@ -177,7 +180,6 @@ def handle_grab(bot, msg, bot_num):
     if not auto_grab_enabled and not watermelon_grab_enabled:
         return
 
-    # --- FIX --- Điều kiện lọc message đã được chuyển lên on_message, không cần kiểm tra lại ở đây
     last_drop_msg_id = msg["id"]
     
     def grab_handler():
@@ -225,7 +227,7 @@ def handle_grab(bot, msg, bot_num):
                     full_msg_obj = full_msg_obj[0]
                 if 'reactions' in full_msg_obj:
                     for reaction in full_msg_obj['reactions']:
-                        if reaction['emoji']['name'] == '�':
+                        if reaction['emoji']['name'] == '🍉':
                             bot.addReaction(channel_id, last_drop_msg_id, "🍉")
                             break 
             except Exception as e:
@@ -245,7 +247,7 @@ def create_bot(token, bot_identifier, is_main=False):
                 print(f"Đã đăng nhập: {user_id} ({bot_name})", flush=True)
 
     if is_main:
-        # --- FIX --- Xây dựng lại bộ định tuyến tin nhắn
+        # --- SỬA LỖI: Xây dựng lại bộ định tuyến tin nhắn ---
         @bot.gateway.command
         def on_message(resp):
             if resp.event.message:
@@ -264,6 +266,8 @@ def create_bot(token, bot_identifier, is_main=False):
     return bot
 
 # --- CÁC VÒNG LẶP NỀN ---
+
+# --- CHỨC NĂNG MỚI: Logic thực thi một chu kỳ drop ---
 def run_clan_drop_cycle():
     global auto_clan_drop_settings
     print("[Clan Drop] Bắt đầu chu kỳ drop clan.", flush=True)
@@ -287,17 +291,17 @@ def run_clan_drop_cycle():
             bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
             print(f"[Clan Drop] Bot {bot_name} đang gửi 'kd'...", flush=True)
             bot.sendMessage(channel_id, "kd")
-            time.sleep(settings.get("bot_delay", 30))
+            time.sleep(settings.get("bot_delay", 70))
         except Exception as e:
             print(f"[Clan Drop] Lỗi khi gửi 'kd' từ bot {bot_num}: {e}", flush=True)
     
     auto_clan_drop_settings["last_cycle_start_time"] = time.time()
     save_settings()
 
+# --- CHỨC NĂNG MỚI: Vòng lặp hẹn giờ cho drop clan ---
 def auto_clan_drop_loop():
     while not auto_clan_drop_stop_event.is_set():
         try:
-            # Chờ 1 phút rồi mới bắt đầu kiểm tra, tránh spam khi khởi động lại
             if auto_clan_drop_stop_event.wait(timeout=60): break
             
             settings = auto_clan_drop_settings
@@ -325,13 +329,14 @@ def auto_reboot_loop():
                 with bots_lock:
                     new_main_bots = []
                     for i, bot in enumerate(main_bots):
-                        bot.gateway.close()
-                        time.sleep(2)
-                        bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
-                        new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
-                        new_main_bots.append(new_bot)
-                        print(f"Đã reboot bot {bot_name}", flush=True)
-                        time.sleep(5)
+                        if i < len(main_tokens):
+                            bot.gateway.close()
+                            time.sleep(2)
+                            bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
+                            new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
+                            new_main_bots.append(new_bot)
+                            print(f"Đã reboot bot {bot_name}", flush=True)
+                            time.sleep(5)
                     main_bots = new_main_bots
                 last_reboot_cycle_time = time.time()
                 save_settings()
@@ -344,9 +349,19 @@ def spam_loop():
     active_server_threads = {}
     while True:
         try:
+            current_server_ids = {s['id'] for s in servers}
+            
+            # Dừng các luồng không còn server tương ứng
+            for server_id in list(active_server_threads.keys()):
+                if server_id not in current_server_ids:
+                    print(f"[Spam Control] Dừng luồng spam cho server đã bị xóa: {server_id}", flush=True)
+                    _, stop_event = active_server_threads.pop(server_id)
+                    stop_event.set()
+
             for server in servers:
                 server_id = server.get('id')
                 spam_is_on = server.get('spam_enabled') and server.get('spam_message') and server.get('spam_channel_id')
+                
                 if spam_is_on and server_id not in active_server_threads:
                     print(f"[Spam Control] Bắt đầu luồng spam cho server: {server.get('name')}", flush=True)
                     stop_event = threading.Event()
@@ -355,12 +370,9 @@ def spam_loop():
                     active_server_threads[server_id] = (thread, stop_event)
                 elif not spam_is_on and server_id in active_server_threads:
                     print(f"[Spam Control] Dừng luồng spam cho server: {server.get('name')}", flush=True)
-                    thread, stop_event = active_server_threads[server_id]
+                    _, stop_event = active_server_threads.pop(server_id)
                     stop_event.set()
-                    del active_server_threads[server_id]
-            for server_id, (thread, _) in list(active_server_threads.items()):
-                if not thread.is_alive():
-                    del active_server_threads[server_id]
+
             time.sleep(5)
         except Exception as e:
             print(f"[ERROR in spam_loop_manager] {e}", flush=True)
@@ -376,7 +388,9 @@ def spam_for_server(server_config, stop_event):
                 active_main_bots = [bot for i, bot in enumerate(main_bots) if bot and bot_active_states.get(f'main_{i+1}', False)]
                 active_sub_bots = [bot for i, bot in enumerate(bots) if bot and bot_active_states.get(f'sub_{i}', False)]
                 bots_to_spam = active_main_bots + active_sub_bots
+            
             delay = server_config.get('spam_delay', 10)
+            
             for bot in bots_to_spam:
                 if stop_event.is_set(): break
                 try:
@@ -384,6 +398,7 @@ def spam_for_server(server_config, stop_event):
                     time.sleep(2) 
                 except Exception as e:
                     print(f"Lỗi gửi spam từ bot tới server {server_name}: {e}", flush=True)
+            
             if not stop_event.is_set():
                 stop_event.wait(timeout=delay)
         except Exception as e:
@@ -672,7 +687,7 @@ HTML_TEMPLATE = """
                     const delay = serverPanel.querySelector('.spam-delay').value; 
                     postData('/api/broadcast_toggle', { server_id: serverId, message: message, delay: delay }); 
                 } else if (button.classList.contains('btn-delete-server')) { 
-                    if(confirm('Are you sure?')) { postData('/api/delete_server', { server_id: serverId }); } 
+                    if(confirm('Are you sure? This action cannot be undone.')) { postData('/api/delete_server', { server_id: serverId }); } 
                 }
                 return;
             }
@@ -729,7 +744,7 @@ def api_clan_drop_toggle():
             auto_clan_drop_settings['enabled'] = False
             return jsonify({'status': 'error', 'message': 'Clan Drop Channel ID and KTB Channel ID must be set first.'})
         
-        # --- FIX --- Chạy chu kỳ đầu tiên ngay lập tức trong một luồng riêng
+        # Chạy chu kỳ đầu tiên ngay lập tức trong một luồng riêng
         threading.Thread(target=run_clan_drop_cycle).start()
         
         if auto_clan_drop_thread is None or not auto_clan_drop_thread.is_alive():
@@ -808,7 +823,10 @@ def api_harvest_toggle():
     server[grab_key] = not server.get(grab_key, False)
     server[threshold_key] = int(data.get('threshold', 50))
     state = "ENABLED" if server[grab_key] else "DISABLED"
-    bot_name = BOT_NAMES[int(node)-1] if int(node)-1 < len(BOT_NAMES) else f"MAIN_{node}"
+    try:
+        bot_name = BOT_NAMES[int(node)-1]
+    except (ValueError, IndexError):
+        bot_name = f"MAIN_{node}"
     msg = f"Card Grab for {bot_name} was {state} on server {server['name']}."
     return jsonify({'status': 'success', 'message': msg})
 
@@ -885,7 +903,8 @@ def status():
     for server in servers:
         server['spam_countdown'] = 0
         if server.get('spam_enabled'):
-            server['last_spam_time'] = server.get('last_spam_time', 0)
+            # This logic for countdown is illustrative. A real implementation would need to store last spam time.
+            pass
         
     with bots_lock:
         main_bot_statuses = [
@@ -922,7 +941,6 @@ if __name__ == "__main__":
             if token.strip():
                 bot_num = i + 1
                 bot_id = f"main_{bot_num}"
-                bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{bot_num}"
                 main_bots.append(create_bot(token.strip(), bot_identifier=bot_num, is_main=True))
                 if bot_id not in bot_active_states: bot_active_states[bot_id] = True
                 if bot_id not in watermelon_grab_states: watermelon_grab_states[bot_id] = False
