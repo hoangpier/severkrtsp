@@ -144,7 +144,9 @@ def handle_grab(bot, msg, bot_num):
                                         emoji = emojis[max_index]
                                         delay = bot_delays[max_index]
 
-                                        print(f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s", flush=True)
+                                        # Log đã được sửa để đảm bảo hiển thị đầy đủ
+                                        log_message = f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
+                                        print(log_message, flush=True)
                                         
                                         def grab_action():
                                             bot.addReaction(channel_id, last_drop_msg_id, emoji)
@@ -173,15 +175,13 @@ def handle_grab(bot, msg, bot_num):
                 if 'reactions' in full_msg_obj:
                     for reaction in full_msg_obj['reactions']:
                         if reaction['emoji']['name'] == '🍉':
-                            print(f"[{target_server['name']} | Bot {bot_num}] Phát hiện sự kiện dưa hấu! Đang nhặt 🍉...", flush=True)
+                            # Đã bỏ log nhặt dưa hấu
                             bot.addReaction(channel_id, last_drop_msg_id, "🍉")
                             break 
             except Exception as e:
                 print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
 
-            if not card_picked:
-                print(f"[{target_server['name']} | Bot {bot_num}] Không tìm thấy thẻ phù hợp sau 3 giây.", flush=True)
-
+            # Đã bỏ log "không tìm thấy thẻ"
 
         threading.Thread(target=grab_handler).start()
 
