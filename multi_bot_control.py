@@ -95,11 +95,9 @@ def handle_grab(bot, msg, bot_num):
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
     if not target_server: return
 
-    # Lấy cài đặt cho từng chức năng
     auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
     watermelon_enabled = target_server.get(f'watermelon_enabled_{bot_num}', True)
     
-    # Nếu cả hai chức năng đều tắt, thoát sớm
     if not auto_grab_enabled and not watermelon_enabled:
         return
 
@@ -109,13 +107,12 @@ def handle_grab(bot, msg, bot_num):
     if msg.get("author", {}).get("id") == karuta_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
         last_drop_msg_id = msg["id"]
         
-        # --- Nhiệm vụ 1: Nhặt thẻ theo tim (chạy nền) ---
         def card_picking_task():
             if not (auto_grab_enabled and ktb_channel_id):
                 return
 
             card_picked = False
-            for _ in range(6): # Thử trong 3 giây
+            for _ in range(6): 
                 try:
                     messages = bot.getMessages(channel_id, num=5).json()
                     for msg_item in messages:
@@ -155,12 +152,19 @@ def handle_grab(bot, msg, bot_num):
                     break 
                 time.sleep(0.5)
 
-        # --- Nhiệm vụ 2: Nhặt dưa hấu (chạy nền) ---
         def watermelon_picking_task():
             if not watermelon_enabled:
                 return
             
-            time.sleep(0.25) # Chờ một chút để reaction xuất hiện
+            # Tối ưu: Kiểm tra ngay lập tức từ dữ liệu tin nhắn gốc
+            if 'reactions' in msg:
+                for reaction in msg['reactions']:
+                    if reaction['emoji']['name'] == '🍉':
+                        bot.addReaction(channel_id, last_drop_msg_id, "🍉")
+                        return # Xong, thoát ngay
+
+            # Dự phòng: Nếu không có, fetch lại tin nhắn sau một độ trễ nhỏ
+            time.sleep(0.3) 
             try:
                 full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
                 if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
@@ -174,7 +178,6 @@ def handle_grab(bot, msg, bot_num):
             except Exception as e:
                 print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
 
-        # --- Bắt đầu cả hai nhiệm vụ song song ---
         threading.Thread(target=card_picking_task).start()
         threading.Thread(target=watermelon_picking_task).start()
 
