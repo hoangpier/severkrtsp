@@ -972,4 +972,3 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-" to write a new feature that will automatically send the "kd" command from all primary accounts to a server every 30 minutes. Each account will send the command 70 seconds apart. When the "kd" command is sent, the server will drop cards with a message similar to the one in the image: "is dropping 3 cards!". The tool will then identify the card with the highest heart count and grab it, similar to the existing server card grabbing functionality. Additionally, a "kt b" command should be sent to a separate channel after a card is grabbed. This new feature should have its own section in the 
