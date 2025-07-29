@@ -180,7 +180,6 @@ def handle_grab(bot, msg, bot_num):
     if not auto_grab_enabled and not watermelon_grab_enabled:
         return
 
-    # Điều kiện này được gọi sau khi on_message đã lọc, nên nó luôn đúng
     last_drop_msg_id = msg["id"]
     
     def grab_handler():
@@ -253,15 +252,12 @@ def create_bot(token, bot_identifier, is_main=False):
         def on_message(resp):
             if resp.event.message:
                 msg = resp.parsed.auto()
-                # 1. Kiểm tra tin nhắn có phải từ Karuta và là tin nhắn drop không
                 # --- FIX --- Sửa điều kiện để bắt được cả 2 loại tin nhắn drop
-                if msg.get("author", {}).get("id") == karuta_id and "dropping 3 cards" in msg.get("content", ""):
-                    # 2. Phân loại drop clan (có mentions) và drop server (không có mentions)
+                if msg.get("author", {}).get("id") == karuta_id and "dropping" in msg.get("content", "").lower():
+                    # Phân loại drop clan (có mentions) và drop server (không có mentions)
                     if msg.get("mentions"):
-                        # Đây là drop clan -> gọi handle_clan_drop
                         handle_clan_drop(bot, msg, bot_identifier)
                     else:
-                        # Đây là drop server thông thường -> gọi handle_grab
                         handle_grab(bot, msg, bot_identifier)
             
     threading.Thread(target=bot.gateway.run, daemon=True).start()
