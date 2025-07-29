@@ -109,82 +109,69 @@ def handle_grab(bot, msg, bot_num):
     if msg.get("author", {}).get("id") == karuta_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
         last_drop_msg_id = msg["id"]
         
-        # --- Nhiệm vụ 1: Nhặt thẻ theo tim (chạy nền) ---
-        def card_picking_task():
-            if not (auto_grab_enabled and ktb_channel_id):
-                return
-
+        def grab_handler():
             card_picked = False
-            for _ in range(6): # Thử trong 3 giây
-                try:
-                    messages = bot.getMessages(channel_id, num=5).json()
-                    for msg_item in messages:
-                        if msg_item.get("author", {}).get("id") == karibbit_id and int(msg_item["id"]) > int(last_drop_msg_id):
-                            if "embeds" in msg_item and len(msg_item["embeds"]) > 0:
-                                desc = msg_item["embeds"][0].get("description", "")
-                                if '♡' not in desc: continue
-
-                                lines = desc.split('\n')
-                                heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
-                                
-                                if not any(heart_numbers): break 
-
-                                max_num = max(heart_numbers)
-                                if max_num >= heart_threshold:
-                                    max_index = heart_numbers.index(max_num)
-                                    delays = { 1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5] }
-                                    bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
-                                    emojis = ["1️⃣", "2️⃣", "3️⃣"]
-                                    emoji = emojis[max_index]
-                                    delay = bot_delays[max_index]
-
-                                    log_message = f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
-                                    print(log_message, flush=True)
-                                    
-                                    def grab_action():
-                                        bot.addReaction(channel_id, last_drop_msg_id, emoji)
-                                        time.sleep(1)
-                                        bot.sendMessage(ktb_channel_id, "kt b")
-                                    
-                                    threading.Timer(delay, grab_action).start()
-                                    card_picked = True
-                            if card_picked: break
-                    if card_picked: break
-                except Exception as e:
-                    print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
-                    break 
-                time.sleep(0.5)
-
-        # --- Nhiệm vụ 2: Nhặt dưa hấu (chạy nền) ---
-        def watermelon_picking_task():
-            if not watermelon_enabled:
-                return
             
-            # Tối ưu: Kiểm tra ngay lập tức từ dữ liệu tin nhắn gốc
-            if 'reactions' in msg:
-                for reaction in msg['reactions']:
-                    if reaction['emoji']['name'] == '🍉':
-                        bot.addReaction(channel_id, last_drop_msg_id, "�")
-                        return # Xong, thoát ngay
+            # --- BƯỚC 1: Ưu tiên nhặt thẻ theo tim (nếu được bật) ---
+            if auto_grab_enabled and ktb_channel_id:
+                for _ in range(6): 
+                    time.sleep(0.5)
+                    try:
+                        messages = bot.getMessages(channel_id, num=5).json()
+                        for msg_item in messages:
+                            if msg_item.get("author", {}).get("id") == karibbit_id and int(msg_item["id"]) > int(last_drop_msg_id):
+                                if "embeds" in msg_item and len(msg_item["embeds"]) > 0:
+                                    desc = msg_item["embeds"][0].get("description", "")
+                                    if '♡' not in desc: continue
 
-            # Dự phòng: Nếu không có, fetch lại tin nhắn sau một độ trễ nhỏ
-            time.sleep(0.3) 
-            try:
-                full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
-                if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
-                    full_msg_obj = full_msg_obj[0]
+                                    lines = desc.split('\n')
+                                    heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
+                                    
+                                    if not any(heart_numbers): break 
 
-                if 'reactions' in full_msg_obj:
-                    for reaction in full_msg_obj['reactions']:
-                        if reaction['emoji']['name'] == '🍉':
-                            bot.addReaction(channel_id, last_drop_msg_id, "🍉")
-                            break 
-            except Exception as e:
-                print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
+                                    max_num = max(heart_numbers)
+                                    if max_num >= heart_threshold:
+                                        max_index = heart_numbers.index(max_num)
+                                        delays = { 1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5] }
+                                        bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
+                                        emojis = ["1️⃣", "2️⃣", "3️⃣"]
+                                        emoji = emojis[max_index]
+                                        delay = bot_delays[max_index]
 
-        # --- Bắt đầu cả hai nhiệm vụ song song ---
-        threading.Thread(target=card_picking_task).start()
-        threading.Thread(target=watermelon_picking_task).start()
+                                        log_message = f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
+                                        print(log_message, flush=True)
+                                        
+                                        def grab_action():
+                                            bot.addReaction(channel_id, last_drop_msg_id, emoji)
+                                            time.sleep(1)
+                                            bot.sendMessage(ktb_channel_id, "kt b")
+                                        
+                                        threading.Timer(delay, grab_action).start()
+                                        card_picked = True
+                                if card_picked: break
+                        if card_picked: break
+                    except Exception as e:
+                        print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
+                        break 
+                    if card_picked: break
+
+            # --- BƯỚC 2: Kiểm tra và nhặt sự kiện Dưa hấu (nếu được bật) ---
+            if watermelon_enabled:
+                try:
+                    time.sleep(0.25)
+                    full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
+                    if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
+                        full_msg_obj = full_msg_obj[0]
+
+                    if 'reactions' in full_msg_obj:
+                        for reaction in full_msg_obj['reactions']:
+                            if reaction['emoji']['name'] == '🍉':
+                                bot.addReaction(channel_id, last_drop_msg_id, "🍉")
+                                break 
+                except Exception as e:
+                    print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
+
+        threading.Thread(target=grab_handler).start()
 
 def create_bot(token, bot_identifier, is_main=False):
     bot = discum.Client(token=token, log=False)
@@ -194,8 +181,8 @@ def create_bot(token, bot_identifier, is_main=False):
         if resp.event.ready:
             user = resp.raw.get("user", {})
             if isinstance(user, dict) and (user_id := user.get("id")):
-                bot_name = bot_identifier if is_main else acc_names[bot_identifier] if bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}"
-                print(f"Đã đăng nhập: {user_id} ({bot_name})", flush=True)
+                bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else f"MAIN_{bot_identifier}" if is_main else acc_names[bot_identifier] if bot_identifier < len(acc_names) else f"Sub {bot_identifier+1}"
+                print(f"Đã đăng nhập: {user.get('username')} ({bot_name})", flush=True)
 
     if is_main:
         @bot.gateway.command
@@ -219,10 +206,9 @@ def auto_reboot_loop():
                     for i, bot in enumerate(main_bots):
                         bot.gateway.close()
                         time.sleep(2)
-                        bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
                         new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
                         new_main_bots.append(new_bot)
-                        print(f"Đã reboot bot {bot_name}", flush=True)
+                        print(f"Đã reboot bot {BOT_NAMES[i] if i < len(BOT_NAMES) else f'MAIN_{i+1}'}", flush=True)
                         time.sleep(5)
                     main_bots = new_main_bots
                 last_reboot_cycle_time = time.time()
@@ -687,7 +673,6 @@ if __name__ == "__main__":
             if token.strip():
                 bot_num = i + 1
                 bot_id = f"main_{bot_num}"
-                bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{bot_num}"
                 main_bots.append(create_bot(token.strip(), bot_identifier=bot_num, is_main=True))
                 if bot_id not in bot_active_states: bot_active_states[bot_id] = True
         
