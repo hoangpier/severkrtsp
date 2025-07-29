@@ -229,7 +229,7 @@ def handle_grab(bot, msg, bot_num):
                 if 'reactions' in full_msg_obj:
                     for reaction in full_msg_obj['reactions']:
                         if reaction['emoji']['name'] == '🍉':
-                            bot.addReaction(channel_id, last_drop_msg_id, "🍉")
+                            bot.addReaction(channel_id, last_drop_msg_id, "�")
                             break 
             except Exception as e:
                 print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
@@ -254,7 +254,8 @@ def create_bot(token, bot_identifier, is_main=False):
             if resp.event.message:
                 msg = resp.parsed.auto()
                 # 1. Kiểm tra tin nhắn có phải từ Karuta và là tin nhắn drop không
-                if msg.get("author", {}).get("id") == karuta_id and "is dropping" in msg.get("content", ""):
+                # --- FIX --- Sửa điều kiện để bắt được cả 2 loại tin nhắn drop
+                if msg.get("author", {}).get("id") == karuta_id and "dropping 3 cards" in msg.get("content", ""):
                     # 2. Phân loại drop clan (có mentions) và drop server (không có mentions)
                     if msg.get("mentions"):
                         # Đây là drop clan -> gọi handle_clan_drop
