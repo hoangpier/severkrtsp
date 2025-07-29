@@ -228,7 +228,7 @@ def handle_grab(bot, msg, bot_num):
                 if 'reactions' in full_msg_obj:
                     for reaction in full_msg_obj['reactions']:
                         if reaction['emoji']['name'] == '🍉':
-                            bot.addReaction(channel_id, last_drop_msg_id, "�")
+                            bot.addReaction(channel_id, last_drop_msg_id, "🍉")
                             break 
             except Exception as e:
                 print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
