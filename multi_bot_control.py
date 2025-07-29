@@ -158,7 +158,15 @@ def handle_grab(bot, msg, bot_num):
             # --- BƯỚC 2: Kiểm tra và nhặt sự kiện Dưa hấu (nếu được bật) ---
             if watermelon_enabled:
                 try:
-                    time.sleep(0.25)
+                    # Tối ưu: Kiểm tra ngay lập tức từ dữ liệu tin nhắn gốc
+                    if 'reactions' in msg:
+                        for reaction in msg['reactions']:
+                            if reaction['emoji']['name'] == '�':
+                                bot.addReaction(channel_id, last_drop_msg_id, "🍉")
+                                return # Xong, thoát ngay
+
+                    # Dự phòng: Nếu không có, fetch lại tin nhắn sau một độ trễ nhỏ
+                    time.sleep(0.3)
                     full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
                     if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
                         full_msg_obj = full_msg_obj[0]
@@ -172,6 +180,7 @@ def handle_grab(bot, msg, bot_num):
                     print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
 
         threading.Thread(target=grab_handler).start()
+
 
 def create_bot(token, bot_identifier, is_main=False):
     bot = discum.Client(token=token, log=False)
