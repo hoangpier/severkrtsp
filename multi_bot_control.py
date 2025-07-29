@@ -78,10 +78,13 @@ def load_settings():
             settings = req.json().get("record", {})
             if settings:
                 servers_data = settings.get('servers', [])
-                # Đảm bảo các server cũ có key mới
+                # Đảm bảo các server có các key mới cho từng bot
                 for s in servers_data:
-                    if 'watermelon_grab_enabled' not in s:
-                        s['watermelon_grab_enabled'] = False
+                    for i in range(len(main_tokens)):
+                        bot_num = i + 1
+                        wm_key = f'watermelon_grab_enabled_{bot_num}'
+                        if wm_key not in s:
+                            s[wm_key] = False # Mặc định là tắt
                 servers.extend(servers_data)
                 auto_reboot_enabled = settings.get('auto_reboot_enabled', False)
                 auto_reboot_delay = settings.get('auto_reboot_delay', 3600)
@@ -103,7 +106,8 @@ def handle_grab(bot, msg, bot_num):
     auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
     heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
     ktb_channel_id = target_server.get('ktb_channel_id')
-    watermelon_grab_enabled = target_server.get('watermelon_grab_enabled', False)
+    # Kiểm tra cài đặt nhặt dưa cho chính bot này
+    watermelon_grab_enabled = target_server.get(f'watermelon_grab_enabled_{bot_num}', False)
 
     if not auto_grab_enabled:
         return
@@ -150,7 +154,7 @@ def handle_grab(bot, msg, bot_num):
                         print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
                     if card_picked: break
 
-            # --- BƯỚC 2: Kiểm tra và nhặt sự kiện Dưa hấu (NẾU ĐƯỢC BẬT) ---
+            # --- BƯỚC 2: Kiểm tra và nhặt sự kiện Dưa hấu (NẾU ĐƯỢC BẬT CHO BOT NÀY) ---
             if watermelon_grab_enabled:
                 try:
                     time.sleep(0.25)
@@ -287,7 +291,7 @@ HTML_TEMPLATE = """
         .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
         .header { text-align: center; margin-bottom: 30px; padding: 20px; border-bottom: 2px solid var(--blood-red); }
         .title { font-family: 'Nosifer', cursive; font-size: 3rem; color: var(--blood-red); }
-        .main-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 20px; }
+        .main-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 20px; }
         .panel { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 25px; position: relative;}
         .panel h2 { font-family: 'Orbitron', cursive; font-size: 1.4rem; margin-bottom: 20px; text-transform: uppercase; border-bottom: 2px solid; padding-bottom: 10px; color: var(--bone-white); }
         .panel h2 i { margin-right: 10px; }
@@ -297,7 +301,7 @@ HTML_TEMPLATE = """
         .input-group label { background: #000; border: 1px solid var(--border-color); border-right: 0; padding: 10px 15px; border-radius: 4px 0 0 4px; display:flex; align-items:center; min-width: 120px;}
         .input-group input, .input-group textarea { flex-grow: 1; background: #000; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 0 4px 4px 0; font-family: 'Courier Prime', monospace; }
         .grab-section { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 8px;}
-        .grab-section h3 { margin: 0; display: flex; align-items: center; gap: 10px; width: 80px; }
+        .grab-section h3 { margin: 0; display: flex; align-items: center; gap: 10px; width: 80px; flex-shrink: 0; }
         .grab-section .input-group { margin-bottom: 0; flex-grow: 1; margin-left: 20px;}
         .msg-status { text-align: center; color: var(--necro-green); padding: 12px; border: 1px dashed var(--border-color); border-radius: 4px; margin-bottom: 20px; display: none; }
         .status-panel { grid-column: 1 / -1; }
@@ -358,14 +362,6 @@ HTML_TEMPLATE = """
 
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-crosshairs"></i> Soul Harvest</h3>
-                    <div class="grab-section">
-                        <h3><i class="fas fa-watermelon-slice"></i> Event</h3>
-                        <div class="input-group" style="margin-left: 0;">
-                             <button type="button" class="btn watermelon-toggle" style="width: 100%;">
-                                {{ 'DISABLE' if server.watermelon_grab_enabled else 'ENABLE' }}
-                            </button>
-                        </div>
-                    </div>
                     {% for bot in main_bots_info %}
                     <div class="grab-section">
                         <h3>{{ bot.name }}</h3>
@@ -373,6 +369,11 @@ HTML_TEMPLATE = """
                             <input type="number" class="harvest-threshold" data-node="{{ bot.id }}" value="{{ server['heart_threshold_' + bot.id|string] or 50 }}" min="0">
                             <button type="button" class="btn harvest-toggle" data-node="{{ bot.id }}">
                                 {{ 'DISABLE' if server['auto_grab_enabled_' + bot.id|string] else 'ENABLE' }}
+                            </button>
+                        </div>
+                        <div class="input-group" style="margin-left: 10px; margin-bottom: 0; min-width: 150px;">
+                             <button type="button" class="btn watermelon-toggle" data-node="{{ bot.id }}">
+                                <i class="fas fa-watermelon-slice"></i>&nbsp;{{ 'DISABLE' if server['watermelon_grab_enabled_' + bot.id|string] else 'ENABLE' }}
                             </button>
                         </div>
                     </div>
@@ -414,7 +415,7 @@ HTML_TEMPLATE = """
             } catch (error) { console.error('Error:', error); showStatusMessage('Server communication error.', true); }
         }
         function formatTime(seconds) { if (isNaN(seconds) || seconds < 0) return "--:--:--"; seconds = Math.floor(seconds); const h = Math.floor(seconds / 3600).toString().padStart(2, '0'); const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0'); const s = (seconds % 60).toString().padStart(2, '0'); return `${h}:${m}:${s}`; }
-        function updateElement(element, { textContent, className, value }) { if (!element) return; if (textContent !== undefined) element.textContent = textContent; if (className !== undefined) element.className = className; if (value !== undefined) element.value = value; }
+        function updateElement(element, { textContent, className, value, innerHTML }) { if (!element) return; if (textContent !== undefined) element.textContent = textContent; if (className !== undefined) element.className = className; if (value !== undefined) element.value = value; if (innerHTML !== undefined) element.innerHTML = innerHTML; }
         async function fetchStatus() {
             try {
                 const response = await fetch('/status');
@@ -438,12 +439,18 @@ HTML_TEMPLATE = """
                 data.servers.forEach(serverData => {
                     const serverPanel = document.querySelector(`.server-panel[data-server-id="${serverData.id}"]`);
                     if (!serverPanel) return;
-                    const watermelonBtn = serverPanel.querySelector('.watermelon-toggle');
-                    updateElement(watermelonBtn, { textContent: serverData.watermelon_grab_enabled ? 'DISABLE' : 'ENABLE' });
+                    
                     serverPanel.querySelectorAll('.harvest-toggle').forEach(btn => {
                         const node = btn.dataset.node;
                         updateElement(btn, { textContent: serverData[`auto_grab_enabled_${node}`] ? 'DISABLE' : 'ENABLE' });
                     });
+
+                    serverPanel.querySelectorAll('.watermelon-toggle').forEach(btn => {
+                        const node = btn.dataset.node;
+                        const isEnabled = serverData[`watermelon_grab_enabled_${node}`];
+                        updateElement(btn, { innerHTML: `<i class="fas fa-watermelon-slice"></i>&nbsp;${isEnabled ? 'DISABLE' : 'ENABLE'}` });
+                    });
+
                     const spamToggleBtn = serverPanel.querySelector('.broadcast-toggle');
                     updateElement(spamToggleBtn, { textContent: serverData.spam_enabled ? 'DISABLE' : 'ENABLE' });
                     const spamTimer = serverPanel.querySelector('.spam-timer');
@@ -453,14 +460,32 @@ HTML_TEMPLATE = """
         }
         setInterval(fetchStatus, 1000);
         mainGrid.addEventListener('click', e => {
-            const target = e.target;
+            const target = e.target.closest('button'); // More robust click handling
+            if (!target) return;
+
             const serverPanel = target.closest('.server-panel');
             if (!serverPanel) return;
             const serverId = serverPanel.dataset.serverId;
-            if (target.classList.contains('watermelon-toggle')) { postData('/api/watermelon_toggle', { server_id: serverId }); }
-            if (target.classList.contains('harvest-toggle')) { const node = target.dataset.node; const thresholdInput = serverPanel.querySelector(`.harvest-threshold[data-node="${node}"]`); postData('/api/harvest_toggle', { server_id: serverId, node: node, threshold: thresholdInput.value }); }
-            if (target.classList.contains('broadcast-toggle')) { const message = serverPanel.querySelector('.spam-message').value; const delay = serverPanel.querySelector('.spam-delay').value; postData('/api/broadcast_toggle', { server_id: serverId, message: message, delay: delay }); }
-            if (target.closest('.btn-delete-server')) { if(confirm('Are you sure?')) { postData('/api/delete_server', { server_id: serverId }); } }
+
+            if (target.classList.contains('watermelon-toggle')) { 
+                const node = target.dataset.node;
+                postData('/api/watermelon_toggle', { server_id: serverId, node: node }); 
+            }
+            if (target.classList.contains('harvest-toggle')) { 
+                const node = target.dataset.node; 
+                const thresholdInput = serverPanel.querySelector(`.harvest-threshold[data-node="${node}"]`); 
+                postData('/api/harvest_toggle', { server_id: serverId, node: node, threshold: thresholdInput.value }); 
+            }
+            if (target.classList.contains('broadcast-toggle')) { 
+                const message = serverPanel.querySelector('.spam-message').value; 
+                const delay = serverPanel.querySelector('.spam-delay').value; 
+                postData('/api/broadcast_toggle', { server_id: serverId, message: message, delay: delay }); 
+            }
+            if (target.closest('.btn-delete-server')) { 
+                if(confirm('Are you sure?')) { 
+                    postData('/api/delete_server', { server_id: serverId }); 
+                } 
+            }
         });
         mainGrid.addEventListener('change', e => {
             const target = e.target;
@@ -497,13 +522,13 @@ def api_add_server():
     new_server = {
         "id": f"server_{uuid.uuid4().hex}", "name": name,
         "main_channel_id": "", "ktb_channel_id": "", "spam_channel_id": "",
-        "spam_enabled": False, "spam_message": "", "spam_delay": 10, "last_spam_time": 0,
-        "watermelon_grab_enabled": False
+        "spam_enabled": False, "spam_message": "", "spam_delay": 10, "last_spam_time": 0
     }
     for i in range(len(main_tokens)):
         bot_num = i + 1
         new_server[f'auto_grab_enabled_{bot_num}'] = False
         new_server[f'heart_threshold_{bot_num}'] = 50
+        new_server[f'watermelon_grab_enabled_{bot_num}'] = False
 
     servers.append(new_server)
     return jsonify({'status': 'success', 'message': f'Server "{name}" added.', 'reload': True})
@@ -549,12 +574,15 @@ def api_harvest_toggle():
 def api_watermelon_toggle():
     data = request.get_json()
     server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
-    if not server:
-        return jsonify({'status': 'error', 'message': 'Server not found.'}), 404
+    node = data.get('node')
+    if not server or not node:
+        return jsonify({'status': 'error', 'message': 'Invalid request.'}), 404
     
-    server['watermelon_grab_enabled'] = not server.get('watermelon_grab_enabled', False)
-    state = "ENABLED" if server['watermelon_grab_enabled'] else "DISABLED"
-    msg = f"Watermelon Grab was {state} for server {server['name']}."
+    key = f"watermelon_grab_enabled_{node}"
+    server[key] = not server.get(key, False)
+    state = "ENABLED" if server[key] else "DISABLED"
+    bot_name = BOT_NAMES[int(node)-1] if int(node)-1 < len(BOT_NAMES) else f"MAIN_{node}"
+    msg = f"Watermelon Grab was {state} for Node {bot_name} on server {server['name']}."
     return jsonify({'status': 'success', 'message': msg})
 
 @app.route("/api/broadcast_toggle", methods=['POST'])
