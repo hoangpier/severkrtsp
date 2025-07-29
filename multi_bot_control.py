@@ -32,15 +32,15 @@ main_bots = []
 servers = []
 watermelon_grab_states = {} # Cài đặt nhặt dưa hấu toàn cục
 
-# --- NEW --- Cài đặt cho tính năng tự động drop clan
+# --- Cài đặt cho tính năng tự động drop clan
 auto_clan_drop_settings = {
     "enabled": False,
     "channel_id": "",
     "ktb_channel_id": "",
     "last_cycle_start_time": 0,
     "cycle_interval": 1800, # 30 phút
-    "bot_delay": 72, # 30 giây
-    "heart_thresholds": {} # --- NEW --- Thêm ngưỡng tim cho từng bot
+    "bot_delay": 30, # 30 giây
+    "heart_thresholds": {} # Thêm ngưỡng tim cho từng bot
 }
 
 # Cài đặt toàn cục
@@ -50,7 +50,6 @@ last_reboot_cycle_time = 0
 
 # Các biến điều khiển luồng
 auto_reboot_stop_event = threading.Event()
-# --- NEW ---
 auto_clan_drop_stop_event = threading.Event()
 spam_thread, auto_reboot_thread, auto_clan_drop_thread = None, None, None
 bots_lock = threading.Lock()
@@ -69,7 +68,7 @@ def save_settings():
         'bot_active_states': bot_active_states,
         'last_reboot_cycle_time': last_reboot_cycle_time,
         'watermelon_grab_states': watermelon_grab_states,
-        'auto_clan_drop_settings': auto_clan_drop_settings # --- NEW ---
+        'auto_clan_drop_settings': auto_clan_drop_settings
     }
     headers = {'Content-Type': 'application/json', 'X-Master-Key': api_key}
     url = f"https://api.jsonbin.io/v3/b/{bin_id}"
@@ -99,10 +98,8 @@ def load_settings():
                 bot_active_states = settings.get('bot_active_states', {})
                 last_reboot_cycle_time = settings.get('last_reboot_cycle_time', 0)
                 watermelon_grab_states = settings.get('watermelon_grab_states', {})
-                # --- NEW ---
                 loaded_clan_settings = settings.get('auto_clan_drop_settings', {})
-                if loaded_clan_settings: # Check if settings were loaded
-                    # Make sure heart_thresholds key exists
+                if loaded_clan_settings:
                     if 'heart_thresholds' not in loaded_clan_settings:
                         loaded_clan_settings['heart_thresholds'] = {}
                     auto_clan_drop_settings.update(loaded_clan_settings)
@@ -115,26 +112,77 @@ def load_settings():
 
 # --- CÁC HÀM LOGIC BOT ---
 
-# --- NEW --- Hàm xử lý nhặt thẻ từ drop clan
 def handle_clan_drop(bot, msg, bot_num):
-    # Hàm này được gọi khi có tin nhắn drop từ lệnh 'kd'
-    # Điều kiện kích hoạt: có "is dropping 3 cards!" và có mentions
     if not (auto_clan_drop_settings.get("enabled") and auto_clan_drop_settings.get("ktb_channel_id")):
         return
-
     channel_id = msg.get("channel_id")
-    # Chỉ xử lý ở kênh drop clan đã cài đặt
     if channel_id != auto_clan_drop_settings.get("channel_id"):
         return
 
-    if msg.get("author", {}).get("id") == karuta_id and "is dropping 3 cards!" in msg.get("content", "") and msg.get("mentions", []):
-        last_drop_msg_id = msg["id"]
+    last_drop_msg_id = msg["id"]
+    
+    def grab_handler():
+        card_picked = False
+        ktb_channel_id = auto_clan_drop_settings["ktb_channel_id"]
         
-        def grab_handler():
-            card_picked = False
-            ktb_channel_id = auto_clan_drop_settings["ktb_channel_id"]
-            
-            # Logic nhặt thẻ giống hệt handle_grab
+        for _ in range(6):
+            time.sleep(0.5)
+            try:
+                messages = bot.getMessages(channel_id, num=5).json()
+                for msg_item in messages:
+                    if msg_item.get("author", {}).get("id") == karibbit_id and int(msg_item["id"]) > int(last_drop_msg_id):
+                        if "embeds" in msg_item and len(msg_item["embeds"]) > 0:
+                            desc = msg_item["embeds"][0].get("description", "")
+                            if '♡' not in desc: continue
+                            lines = desc.split('\n')
+                            heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
+                            if not any(heart_numbers): break 
+                            max_num = max(heart_numbers)
+                            bot_id_str = f'main_{bot_num}'
+                            heart_threshold = auto_clan_drop_settings.get("heart_thresholds", {}).get(bot_id_str, 50)
+                            
+                            if max_num >= heart_threshold:
+                                max_index = heart_numbers.index(max_num)
+                                delays = { 1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5] }
+                                bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
+                                emojis = ["1️⃣", "2️⃣", "3️⃣"]
+                                emoji = emojis[max_index]
+                                delay = bot_delays[max_index]
+                                log_message = f"[CLAN DROP | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
+                                print(log_message, flush=True)
+                                def grab_action():
+                                    bot.addReaction(channel_id, last_drop_msg_id, emoji)
+                                    time.sleep(1)
+                                    bot.sendMessage(ktb_channel_id, "kt b")
+                                threading.Timer(delay, grab_action).start()
+                                card_picked = True
+                        if card_picked: break
+                if card_picked: break
+            except Exception as e:
+                print(f"Lỗi khi đọc Karibbit (Clan Drop - Bot {bot_num}): {e}", flush=True)
+            if card_picked: break
+    
+    threading.Thread(target=grab_handler).start()
+
+def handle_grab(bot, msg, bot_num):
+    channel_id = msg.get("channel_id")
+    target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
+    if not target_server: return
+
+    auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
+    heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
+    ktb_channel_id = target_server.get('ktb_channel_id')
+    watermelon_grab_enabled = watermelon_grab_states.get(f'main_{bot_num}', False)
+
+    if not auto_grab_enabled and not watermelon_grab_enabled:
+        return
+
+    # --- FIX --- Điều kiện lọc message đã được chuyển lên on_message, không cần kiểm tra lại ở đây
+    last_drop_msg_id = msg["id"]
+    
+    def grab_handler():
+        card_picked = False
+        if auto_grab_enabled and ktb_channel_id:
             for _ in range(6):
                 time.sleep(0.5)
                 try:
@@ -148,10 +196,6 @@ def handle_clan_drop(bot, msg, bot_num):
                                 heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
                                 if not any(heart_numbers): break 
                                 max_num = max(heart_numbers)
-                                # --- NEW --- Lấy heart_threshold từ cài đặt clan drop của bot
-                                bot_id_str = f'main_{bot_num}'
-                                heart_threshold = auto_clan_drop_settings.get("heart_thresholds", {}).get(bot_id_str, 50)
-                                
                                 if max_num >= heart_threshold:
                                     max_index = heart_numbers.index(max_num)
                                     delays = { 1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5] }
@@ -159,7 +203,7 @@ def handle_clan_drop(bot, msg, bot_num):
                                     emojis = ["1️⃣", "2️⃣", "3️⃣"]
                                     emoji = emojis[max_index]
                                     delay = bot_delays[max_index]
-                                    log_message = f"[CLAN DROP | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
+                                    log_message = f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
                                     print(log_message, flush=True)
                                     def grab_action():
                                         bot.addReaction(channel_id, last_drop_msg_id, emoji)
@@ -170,83 +214,24 @@ def handle_clan_drop(bot, msg, bot_num):
                             if card_picked: break
                     if card_picked: break
                 except Exception as e:
-                    print(f"Lỗi khi đọc Karibbit (Clan Drop - Bot {bot_num}): {e}", flush=True)
+                    print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
                 if card_picked: break
-        
-        threading.Thread(target=grab_handler).start()
 
+        if watermelon_grab_enabled:
+            try:
+                time.sleep(0.25)
+                full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
+                if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
+                    full_msg_obj = full_msg_obj[0]
+                if 'reactions' in full_msg_obj:
+                    for reaction in full_msg_obj['reactions']:
+                        if reaction['emoji']['name'] == '�':
+                            bot.addReaction(channel_id, last_drop_msg_id, "🍉")
+                            break 
+            except Exception as e:
+                print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
 
-def handle_grab(bot, msg, bot_num):
-    channel_id = msg.get("channel_id")
-    target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
-    if not target_server: return
-
-    auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
-    heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
-    ktb_channel_id = target_server.get('ktb_channel_id')
-    
-    watermelon_grab_enabled = watermelon_grab_states.get(f'main_{bot_num}', False)
-
-    if not auto_grab_enabled and not watermelon_grab_enabled:
-        return
-
-    # Sửa điều kiện để không bắt nhầm drop clan
-    if msg.get("author", {}).get("id") == karuta_id and "is dropping" in msg.get("content", "") and not msg.get("mentions", []):
-        last_drop_msg_id = msg["id"]
-        
-        def grab_handler():
-            card_picked = False
-            
-            if auto_grab_enabled and ktb_channel_id:
-                for _ in range(6):
-                    time.sleep(0.5)
-                    try:
-                        messages = bot.getMessages(channel_id, num=5).json()
-                        for msg_item in messages:
-                            if msg_item.get("author", {}).get("id") == karibbit_id and int(msg_item["id"]) > int(last_drop_msg_id):
-                                if "embeds" in msg_item and len(msg_item["embeds"]) > 0:
-                                    desc = msg_item["embeds"][0].get("description", "")
-                                    if '♡' not in desc: continue
-                                    lines = desc.split('\n')
-                                    heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
-                                    if not any(heart_numbers): break 
-                                    max_num = max(heart_numbers)
-                                    if max_num >= heart_threshold:
-                                        max_index = heart_numbers.index(max_num)
-                                        delays = { 1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5] }
-                                        bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
-                                        emojis = ["1️⃣", "2️⃣", "3️⃣"]
-                                        emoji = emojis[max_index]
-                                        delay = bot_delays[max_index]
-                                        log_message = f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
-                                        print(log_message, flush=True)
-                                        def grab_action():
-                                            bot.addReaction(channel_id, last_drop_msg_id, emoji)
-                                            time.sleep(1)
-                                            bot.sendMessage(ktb_channel_id, "kt b")
-                                        threading.Timer(delay, grab_action).start()
-                                        card_picked = True
-                                if card_picked: break
-                        if card_picked: break
-                    except Exception as e:
-                        print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
-                    if card_picked: break
-
-            if watermelon_grab_enabled:
-                try:
-                    time.sleep(0.25)
-                    full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
-                    if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
-                        full_msg_obj = full_msg_obj[0]
-                    if 'reactions' in full_msg_obj:
-                        for reaction in full_msg_obj['reactions']:
-                            if reaction['emoji']['name'] == '🍉':
-                                bot.addReaction(channel_id, last_drop_msg_id, "🍉")
-                                break 
-                except Exception as e:
-                    print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
-
-        threading.Thread(target=grab_handler).start()
+    threading.Thread(target=grab_handler).start()
 
 def create_bot(token, bot_identifier, is_main=False):
     bot = discum.Client(token=token, log=False)
@@ -260,56 +245,69 @@ def create_bot(token, bot_identifier, is_main=False):
                 print(f"Đã đăng nhập: {user_id} ({bot_name})", flush=True)
 
     if is_main:
+        # --- FIX --- Xây dựng lại bộ định tuyến tin nhắn
         @bot.gateway.command
         def on_message(resp):
             if resp.event.message:
-                msg_data = resp.parsed.auto()
-                # --- NEW --- Phân luồng xử lý message
-                if "is dropping 3 cards!" in msg_data.get("content", "") and msg_data.get("mentions", []):
-                    handle_clan_drop(bot, msg_data, bot_identifier)
-                else:
-                    handle_grab(bot, msg_data, bot_identifier)
+                msg = resp.parsed.auto()
+                # 1. Kiểm tra tin nhắn có phải từ Karuta và là tin nhắn drop không
+                if msg.get("author", {}).get("id") == karuta_id and "is dropping" in msg.get("content", ""):
+                    # 2. Phân loại drop clan (có mentions) và drop server (không có mentions)
+                    if msg.get("mentions"):
+                        # Đây là drop clan -> gọi handle_clan_drop
+                        handle_clan_drop(bot, msg, bot_identifier)
+                    else:
+                        # Đây là drop server thông thường -> gọi handle_grab
+                        handle_grab(bot, msg, bot_identifier)
             
     threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
 
 # --- CÁC VÒNG LẶP NỀN ---
-# --- NEW --- Vòng lặp tự động gửi 'kd'
-def auto_clan_drop_loop():
+def run_clan_drop_cycle():
     global auto_clan_drop_settings
+    print("[Clan Drop] Bắt đầu chu kỳ drop clan.", flush=True)
+    
+    settings = auto_clan_drop_settings.copy()
+    channel_id = settings.get("channel_id")
+
+    with bots_lock:
+        active_main_bots = [
+            (bot, i + 1) for i, bot in enumerate(main_bots) 
+            if bot and bot_active_states.get(f'main_{i+1}', False)
+        ]
+    
+    if not active_main_bots:
+        print("[Clan Drop] Không có bot chính nào hoạt động để thực hiện drop.", flush=True)
+        return
+    
+    for bot, bot_num in active_main_bots:
+        if auto_clan_drop_stop_event.is_set(): break
+        try:
+            bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
+            print(f"[Clan Drop] Bot {bot_name} đang gửi 'kd'...", flush=True)
+            bot.sendMessage(channel_id, "kd")
+            time.sleep(settings.get("bot_delay", 30))
+        except Exception as e:
+            print(f"[Clan Drop] Lỗi khi gửi 'kd' từ bot {bot_num}: {e}", flush=True)
+    
+    auto_clan_drop_settings["last_cycle_start_time"] = time.time()
+    save_settings()
+
+def auto_clan_drop_loop():
     while not auto_clan_drop_stop_event.is_set():
         try:
+            # Chờ 1 phút rồi mới bắt đầu kiểm tra, tránh spam khi khởi động lại
             if auto_clan_drop_stop_event.wait(timeout=60): break
             
-            settings = auto_clan_drop_settings # thread-safe copy
+            settings = auto_clan_drop_settings
             is_enabled = settings.get("enabled")
             channel_id = settings.get("channel_id")
             interval = settings.get("cycle_interval", 1800)
             last_run = settings.get("last_cycle_start_time", 0)
             
             if is_enabled and channel_id and (time.time() - last_run) >= interval:
-                print("[Clan Drop] Bắt đầu chu kỳ drop clan.", flush=True)
-                with bots_lock:
-                    active_main_bots = [
-                        (bot, i + 1) for i, bot in enumerate(main_bots) 
-                        if bot and bot_active_states.get(f'main_{i+1}', False)
-                    ]
-                
-                if not active_main_bots:
-                    print("[Clan Drop] Không có bot chính nào hoạt động để thực hiện drop.", flush=True)
-                else:
-                    for bot, bot_num in active_main_bots:
-                        if auto_clan_drop_stop_event.is_set(): break
-                        try:
-                            bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
-                            print(f"[Clan Drop] Bot {bot_name} đang gửi 'kd'...", flush=True)
-                            bot.sendMessage(channel_id, "kd")
-                            time.sleep(settings.get("bot_delay", 72))
-                        except Exception as e:
-                            print(f"[Clan Drop] Lỗi khi gửi 'kd' từ bot {bot_num}: {e}", flush=True)
-                
-                auto_clan_drop_settings["last_cycle_start_time"] = time.time()
-                save_settings()
+                run_clan_drop_cycle()
 
         except Exception as e:
             print(f"[ERROR in auto_clan_drop_loop] {e}", flush=True)
@@ -473,7 +471,6 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <!-- --- NEW --- Panel cho Clan Auto Drop -->
             <div class="panel clan-drop-panel">
                 <h2><i class="fas fa-users"></i> Clan Auto Drop</h2>
                 <div class="status-grid" style="grid-template-columns: 1fr;">
@@ -490,7 +487,6 @@ HTML_TEMPLATE = """
                     <div class="input-group"><label>Drop Channel ID</label><input type="text" id="clan-drop-channel-id" value="{{ auto_clan_drop_settings.channel_id or '' }}"></div>
                     <div class="input-group"><label>KTB Channel ID</label><input type="text" id="clan-drop-ktb-channel-id" value="{{ auto_clan_drop_settings.ktb_channel_id or '' }}"></div>
                 </div>
-                <!-- --- NEW --- Thêm mục cài đặt tim cho Clan Drop -->
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-crosshairs"></i> Soul Harvest (Clan Drop)</h3>
                     {% for bot in main_bots_info %}
@@ -588,7 +584,6 @@ HTML_TEMPLATE = """
                 const serverUptimeSeconds = (Date.now() / 1000) - data.server_start_time;
                 updateElement(document.getElementById('uptime-timer'), { textContent: formatTime(serverUptimeSeconds) });
                 
-                // --- NEW --- Update Clan Drop UI
                 if (data.auto_clan_drop_status) {
                     updateElement(document.getElementById('clan-drop-timer'), { textContent: formatTime(data.auto_clan_drop_status.countdown) });
                     updateElement(document.getElementById('clan-drop-toggle-btn'), { textContent: data.auto_clan_drop_status.enabled ? 'DISABLE' : 'ENABLE' });
@@ -644,7 +639,6 @@ HTML_TEMPLATE = """
             const button = e.target.closest('button');
             if (!button) return;
 
-            // --- NEW --- Handle Clan Drop buttons
             if (button.id === 'clan-drop-toggle-btn') {
                 postData('/api/clan_drop_toggle');
                 return;
@@ -652,7 +646,6 @@ HTML_TEMPLATE = """
             if (button.id === 'clan-drop-save-btn') {
                 const channel_id = document.getElementById('clan-drop-channel-id').value;
                 const ktb_channel_id = document.getElementById('clan-drop-ktb-channel-id').value;
-                // --- NEW --- Lấy giá trị ngưỡng tim
                 const thresholds = {};
                 document.querySelectorAll('.clan-drop-threshold').forEach(input => {
                     thresholds[input.dataset.node] = parseInt(input.value, 10);
@@ -724,10 +717,9 @@ def index():
         auto_reboot_enabled=auto_reboot_enabled, 
         auto_reboot_delay=auto_reboot_delay, 
         main_bots_info=main_bots_info,
-        auto_clan_drop_settings=auto_clan_drop_settings # --- NEW ---
+        auto_clan_drop_settings=auto_clan_drop_settings
     )
 
-# --- NEW --- API routes for Clan Auto Drop
 @app.route("/api/clan_drop_toggle", methods=['POST'])
 def api_clan_drop_toggle():
     global auto_clan_drop_settings, auto_clan_drop_thread
@@ -737,14 +729,14 @@ def api_clan_drop_toggle():
             auto_clan_drop_settings['enabled'] = False
             return jsonify({'status': 'error', 'message': 'Clan Drop Channel ID and KTB Channel ID must be set first.'})
         
-        # --- FIX --- Đặt lại thời gian về 0 để kích hoạt ngay lập tức chu kỳ đầu tiên
-        auto_clan_drop_settings['last_cycle_start_time'] = 0 
+        # --- FIX --- Chạy chu kỳ đầu tiên ngay lập tức trong một luồng riêng
+        threading.Thread(target=run_clan_drop_cycle).start()
         
         if auto_clan_drop_thread is None or not auto_clan_drop_thread.is_alive():
             auto_clan_drop_stop_event.clear()
             auto_clan_drop_thread = threading.Thread(target=auto_clan_drop_loop, daemon=True)
             auto_clan_drop_thread.start()
-        msg = "Clan Auto Drop ENABLED."
+        msg = "Clan Auto Drop ENABLED & First cycle triggered."
     else:
         auto_clan_drop_stop_event.set()
         auto_clan_drop_thread = None
@@ -757,11 +749,10 @@ def api_clan_drop_update():
     data = request.get_json()
     auto_clan_drop_settings['channel_id'] = data.get('channel_id', '').strip()
     auto_clan_drop_settings['ktb_channel_id'] = data.get('ktb_channel_id', '').strip()
-    # --- NEW --- Cập nhật ngưỡng tim
     if 'heart_thresholds' in data:
         for key, value in data['heart_thresholds'].items():
             if isinstance(value, int):
-                auto_clan_drop_settings['heart_thresholds'][key] = value
+                auto_clan_drop_settings.setdefault('heart_thresholds', {})[key] = value
     return jsonify({'status': 'success', 'message': 'Clan Drop settings updated.'})
 
 
@@ -906,7 +897,6 @@ def status():
             for i, bot in enumerate(bots)
         ]
 
-    # --- NEW --- Add clan drop status
     clan_drop_status = {
         "enabled": auto_clan_drop_settings.get("enabled", False),
         "countdown": (auto_clan_drop_settings.get("last_cycle_start_time", 0) + auto_clan_drop_settings.get("cycle_interval", 1800) - now) if auto_clan_drop_settings.get("enabled", False) else 0
@@ -919,7 +909,7 @@ def status():
         'server_start_time': server_start_time,
         'servers': servers,
         'watermelon_grab_states': watermelon_grab_states,
-        'auto_clan_drop_status': clan_drop_status # --- NEW ---
+        'auto_clan_drop_status': clan_drop_status
     })
 
 # --- MAIN EXECUTION ---
@@ -936,9 +926,8 @@ if __name__ == "__main__":
                 main_bots.append(create_bot(token.strip(), bot_identifier=bot_num, is_main=True))
                 if bot_id not in bot_active_states: bot_active_states[bot_id] = True
                 if bot_id not in watermelon_grab_states: watermelon_grab_states[bot_id] = False
-                # --- NEW --- Khởi tạo ngưỡng tim mặc định cho clan drop
-                if bot_id not in auto_clan_drop_settings['heart_thresholds']:
-                    auto_clan_drop_settings['heart_thresholds'][bot_id] = 50
+                if bot_id not in auto_clan_drop_settings.get('heart_thresholds', {}):
+                    auto_clan_drop_settings.setdefault('heart_thresholds', {})[bot_id] = 50
         
         for i, token in enumerate(tokens):
             if token.strip():
@@ -956,7 +945,6 @@ if __name__ == "__main__":
         auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
         auto_reboot_thread.start()
 
-    # --- NEW --- Start the auto clan drop thread if enabled on load
     if auto_clan_drop_settings.get("enabled"):
         auto_clan_drop_stop_event.clear()
         auto_clan_drop_thread = threading.Thread(target=auto_clan_drop_loop, daemon=True)
