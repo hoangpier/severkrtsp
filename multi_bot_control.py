@@ -98,6 +98,7 @@ def handle_grab(bot, msg, bot_num):
     auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
     heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
     ktb_channel_id = target_server.get('ktb_channel_id')
+    watermelon_enabled = target_server.get(f'watermelon_enabled_{bot_num}', True) # Mặc định bật
     
     if not auto_grab_enabled:
         return
@@ -110,12 +111,10 @@ def handle_grab(bot, msg, bot_num):
             
             # --- BƯỚC 1: Ưu tiên nhặt thẻ theo tim ---
             if ktb_channel_id:
-                # Thử tìm tin nhắn Karibbit trong tối đa 3 giây
-                for _ in range(6): # Thử 6 lần, mỗi lần cách nhau 0.5s
+                for _ in range(6): 
                     time.sleep(0.5)
                     try:
                         messages = bot.getMessages(channel_id, num=5).json()
-                        # Tìm tin nhắn Karibbit mới hơn tin nhắn drop
                         for msg_item in messages:
                             if msg_item.get("author", {}).get("id") == karibbit_id and int(msg_item["id"]) > int(last_drop_msg_id):
                                 if "embeds" in msg_item and len(msg_item["embeds"]) > 0:
@@ -144,7 +143,6 @@ def handle_grab(bot, msg, bot_num):
                                         emoji = emojis[max_index]
                                         delay = bot_delays[max_index]
 
-                                        # Log đã được sửa để đảm bảo hiển thị đầy đủ
                                         log_message = f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
                                         print(log_message, flush=True)
                                         
@@ -155,33 +153,27 @@ def handle_grab(bot, msg, bot_num):
                                         
                                         threading.Timer(delay, grab_action).start()
                                         card_picked = True
-                                # Thoát khỏi vòng lặp message một khi đã xử lý
                                 if card_picked: break
-                        # Thoát khỏi vòng lặp getMessages một khi đã xử lý
                         if card_picked: break
                     except Exception as e:
                         print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
-                    # Thoát khỏi vòng lặp chính một khi đã xử lý
                     if card_picked: break
 
-            # --- BƯỚC 2: Kiểm tra và nhặt sự kiện Dưa hấu (luôn chạy sau khi kiểm tra thẻ) ---
-            try:
-                # Chờ một chút để reaction 🍉 (nếu có) xuất hiện
-                time.sleep(0.25)
-                full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
-                if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
-                    full_msg_obj = full_msg_obj[0]
+            # --- BƯỚC 2: Kiểm tra và nhặt sự kiện Dưa hấu (nếu được bật) ---
+            if watermelon_enabled:
+                try:
+                    time.sleep(0.25)
+                    full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
+                    if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
+                        full_msg_obj = full_msg_obj[0]
 
-                if 'reactions' in full_msg_obj:
-                    for reaction in full_msg_obj['reactions']:
-                        if reaction['emoji']['name'] == '🍉':
-                            # Đã bỏ log nhặt dưa hấu
-                            bot.addReaction(channel_id, last_drop_msg_id, "🍉")
-                            break 
-            except Exception as e:
-                print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
-
-            # Đã bỏ log "không tìm thấy thẻ"
+                    if 'reactions' in full_msg_obj:
+                        for reaction in full_msg_obj['reactions']:
+                            if reaction['emoji']['name'] == '🍉':
+                                bot.addReaction(channel_id, last_drop_msg_id, "🍉")
+                                break 
+                except Exception as e:
+                    print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
 
         threading.Thread(target=grab_handler).start()
 
@@ -236,9 +228,6 @@ def spam_loop():
     
     while True:
         try:
-            # The logic to select bots is now moved to spam_for_server
-            # to allow real-time changes of bot states.
-
             for server in servers:
                 server_id = server.get('id')
                 spam_is_on = server.get('spam_enabled') and server.get('spam_message') and server.get('spam_channel_id')
@@ -248,7 +237,7 @@ def spam_loop():
                     stop_event = threading.Event()
                     thread = threading.Thread(
                         target=spam_for_server, 
-                        args=(server, stop_event), # Pass server config and stop event only
+                        args=(server, stop_event),
                         daemon=True
                     )
                     thread.start()
@@ -276,7 +265,6 @@ def spam_for_server(server_config, stop_event):
     
     while not stop_event.is_set():
         try:
-            # Get the latest list of active bots for spamming in each cycle
             with bots_lock:
                 active_main_bots = [bot for i, bot in enumerate(main_bots) if bot and bot_active_states.get(f'main_{i+1}', False)]
                 active_sub_bots = [bot for i, bot in enumerate(bots) if bot and bot_active_states.get(f'sub_{i}', False)]
@@ -399,11 +387,14 @@ HTML_TEMPLATE = """
                     <div class="grab-section">
                         <h3>{{ bot.name }}</h3>
                         <div class="input-group">
-                            <input type="number" class="harvest-threshold" data-node="{{ bot.id }}" value="{{ server['heart_threshold_' + bot.id|string] or 50 }}" min="0">
+                            <input type="number" class="harvest-threshold" data-node="{{ bot.id }}" value="{{ server.get('heart_threshold_' + bot.id|string, 50) }}" min="0">
                             <button type="button" class="btn harvest-toggle" data-node="{{ bot.id }}">
-                                {{ 'DISABLE' if server['auto_grab_enabled_' + bot.id|string] else 'ENABLE' }}
+                                ♡ {{ 'OFF' if not server.get('auto_grab_enabled_' + bot.id|string) else 'ON' }}
                             </button>
                         </div>
+                        <button type="button" class="btn watermelon-toggle" data-node="{{ bot.id }}" style="margin-left: 10px; min-width: 100px;">
+                            🍉 {{ 'OFF' if not server.get('watermelon_enabled_' + bot.id|string, True) else 'ON' }}
+                        </button>
                     </div>
                     {% endfor %}
                 </div>
@@ -469,7 +460,11 @@ HTML_TEMPLATE = """
                     if (!serverPanel) return;
                     serverPanel.querySelectorAll('.harvest-toggle').forEach(btn => {
                         const node = btn.dataset.node;
-                        updateElement(btn, { textContent: serverData[`auto_grab_enabled_${node}`] ? 'DISABLE' : 'ENABLE' });
+                        btn.textContent = `♡ ${serverData.get('auto_grab_enabled_' + node) ? 'ON' : 'OFF'}`;
+                    });
+                    serverPanel.querySelectorAll('.watermelon-toggle').forEach(btn => {
+                        const node = btn.dataset.node;
+                        btn.textContent = `🍉 ${serverData.get('watermelon_enabled_' + node, True) ? 'ON' : 'OFF'}`;
                     });
                     const spamToggleBtn = serverPanel.querySelector('.broadcast-toggle');
                     updateElement(spamToggleBtn, { textContent: serverData.spam_enabled ? 'DISABLE' : 'ENABLE' });
@@ -485,6 +480,7 @@ HTML_TEMPLATE = """
             if (!serverPanel) return;
             const serverId = serverPanel.dataset.serverId;
             if (target.classList.contains('harvest-toggle')) { const node = target.dataset.node; const thresholdInput = serverPanel.querySelector(`.harvest-threshold[data-node="${node}"]`); postData('/api/harvest_toggle', { server_id: serverId, node: node, threshold: thresholdInput.value }); }
+            if (target.classList.contains('watermelon-toggle')) { const node = target.dataset.node; postData('/api/watermelon_toggle', { server_id: serverId, node: node }); }
             if (target.classList.contains('broadcast-toggle')) { const message = serverPanel.querySelector('.spam-message').value; const delay = serverPanel.querySelector('.spam-delay').value; postData('/api/broadcast_toggle', { server_id: serverId, message: message, delay: delay }); }
             if (target.closest('.btn-delete-server')) { if(confirm('Are you sure?')) { postData('/api/delete_server', { server_id: serverId }); } }
         });
@@ -529,6 +525,7 @@ def api_add_server():
         bot_num = i + 1
         new_server[f'auto_grab_enabled_{bot_num}'] = False
         new_server[f'heart_threshold_{bot_num}'] = 50
+        new_server[f'watermelon_enabled_{bot_num}'] = True # Thêm cài đặt dưa hấu
 
     servers.append(new_server)
     return jsonify({'status': 'success', 'message': f'Server "{name}" added.', 'reload': True})
@@ -565,9 +562,24 @@ def api_harvest_toggle():
     threshold_key = f'heart_threshold_{node}'
     server[grab_key] = not server.get(grab_key, False)
     server[threshold_key] = int(data.get('threshold', 50))
-    state = "ENABLED" if server[grab_key] else "DISABLED"
+    state = "ON" if server[grab_key] else "OFF"
     bot_name = BOT_NAMES[int(node)-1] if int(node)-1 < len(BOT_NAMES) else f"MAIN_{node}"
-    msg = f"Harvest Node {bot_name} was {state} for server {server['name']}."
+    msg = f"Harvest Node {bot_name} was set to {state} for server {server['name']}."
+    return jsonify({'status': 'success', 'message': msg})
+
+@app.route("/api/watermelon_toggle", methods=['POST'])
+def api_watermelon_toggle():
+    data = request.get_json()
+    server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
+    node = data.get('node')
+    if not server or not node: return jsonify({'status': 'error', 'message': 'Invalid request.'}), 400
+    
+    key = f'watermelon_enabled_{node}'
+    server[key] = not server.get(key, True) # Mặc định là True, lật ngược lại
+    
+    state = "ON" if server[key] else "OFF"
+    bot_name = BOT_NAMES[int(node)-1] if int(node)-1 < len(BOT_NAMES) else f"MAIN_{node}"
+    msg = f"Watermelon harvest for {bot_name} was set to {state} on server {server['name']}."
     return jsonify({'status': 'success', 'message': msg})
 
 @app.route("/api/broadcast_toggle", methods=['POST'])
@@ -621,9 +633,8 @@ def api_save_settings():
 def status():
     now = time.time()
     for server in servers:
-        server['spam_countdown'] = 0 # Sẽ cập nhật từ client-side để đơn giản hóa
+        server['spam_countdown'] = 0 
         if server.get('spam_enabled'):
-            # Gửi thời gian spam cuối và delay để client tính toán
             server['last_spam_time'] = server.get('last_spam_time', 0)
         
     with bots_lock:
