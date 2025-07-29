@@ -39,7 +39,7 @@ auto_clan_drop_settings = {
     "ktb_channel_id": "",
     "last_cycle_start_time": 0,
     "cycle_interval": 1800, # 30 phút
-    "bot_delay": 30, # 30 giây
+    "bot_delay": 72, # 30 giây
     "heart_thresholds": {} # --- NEW --- Thêm ngưỡng tim cho từng bot
 }
 
@@ -304,7 +304,7 @@ def auto_clan_drop_loop():
                             bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
                             print(f"[Clan Drop] Bot {bot_name} đang gửi 'kd'...", flush=True)
                             bot.sendMessage(channel_id, "kd")
-                            time.sleep(settings.get("bot_delay", 70))
+                            time.sleep(settings.get("bot_delay", 72))
                         except Exception as e:
                             print(f"[Clan Drop] Lỗi khi gửi 'kd' từ bot {bot_num}: {e}", flush=True)
                 
@@ -737,7 +737,9 @@ def api_clan_drop_toggle():
             auto_clan_drop_settings['enabled'] = False
             return jsonify({'status': 'error', 'message': 'Clan Drop Channel ID and KTB Channel ID must be set first.'})
         
-        auto_clan_drop_settings['last_cycle_start_time'] = time.time() # Reset timer on enable
+        # --- FIX --- Đặt lại thời gian về 0 để kích hoạt ngay lập tức chu kỳ đầu tiên
+        auto_clan_drop_settings['last_cycle_start_time'] = 0 
+        
         if auto_clan_drop_thread is None or not auto_clan_drop_thread.is_alive():
             auto_clan_drop_stop_event.clear()
             auto_clan_drop_thread = threading.Thread(target=auto_clan_drop_loop, daemon=True)
