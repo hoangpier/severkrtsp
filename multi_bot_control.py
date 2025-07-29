@@ -95,22 +95,25 @@ def handle_grab(bot, msg, bot_num):
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
     if not target_server: return
 
+    # Lấy cài đặt cho từng chức năng
     auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
-    heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
-    ktb_channel_id = target_server.get('ktb_channel_id')
-    watermelon_enabled = target_server.get(f'watermelon_enabled_{bot_num}', True) # Mặc định bật
+    watermelon_enabled = target_server.get(f'watermelon_enabled_{bot_num}', True)
     
-    if not auto_grab_enabled:
+    # Nếu cả hai chức năng đều tắt, thoát sớm
+    if not auto_grab_enabled and not watermelon_enabled:
         return
 
+    heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
+    ktb_channel_id = target_server.get('ktb_channel_id')
+    
     if msg.get("author", {}).get("id") == karuta_id and "is dropping" not in msg.get("content", "") and not msg.get("mentions", []):
         last_drop_msg_id = msg["id"]
         
         def grab_handler():
             card_picked = False
             
-            # --- BƯỚC 1: Ưu tiên nhặt thẻ theo tim ---
-            if ktb_channel_id:
+            # --- BƯỚC 1: Ưu tiên nhặt thẻ theo tim (nếu được bật) ---
+            if auto_grab_enabled and ktb_channel_id:
                 for _ in range(6): 
                     time.sleep(0.5)
                     try:
@@ -469,7 +472,7 @@ HTML_TEMPLATE = """
                     
                     serverPanel.querySelectorAll('.harvest-toggle').forEach(btn => {
                         const node = btn.dataset.node;
-                        const isOn = serverData['auto_grab_enabled_' + node];
+                        const isOn = serverData['auto_grab_enabled_' + node] === true;
                         btn.textContent = `♡ ${isOn ? 'ON' : 'OFF'}`;
                     });
                     
