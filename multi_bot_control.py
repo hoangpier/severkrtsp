@@ -166,7 +166,7 @@ def handle_clan_drop(bot, msg, bot_num):
     
     threading.Thread(target=grab_handler).start()
 
-# --- CHỨC NĂNG CŨ: Xử lý nhặt thẻ server ---
+# --- CHỨC NĂNG CŨ: Xử lý nhặt thẻ server (KHÔI PHỤC LOGIC GỐC) ---
 def handle_grab(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
@@ -180,6 +180,7 @@ def handle_grab(bot, msg, bot_num):
     if not auto_grab_enabled and not watermelon_grab_enabled:
         return
 
+    # Điều kiện này được gọi sau khi on_message đã lọc, nên nó luôn đúng
     last_drop_msg_id = msg["id"]
     
     def grab_handler():
@@ -971,3 +972,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+" to write a new feature that will automatically send the "kd" command from all primary accounts to a server every 30 minutes. Each account will send the command 70 seconds apart. When the "kd" command is sent, the server will drop cards with a message similar to the one in the image: "is dropping 3 cards!". The tool will then identify the card with the highest heart count and grab it, similar to the existing server card grabbing functionality. Additionally, a "kt b" command should be sent to a separate channel after a card is grabbed. This new feature should have its own section in the 
