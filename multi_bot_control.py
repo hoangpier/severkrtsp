@@ -321,9 +321,15 @@ HTML_TEMPLATE = """
         .input-group { display: flex; align-items: stretch; gap: 10px; margin-bottom: 15px; }
         .input-group label { background: #000; border: 1px solid var(--border-color); border-right: 0; padding: 10px 15px; border-radius: 4px 0 0 4px; display:flex; align-items:center; min-width: 120px;}
         .input-group input, .input-group textarea { flex-grow: 1; background: #000; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 0 4px 4px 0; font-family: 'Courier Prime', monospace; }
+        
         .grab-section { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 8px;}
-        .grab-section h3 { margin: 0; display: flex; align-items: center; gap: 10px; width: 80px; }
-        .grab-section .input-group { margin-bottom: 0; flex-grow: 1; margin-left: 20px;}
+        .grab-section h3 { margin: 0; display: flex; align-items: center; gap: 10px; width: 80px; flex-shrink: 0; }
+        .grab-section .input-group { margin-bottom: 0; }
+        .grab-section .input-group input { width: 60px; flex-grow: 0; }
+        .grab-section .btn { width: auto; flex-shrink: 0; }
+
+        .controls-wrapper { display: flex; align-items: center; gap: 10px; flex-grow: 1; justify-content: flex-end; }
+
         .msg-status { text-align: center; color: var(--necro-green); padding: 12px; border: 1px dashed var(--border-color); border-radius: 4px; margin-bottom: 20px; display: none; }
         .status-panel { grid-column: 1 / -1; }
         .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
@@ -386,15 +392,17 @@ HTML_TEMPLATE = """
                     {% for bot in main_bots_info %}
                     <div class="grab-section">
                         <h3>{{ bot.name }}</h3>
-                        <div class="input-group">
-                            <input type="number" class="harvest-threshold" data-node="{{ bot.id }}" value="{{ server.get('heart_threshold_' + bot.id|string, 50) }}" min="0">
-                            <button type="button" class="btn harvest-toggle" data-node="{{ bot.id }}">
-                                ♡ {{ 'OFF' if not server.get('auto_grab_enabled_' + bot.id|string) else 'ON' }}
+                        <div class="controls-wrapper">
+                            <div class="input-group">
+                                <input type="number" class="harvest-threshold" data-node="{{ bot.id }}" value="{{ server.get('heart_threshold_' + bot.id|string, 50) }}" min="0">
+                                <button type="button" class="btn harvest-toggle" data-node="{{ bot.id }}">
+                                    ♡ {{ 'ON' if server.get('auto_grab_enabled_' + bot.id|string) else 'OFF' }}
+                                </button>
+                            </div>
+                            <button type="button" class="btn watermelon-toggle" data-node="{{ bot.id }}">
+                                🍉 {{ 'ON' if server.get('watermelon_enabled_' + bot.id|string, True) else 'OFF' }}
                             </button>
                         </div>
-                        <button type="button" class="btn watermelon-toggle" data-node="{{ bot.id }}" style="margin-left: 10px; min-width: 100px;">
-                            🍉 {{ 'OFF' if not server.get('watermelon_enabled_' + bot.id|string, True) else 'ON' }}
-                        </button>
                     </div>
                     {% endfor %}
                 </div>
@@ -458,14 +466,19 @@ HTML_TEMPLATE = """
                 data.servers.forEach(serverData => {
                     const serverPanel = document.querySelector(`.server-panel[data-server-id="${serverData.id}"]`);
                     if (!serverPanel) return;
+                    
                     serverPanel.querySelectorAll('.harvest-toggle').forEach(btn => {
                         const node = btn.dataset.node;
-                        btn.textContent = `♡ ${serverData.get('auto_grab_enabled_' + node) ? 'ON' : 'OFF'}`;
+                        const isOn = serverData['auto_grab_enabled_' + node];
+                        btn.textContent = `♡ ${isOn ? 'ON' : 'OFF'}`;
                     });
+                    
                     serverPanel.querySelectorAll('.watermelon-toggle').forEach(btn => {
                         const node = btn.dataset.node;
-                        btn.textContent = `🍉 ${serverData.get('watermelon_enabled_' + node, True) ? 'ON' : 'OFF'}`;
+                        const isOn = serverData['watermelon_enabled_' + node] !== false;
+                        btn.textContent = `🍉 ${isOn ? 'ON' : 'OFF'}`;
                     });
+
                     const spamToggleBtn = serverPanel.querySelector('.broadcast-toggle');
                     updateElement(spamToggleBtn, { textContent: serverData.spam_enabled ? 'DISABLE' : 'ENABLE' });
                     const spamTimer = serverPanel.querySelector('.spam-timer');
