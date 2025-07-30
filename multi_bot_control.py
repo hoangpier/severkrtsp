@@ -150,7 +150,7 @@ def find_button_id_by_emoji_or_label(components, emoji_name=None, label=None):
                     return button.get('custom_id')
     return None
 
-# --- HÀM MỚI: Logic chính cho Trợ lý Pha chế Solisfair ---
+# --- HÀM MỚI: Logic chính cho Trợ lý Pha chế Solisfair (ĐÃ SỬA LỖI) ---
 def run_solisfair_solver(stop_event):
     global solisfair_settings
     
@@ -165,9 +165,13 @@ def run_solisfair_solver(stop_event):
     channel_id = None
     message_id = None
     try:
-        # --- Lấy bot hành động ---
+        # --- Lấy bot hành động và kiểm tra trạng thái ---
         with bots_lock:
             bot_id_str = solisfair_settings.get("bot_id", "main_1")
+            
+            if not bot_active_states.get(bot_id_str, False):
+                raise ValueError(f"Bot {bot_id_str.upper()} đang OFFLINE. Hãy bật trong System Status.")
+                
             target_bot_index = int(bot_id_str.split('_')[1]) - 1
             if not (0 <= target_bot_index < len(main_bots)):
                 raise ValueError("Bot ID không hợp lệ.")
@@ -200,7 +204,6 @@ def run_solisfair_solver(stop_event):
             
             update_status(f"Bắt đầu vòng lặp thứ {i+1}...")
             time.sleep(1.5)
-            # SỬA LỖI: API getMessage trả về một object, không phải list. Bỏ [0].
             msg_data = bot.getMessage(channel_id, message_id).json()
             components = msg_data.get('components', [])
             embed_desc = msg_data.get('embeds', [{}])[0].get('description', '')
@@ -215,6 +218,7 @@ def run_solisfair_solver(stop_event):
             update_status("Đang thực hiện nước đi mặc định...")
             
             # Bước 1: Nhấn nút chọn (tích xanh dương)
+            update_status("Đang tìm nút Chọn (tích xanh dương)...")
             select_button_id = find_button_id_by_emoji_or_label(components, emoji_name='☑️')
             if not select_button_id:
                 select_button_id = find_button_id_by_emoji_or_label(components, emoji_name='✔️')
@@ -223,12 +227,12 @@ def run_solisfair_solver(stop_event):
                 update_status("Lỗi: Không tìm thấy nút Chọn (Tích xanh dương).")
                 break
             
+            update_status("Đã tìm thấy nút Chọn. Đang nhấn...")
             bot.interact(channel_id, message_id, custom_id=select_button_id)
-            update_status("Đã nhấn nút Chọn. Chờ 1.5 giây...")
             time.sleep(1.5)
 
             # Bước 2: Nhấn nút xác nhận (tích xanh lá)
-            # SỬA LỖI: API getMessage trả về một object, không phải list. Bỏ [0].
+            update_status("Đang tìm nút Xác nhận (tích xanh lá)...")
             msg_data = bot.getMessage(channel_id, message_id).json()
             components = msg_data.get('components', [])
             confirm_button_id = find_button_id_by_emoji_or_label(components, emoji_name='✅')
@@ -237,8 +241,9 @@ def run_solisfair_solver(stop_event):
                 update_status("Lỗi: Không tìm thấy nút Xác Nhận (Tích xanh lá).")
                 break
 
+            update_status("Đã tìm thấy nút Xác nhận. Đang nhấn...")
             bot.interact(channel_id, message_id, custom_id=confirm_button_id)
-            update_status("Đã nhấn nút Xác nhận. Chờ Karuta xử lý...")
+            update_status("Đã xác nhận. Chờ Karuta xử lý...")
             time.sleep(4)
 
         update_status("Hoàn thành chu trình.")
@@ -248,7 +253,6 @@ def run_solisfair_solver(stop_event):
     finally:
         if bot and channel_id and message_id:
             try:
-                # SỬA LỖI: API getMessage trả về một object, không phải list. Bỏ [0].
                 msg_data = bot.getMessage(channel_id, message_id).json()
                 components = msg_data.get('components', [])
                 back_button_id = find_button_id_by_emoji_or_label(components, label='Back')
@@ -260,6 +264,7 @@ def run_solisfair_solver(stop_event):
 
         solisfair_settings["is_running"] = False
         save_settings()
+
 
 # --- Các hàm logic cũ (handle_clan_drop, handle_grab, create_bot, etc.) giữ nguyên ---
 def handle_clan_drop(bot, msg, bot_num):
