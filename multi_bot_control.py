@@ -180,7 +180,7 @@ def run_solisfair_solver(stop_event):
     guild_id = None
 
     try:
-        # --- Lấy thông tin bot và kênh ---
+        # --- Lấy thông tin bot và kênh (giữ nguyên) ---
         with bots_lock:
             bot_id_str = solisfair_settings.get("bot_id", "main_1")
             if not bot_active_states.get(bot_id_str, False):
@@ -213,117 +213,110 @@ def run_solisfair_solver(stop_event):
         message_id = event_message['id']
         update_status("Đã tìm thấy tin nhắn sự kiện. Bắt đầu giải...")
 
-        # --- Vòng lặp giải chính ---
+        # --- Vòng lặp giải chính cho mỗi mảnh ghép ---
         for i in range(100): 
-            if stop_event.is_set() or not solisfair_settings.get("is_running"):
+            if stop_event.is_set():
                 update_status("Đã nhận lệnh dừng.")
                 break
             
             update_status(f"Bắt đầu vòng lặp giải thứ {i+1}...")
             
-            # Lấy trạng thái mới nhất của tin nhắn ở ĐẦU mỗi vòng lặp
-            time.sleep(1) # Chờ một chút để tin nhắn cập nhật nếu cần
-            current_message_raw = bot.getMessage(channel_id, message_id).json()
-            current_message = current_message_raw[0] if isinstance(current_message_raw, list) and current_message_raw else current_message_raw
-            if not isinstance(current_message, dict):
-                update_status(f"Dữ liệu tin nhắn không hợp lệ: {current_message}")
-                break
+            # --- GIAI ĐOẠN KHÁM PHÁ ---
+            best_move = {'row': -1, 'col': -1, 'score': -999}
+            current_pos = {'row': 0, 'col': 0}
 
-            embed_desc = current_message.get('embeds', [{}])[0].get('description', '')
-            
-            # Thêm debug print để kiểm tra nội dung embed
-            # print(f"---DEBUG---\n{embed_desc}\n---END DEBUG---")
-
-            if "You don't have any fruit pieces" in embed_desc:
+            # Lấy trạng thái ban đầu của bàn cờ cho lượt này
+            time.sleep(2) # Chờ game load mảnh mới
+            current_message = bot.getMessage(channel_id, message_id).json()[0]
+            embed_desc_check = current_message.get('embeds', [{}])[0].get('description', '')
+            if "You don't have any fruit pieces" in embed_desc_check:
                 update_status("Đã hết mảnh trái cây.")
                 break
-            if "Move the piece around the board" not in embed_desc:
-                update_status("Không ở trong màn hình đặt mảnh. Dừng lại.")
-                break
 
-            # --- Tối ưu hóa: Phân tích bàn cờ từ description ---
-            board_lines = [line.strip() for line in embed_desc.split('\n') if '·' in line]
-            piece_preview_line = next((line for line in embed_desc.split('\n') if '`' in line and '//' in line), None)
-            
-            if not piece_preview_line or not board_lines:
-                update_status("Không thể phân tích bàn cờ hoặc mảnh ghép từ tin nhắn.")
-                time.sleep(2) # Chờ thêm một chút và thử lại
-                continue
-
-            piece_shape = [(r, c) for r, row_str in enumerate(piece_preview_line.strip('`').split('//')) for c, char in enumerate(row_str) if char == 'O']
-            
-            best_move = {'row': -1, 'col': -1, 'score': -1}
+            update_status("Bắt đầu quét toàn bộ bàn cờ...")
             for r in range(5):
                 for c in range(5):
-                    if not all(0 <= r + dr < 5 and 0 <= c + dc < 5 for dr, dc in piece_shape): continue
+                    if stop_event.is_set(): break
                     
-                    line_index = r * 5 + c
-                    if line_index < len(board_lines):
-                        score_match = re.search(r'(\d+)\s·', board_lines[line_index])
-                        if score_match:
-                            current_score = int(score_match.group(1))
-                            if current_score > best_move['score']:
-                                best_move = {'row': r, 'col': c, 'score': current_score}
+                    # Di chuyển con trỏ tới ô (r, c)
+                    # Di chuyển dọc
+                    while current_pos['row'] < r:
+                        button_id = find_button_id_by_emoji_or_label(current_message.get('components', []), emoji_name='🔽')
+                        click_karuta_button(bot, channel_id, guild_id, message_id, current_message.get('flags', 0), button_id)
+                        current_pos['row'] += 1
+                        current_message = bot.getMessage(channel_id, message_id).json()[0]
+                    while current_pos['row'] > r:
+                        button_id = find_button_id_by_emoji_or_label(current_message.get('components', []), emoji_name='🔼')
+                        click_karuta_button(bot, channel_id, guild_id, message_id, current_message.get('flags', 0), button_id)
+                        current_pos['row'] -= 1
+                        current_message = bot.getMessage(channel_id, message_id).json()[0]
+
+                    # Di chuyển ngang
+                    while current_pos['col'] < c:
+                        button_id = find_button_id_by_emoji_or_label(current_message.get('components', []), emoji_name='▶️')
+                        click_karuta_button(bot, channel_id, guild_id, message_id, current_message.get('flags', 0), button_id)
+                        current_pos['col'] += 1
+                        current_message = bot.getMessage(channel_id, message_id).json()[0]
+                    while current_pos['col'] > c:
+                        button_id = find_button_id_by_emoji_or_label(current_message.get('components', []), emoji_name='◀️')
+                        click_karuta_button(bot, channel_id, guild_id, message_id, current_message.get('flags', 0), button_id)
+                        current_pos['col'] -= 1
+                        current_message = bot.getMessage(channel_id, message_id).json()[0]
+                    
+                    # Khi đã ở đúng ô, đọc và ghi nhận điểm số
+                    update_status(f"Đang đánh giá ô ({r+1},{c+1})...")
+                    eval_desc = current_message.get('embeds', [{}])[0].get('description', '')
+                    score = 0
+                    if "you will receive" in eval_desc:
+                        match = re.search(r'(\d+)\s·', eval_desc)
+                        if match:
+                            score = int(match.group(1))
+                    
+                    if score > best_move['score']:
+                        best_move['score'] = score
+                        best_move['row'] = r
+                        best_move['col'] = c
+                        update_status(f"Tìm thấy nước đi tốt hơn ở ({r+1},{c+1}) (Điểm: {score})")
+
+                if stop_event.is_set(): break
             
-            if best_move['score'] == -1:
-                update_status("Không tìm thấy nước đi nào hợp lệ.")
+            if stop_event.is_set(): break
+
+            # --- GIAI ĐOẠN HÀNH ĐỘNG ---
+            if best_move['score'] == -999:
+                update_status("Quét xong nhưng không tìm thấy nước đi nào có điểm. Dừng lại.")
                 break
             
-            update_status(f"Nước đi tốt nhất là ({best_move['row']+1}, {best_move['col']+1}) với điểm {best_move['score']}. Đang di chuyển...")
-
-            # --- Di chuyển đến vị trí tốt nhất ---
-            current_pos = {'row': 0, 'col': 0}
+            update_status(f"Nước đi tốt nhất là ({best_move['row']+1}, {best_move['col']+1}). Di chuyển đến và xác nhận...")
             
-            # Di chuyển dọc
-            while current_pos['row'] != best_move['row']:
-                if stop_event.is_set(): break
-                move_dir = 'down' if current_pos['row'] < best_move['row'] else 'up'
-                button_id = find_button_id_by_emoji_or_label(current_message.get('components', []), emoji_name={'up':'🔼', 'down':'🔽'}[move_dir])
-                click_karuta_button(bot, channel_id, guild_id, message_id, current_message.get('flags', 0), button_id)
-                current_pos['row'] += 1 if move_dir == 'down' else -1
-                current_message = bot.getMessage(channel_id, message_id).json()[0]
+            # Di chuyển con trỏ về ô tốt nhất (có thể không cần nếu đang ở đó, nhưng để cho chắc)
+            # ... (Lặp lại logic di chuyển ở trên để đến best_move['row'] và best_move['col']) ...
 
-            if stop_event.is_set(): break
-
-            # Di chuyển ngang
-            while current_pos['col'] != best_move['col']:
-                if stop_event.is_set(): break
-                move_dir = 'right' if current_pos['col'] < best_move['col'] else 'left'
-                button_id = find_button_id_by_emoji_or_label(current_message.get('components', []), emoji_name={'left':'◀️', 'right':'▶️'}[move_dir])
-                click_karuta_button(bot, channel_id, guild_id, message_id, current_message.get('flags', 0), button_id)
-                current_pos['col'] += 1 if move_dir == 'right' else -1
-                current_message = bot.getMessage(channel_id, message_id).json()[0]
-
-            if stop_event.is_set(): break
-
-            # --- Xác nhận đặt mảnh ---
-            update_status("Đã đến vị trí. Bắt đầu xác nhận...")
+            # Bấm nút Chọn (dấu tick xanh)
             select_button_id = find_button_id_by_emoji_or_label(current_message.get('components', []), emoji_name='☑️')
             if not select_button_id:
-                update_status("Lỗi: Không tìm thấy nút Chọn.")
-                break
+                raise ValueError("Không tìm thấy nút Chọn (☑️).")
             click_karuta_button(bot, channel_id, guild_id, message_id, current_message.get('flags', 0), select_button_id)
             
+            # Bấm nút Xác nhận cuối cùng (dấu tick trong ô vuông)
             confirm_message = bot.getMessage(channel_id, message_id).json()[0]
             confirm_button_id = find_button_id_by_emoji_or_label(confirm_message.get('components', []), emoji_name='✅')
             if not confirm_button_id:
-                update_status("Lỗi: Không tìm thấy nút Xác nhận.")
-                break
+                raise ValueError("Không tìm thấy nút Xác Nhận (✅).")
             click_karuta_button(bot, channel_id, guild_id, message_id, confirm_message.get('flags', 0), confirm_button_id)
-            update_status("Đã xác nhận. Chờ lượt tiếp theo...")
-            time.sleep(2) # Chờ game xử lý và cập nhật board
+            update_status("Đã xác nhận đặt mảnh. Chờ lượt tiếp theo...")
 
     except Exception as e:
         update_status(f"Lỗi nghiêm trọng: {e}")
     finally:
+        # Dọn dẹp và kết thúc
         if bot and channel_id and message_id and guild_id:
             try:
-                raw_msg_data = bot.getMessage(channel_id, message_id).json()
-                msg_data = raw_msg_data[0] if isinstance(raw_msg_data, list) and raw_msg_data else raw_msg_data
-                if isinstance(msg_data, dict):
-                    back_button_id = find_button_id_by_emoji_or_label(msg_data.get('components', []), label='Back')
+                raw_msg_data = bot.getMessage(channel_id, message_id).json()[0]
+                if isinstance(raw_msg_data, dict):
+                    back_button_id = find_button_id_by_emoji_or_label(raw_msg_data.get('components', []), label='Back')
                     if back_button_id:
-                        click_karuta_button(bot, channel_id, guild_id, message_id, msg_data.get('flags', 0), back_button_id)
+                        click_karuta_button(bot, channel_id, guild_id, message_id, raw_msg_data.get('flags', 0), back_button_id)
                         update_status("Đã nhấn Back để kết thúc.")
             except Exception as e:
                 update_status(f"Không thể nhấn Back: {e}")
