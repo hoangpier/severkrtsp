@@ -79,7 +79,7 @@ def save_settings():
         'last_reboot_cycle_time': last_reboot_cycle_time,
         'watermelon_grab_states': watermelon_grab_states,
         'auto_clan_drop_settings': auto_clan_drop_settings,
-        'solisfair_settings': solisfair_settings # <-- THÊM MỚI
+        'solisfair_settings': solisfair_settings
     }
     headers = {'Content-Type': 'application/json', 'X-Master-Key': api_key}
     url = f"https://api.jsonbin.io/v3/b/{bin_id}"
@@ -116,11 +116,10 @@ def load_settings():
                         loaded_clan_settings['heart_thresholds'] = {}
                     auto_clan_drop_settings.update(loaded_clan_settings)
                 
-                # --- TẢI CÀI ĐẶT SOLISFAIR ---
                 loaded_solisfair_settings = settings.get('solisfair_settings', {})
                 if loaded_solisfair_settings:
                     solisfair_settings.update(loaded_solisfair_settings)
-                    solisfair_settings['is_running'] = False # Luôn bắt đầu ở trạng thái dừng
+                    solisfair_settings['is_running'] = False
 
                 print("[Settings] Đã tải cài đặt từ JSONBin.io.", flush=True)
             else:
@@ -131,7 +130,6 @@ def load_settings():
 
 # --- CÁC HÀM LOGIC BOT ---
 
-# --- HÀM MỚI: Tìm custom_id của nút bấm một cách linh động ---
 def find_button_id_by_emoji_or_label(components, emoji_name=None, label=None):
     if not components: return None
     for row in components:
@@ -146,28 +144,29 @@ def find_button_id_by_emoji_or_label(components, emoji_name=None, label=None):
                     return button.get('custom_id')
     return None
 
-# --- HÀM MỚI: Hàm phụ trợ để bấm nút ---
+# --- HÀM PHỤ TRỢ BẤM NÚT (PHIÊN BẢN AN TOÀN) ---
 def click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, custom_id):
-    """Hàm phụ trợ để bấm nút trên tin nhắn Karuta bằng phương thức 'click'."""
-    application_id = karuta_id
-    session_id = bot.gateway.session_id
-    
-    data = {
-        "component_type": 2, # Button
-        "custom_id": custom_id
+    """Bấm nút bằng cách gửi request trực tiếp để tương thích với mọi phiên bản discum."""
+    url = "https://discord.com/api/v9/interactions"
+    payload = {
+        "type": 3,
+        "application_id": karuta_id,
+        "channel_id": channel_id,
+        "guild_id": guild_id,
+        "message_id": message_id,
+        "message_flags": message_flags,
+        "data": { "component_type": 2, "custom_id": custom_id },
+        "session_id": bot.gateway.session_id,
+        "nonce": str(int(time.time() * 1000))
     }
-    
-    bot.click(
-        applicationID=application_id,
-        channelID=channel_id,
-        guildID=guild_id,
-        messageID=message_id,
-        messageFlags=message_flags,
-        sessionID=session_id,
-        data=data
-    )
+    try:
+        # bot.s là đối tượng session của thư viện requests đã được xác thực
+        result = bot.s.post(url, json=payload)
+        result.raise_for_status()
+    except Exception as e:
+        print(f"[Click Error] Lỗi khi gửi yêu cầu bấm nút: {e}", flush=True)
 
-# --- HÀM MỚI: Logic chính cho Trợ lý Pha chế Solisfair (ĐÃ SỬA LỖI) ---
+# --- HÀM LOGIC SOLISFAIR (ĐÃ SỬA LỖI HOÀN CHỈNH) ---
 def run_solisfair_solver(stop_event):
     global solisfair_settings
     
@@ -181,14 +180,12 @@ def run_solisfair_solver(stop_event):
     bot = None
     channel_id = None
     message_id = None
+    guild_id = None
     try:
-        # --- Lấy bot hành động và kiểm tra trạng thái ---
         with bots_lock:
             bot_id_str = solisfair_settings.get("bot_id", "main_1")
-            
             if not bot_active_states.get(bot_id_str, False):
                 raise ValueError(f"Bot {bot_id_str.upper()} đang OFFLINE. Hãy bật trong System Status.")
-                
             target_bot_index = int(bot_id_str.split('_')[1]) - 1
             if not (0 <= target_bot_index < len(main_bots)):
                 raise ValueError("Bot ID không hợp lệ.")
@@ -199,8 +196,16 @@ def run_solisfair_solver(stop_event):
         if not channel_id:
             raise ValueError("Chưa cài đặt Channel ID.")
 
+        # Lấy Guild ID từ kênh
+        try:
+            channel_data = bot.getChannel(channel_id).json()
+            guild_id = channel_data.get('guild_id')
+            if not guild_id:
+                raise ValueError("Kênh này không thuộc một server (có thể là DM).")
+        except Exception as e:
+            raise ValueError(f"Không thể lấy thông tin kênh: {e}")
+
         update_status(f"Bot {bot_name} đang chuẩn bị...")
-        
         bot.sendMessage(channel_id, "k!event")
         time.sleep(3) 
 
@@ -211,25 +216,19 @@ def run_solisfair_solver(stop_event):
             raise ValueError("Không tìm thấy tin nhắn k!event. Hãy thử lại.")
         
         message_id = event_message['id']
-        guild_id = event_message.get('guild_id')
-        if not guild_id:
-            raise ValueError("Không thể lấy Guild ID từ tin nhắn sự kiện.")
-        
         update_status("Đã tìm thấy tin nhắn sự kiện.")
 
         # VÒNG LẶP GIẢI ĐỐ CHÍNH
         for i in range(100): 
             if stop_event.is_set():
-                update_status("Đã nhận lệnh dừng.")
-                break
+                update_status("Đã nhận lệnh dừng."); break
             
             update_status(f"Bắt đầu vòng lặp thứ {i+1}...")
             time.sleep(1.5)
 
             raw_msg_data = bot.getMessage(channel_id, message_id).json()
-            if isinstance(raw_msg_data, list) and raw_msg_data: msg_data = raw_msg_data[0]
-            elif isinstance(raw_msg_data, dict): msg_data = raw_msg_data
-            else:
+            msg_data = raw_msg_data[0] if isinstance(raw_msg_data, list) and raw_msg_data else raw_msg_data if isinstance(raw_msg_data, dict) else None
+            if not msg_data:
                 update_status(f"Dữ liệu tin nhắn không hợp lệ: {raw_msg_data}"); break
             
             message_flags = msg_data.get('flags', 0)
@@ -246,10 +245,7 @@ def run_solisfair_solver(stop_event):
             update_status("Đang thực hiện nước đi mặc định...")
             
             update_status("Đang tìm nút Chọn (tích xanh dương)...")
-            select_button_id = find_button_id_by_emoji_or_label(components, emoji_name='☑️')
-            if not select_button_id:
-                select_button_id = find_button_id_by_emoji_or_label(components, emoji_name='✔️')
-            
+            select_button_id = find_button_id_by_emoji_or_label(components, emoji_name='☑️') or find_button_id_by_emoji_or_label(components, emoji_name='✔️')
             if not select_button_id:
                 update_status("Lỗi: Không tìm thấy nút Chọn (Tích xanh dương)."); break
             
@@ -259,9 +255,8 @@ def run_solisfair_solver(stop_event):
 
             update_status("Đang tìm nút Xác nhận (tích xanh lá)...")
             raw_msg_data = bot.getMessage(channel_id, message_id).json()
-            if isinstance(raw_msg_data, list) and raw_msg_data: msg_data = raw_msg_data[0]
-            elif isinstance(raw_msg_data, dict): msg_data = raw_msg_data
-            else:
+            msg_data = raw_msg_data[0] if isinstance(raw_msg_data, list) and raw_msg_data else raw_msg_data if isinstance(raw_msg_data, dict) else None
+            if not msg_data:
                 update_status(f"Dữ liệu tin nhắn không hợp lệ sau khi nhấn chọn: {raw_msg_data}"); break
 
             message_flags = msg_data.get('flags', 0)
@@ -284,9 +279,7 @@ def run_solisfair_solver(stop_event):
         if bot and channel_id and message_id and guild_id:
             try:
                 raw_msg_data = bot.getMessage(channel_id, message_id).json()
-                if isinstance(raw_msg_data, list) and raw_msg_data: msg_data = raw_msg_data[0]
-                elif isinstance(raw_msg_data, dict): msg_data = raw_msg_data
-                else: msg_data = {}
+                msg_data = raw_msg_data[0] if isinstance(raw_msg_data, list) and raw_msg_data else raw_msg_data if isinstance(raw_msg_data, dict) else {}
                 
                 message_flags = msg_data.get('flags', 0)
                 components = msg_data.get('components', [])
@@ -300,8 +293,6 @@ def run_solisfair_solver(stop_event):
         solisfair_settings["is_running"] = False
         save_settings()
 
-
-# --- Các hàm logic cũ (handle_clan_drop, handle_grab, create_bot, etc.) giữ nguyên ---
 def handle_clan_drop(bot, msg, bot_num):
     if not (auto_clan_drop_settings.get("enabled") and auto_clan_drop_settings.get("ktb_channel_id")):
         return
