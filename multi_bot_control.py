@@ -144,16 +144,28 @@ def find_button_id_by_emoji_or_label(components, emoji_name=None, label=None):
                     return button.get('custom_id')
     return None
 
+# --- HÀM PHỤ TRỢ BẤM NÚT (PHIÊN BẢN AN TOÀN) ---
 def click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, custom_id):
+    """Bấm nút bằng cách gửi request trực tiếp để tương thích với mọi phiên bản discum."""
+    headers = {
+        "Authorization": bot.token,
+        "Content-Type": "application/json"
+    }
     url = "https://discord.com/api/v9/interactions"
     payload = {
-        "type": 3, "application_id": karuta_id, "channel_id": channel_id,
-        "guild_id": guild_id, "message_id": message_id, "message_flags": message_flags,
+        "type": 3,
+        "application_id": karuta_id,
+        "channel_id": channel_id,
+        "guild_id": guild_id,
+        "message_id": message_id,
+        "message_flags": message_flags,
         "data": { "component_type": 2, "custom_id": custom_id },
-        "session_id": bot.gateway.session_id, "nonce": str(int(time.time() * 1000))
+        "session_id": bot.gateway.session_id,
+        "nonce": str(int(time.time() * 1000))
     }
     try:
-        result = bot.s.post(url, json=payload)
+        # Sử dụng requests để gửi yêu cầu, không dùng bot.s
+        result = requests.post(url, headers=headers, json=payload)
         result.raise_for_status()
     except Exception as e:
         print(f"[Click Error] Lỗi khi gửi yêu cầu bấm nút: {e}", flush=True)
@@ -219,7 +231,6 @@ def run_solisfair_solver(stop_event):
             if "You don't have any fruit pieces" in embed_desc: update_status("Đã hết mảnh trái cây để đặt."); break
             if "Move the piece around the board" not in embed_desc: update_status("Không ở trong màn hình đặt mảnh. Dừng lại."); break
 
-            # --- LOGIC MỚI: Đánh giá các nước đi ---
             update_status("Bắt đầu đánh giá các nước đi...")
             best_move = {'col': 0, 'score': -1}
             right_arrow_id = find_button_id_by_emoji_or_label(components, emoji_name='▶️')
@@ -231,13 +242,11 @@ def run_solisfair_solver(stop_event):
                 if stop_event.is_set(): break
                 update_status(f"Đang đánh giá cột {col + 1}/5...")
                 
-                # Di chuyển đến cột cần đánh giá
                 while current_pos < col:
                     click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, right_arrow_id)
                     current_pos += 1
                     time.sleep(1.2)
 
-                # Đọc kết quả
                 eval_msg_raw = bot.getMessage(channel_id, message_id).json()
                 eval_msg = eval_msg_raw[0] if isinstance(eval_msg_raw, list) else eval_msg_raw
                 eval_desc = eval_msg.get('embeds', [{}])[0].get('description', '')
@@ -251,20 +260,17 @@ def run_solisfair_solver(stop_event):
                     best_move = {'col': col, 'score': score}
                     update_status(f"Tìm thấy nước đi tốt hơn ở cột {col+1} (Score: {score})")
 
-            # Reset về vị trí đầu tiên
             update_status("Đánh giá xong. Reset về vị trí đầu...")
             while current_pos > 0:
                 click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, left_arrow_id)
                 current_pos -= 1
                 time.sleep(1.2)
 
-            # Di chuyển đến vị trí tốt nhất
             update_status(f"Nước đi tốt nhất là cột {best_move['col']+1}. Đang di chuyển...")
             for _ in range(best_move['col']):
                 click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, right_arrow_id)
                 time.sleep(1.2)
 
-            # --- Bắt đầu xác nhận ---
             update_status("Đã đến vị trí tốt nhất. Bắt đầu xác nhận...")
             final_pos_raw = bot.getMessage(channel_id, message_id).json()
             final_pos_msg = final_pos_raw[0] if isinstance(final_pos_raw, list) else final_pos_raw
@@ -418,7 +424,7 @@ def handle_grab(bot, msg, bot_num):
                 if 'reactions' in full_msg_obj:
                     for reaction in full_msg_obj['reactions']:
                         if reaction['emoji']['name'] == '🍉':
-                            bot.addReaction(channel_id, last_drop_msg_id, "🍉")
+                            bot.addReaction(channel_id, last_drop_msg_id, "�")
                             break 
             except Exception as e:
                 print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
