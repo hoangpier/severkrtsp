@@ -133,10 +133,6 @@ def load_settings():
 
 # --- HÀM MỚI: Tìm custom_id của nút bấm một cách linh động ---
 def find_button_id_by_emoji_or_label(components, emoji_name=None, label=None):
-    """
-    Duyệt qua cấu trúc components của tin nhắn để tìm custom_id của một nút
-    dựa trên emoji hoặc label của nó.
-    """
     if not components: return None
     for row in components:
         for button in row.get('components', []):
@@ -149,6 +145,27 @@ def find_button_id_by_emoji_or_label(components, emoji_name=None, label=None):
                 if button_label and button_label.lower() == label.lower():
                     return button.get('custom_id')
     return None
+
+# --- HÀM MỚI: Hàm phụ trợ để bấm nút ---
+def click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, custom_id):
+    """Hàm phụ trợ để bấm nút trên tin nhắn Karuta bằng phương thức 'click'."""
+    application_id = karuta_id
+    session_id = bot.gateway.session_id
+    
+    data = {
+        "component_type": 2, # Button
+        "custom_id": custom_id
+    }
+    
+    bot.click(
+        applicationID=application_id,
+        channelID=channel_id,
+        guildID=guild_id,
+        messageID=message_id,
+        messageFlags=message_flags,
+        sessionID=session_id,
+        data=data
+    )
 
 # --- HÀM MỚI: Logic chính cho Trợ lý Pha chế Solisfair (ĐÃ SỬA LỖI) ---
 def run_solisfair_solver(stop_event):
@@ -190,11 +207,14 @@ def run_solisfair_solver(stop_event):
         messages = bot.getMessages(channel_id, num=10).json()
         event_message = next((m for m in messages if m.get('author', {}).get('id') == karuta_id and "Takumi's Solisfair Stand" in m.get('embeds', [{}])[0].get('title', '')), None)
         
-        # SỬA LỖI: 'NoneType' object is not subscriptable
         if not event_message:
             raise ValueError("Không tìm thấy tin nhắn k!event. Hãy thử lại.")
         
         message_id = event_message['id']
+        guild_id = event_message.get('guild_id')
+        if not guild_id:
+            raise ValueError("Không thể lấy Guild ID từ tin nhắn sự kiện.")
+        
         update_status("Đã tìm thấy tin nhắn sự kiện.")
 
         # VÒNG LẶP GIẢI ĐỐ CHÍNH
@@ -206,29 +226,22 @@ def run_solisfair_solver(stop_event):
             update_status(f"Bắt đầu vòng lặp thứ {i+1}...")
             time.sleep(1.5)
 
-            # SỬA LỖI: 'list' object has no attribute 'get'
             raw_msg_data = bot.getMessage(channel_id, message_id).json()
-            if isinstance(raw_msg_data, list) and raw_msg_data:
-                msg_data = raw_msg_data[0]
-            elif isinstance(raw_msg_data, dict):
-                msg_data = raw_msg_data
+            if isinstance(raw_msg_data, list) and raw_msg_data: msg_data = raw_msg_data[0]
+            elif isinstance(raw_msg_data, dict): msg_data = raw_msg_data
             else:
-                update_status(f"Dữ liệu tin nhắn không hợp lệ: {raw_msg_data}")
-                break
+                update_status(f"Dữ liệu tin nhắn không hợp lệ: {raw_msg_data}"); break
             
+            message_flags = msg_data.get('flags', 0)
             components = msg_data.get('components', [])
             embeds = msg_data.get('embeds', [])
-            if not embeds:
-                update_status("Tin nhắn không có embed. Dừng lại.")
-                break
+            if not embeds: update_status("Tin nhắn không có embed. Dừng lại."); break
             embed_desc = embeds[0].get('description', '')
 
             if "You don't have any fruit pieces" in embed_desc:
-                update_status("Đã hết mảnh trái cây để đặt.")
-                break
+                update_status("Đã hết mảnh trái cây để đặt."); break
             if "Move the piece around the board" not in embed_desc:
-                update_status("Không ở trong màn hình đặt mảnh. Dừng lại.")
-                break
+                update_status("Không ở trong màn hình đặt mảnh. Dừng lại."); break
 
             update_status("Đang thực hiện nước đi mặc định...")
             
@@ -238,33 +251,28 @@ def run_solisfair_solver(stop_event):
                 select_button_id = find_button_id_by_emoji_or_label(components, emoji_name='✔️')
             
             if not select_button_id:
-                update_status("Lỗi: Không tìm thấy nút Chọn (Tích xanh dương).")
-                break
+                update_status("Lỗi: Không tìm thấy nút Chọn (Tích xanh dương)."); break
             
             update_status("Đã tìm thấy nút Chọn. Đang nhấn...")
-            bot.interact(channel_id, message_id, custom_id=select_button_id)
+            click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, select_button_id)
             time.sleep(1.5)
 
             update_status("Đang tìm nút Xác nhận (tích xanh lá)...")
-            # SỬA LỖI: 'list' object has no attribute 'get'
             raw_msg_data = bot.getMessage(channel_id, message_id).json()
-            if isinstance(raw_msg_data, list) and raw_msg_data:
-                msg_data = raw_msg_data[0]
-            elif isinstance(raw_msg_data, dict):
-                msg_data = raw_msg_data
+            if isinstance(raw_msg_data, list) and raw_msg_data: msg_data = raw_msg_data[0]
+            elif isinstance(raw_msg_data, dict): msg_data = raw_msg_data
             else:
-                update_status(f"Dữ liệu tin nhắn không hợp lệ sau khi nhấn chọn: {raw_msg_data}")
-                break
+                update_status(f"Dữ liệu tin nhắn không hợp lệ sau khi nhấn chọn: {raw_msg_data}"); break
 
+            message_flags = msg_data.get('flags', 0)
             components = msg_data.get('components', [])
             confirm_button_id = find_button_id_by_emoji_or_label(components, emoji_name='✅')
             
             if not confirm_button_id:
-                update_status("Lỗi: Không tìm thấy nút Xác Nhận (Tích xanh lá).")
-                break
+                update_status("Lỗi: Không tìm thấy nút Xác Nhận (Tích xanh lá)."); break
 
             update_status("Đã tìm thấy nút Xác nhận. Đang nhấn...")
-            bot.interact(channel_id, message_id, custom_id=confirm_button_id)
+            click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, confirm_button_id)
             update_status("Đã xác nhận. Chờ Karuta xử lý...")
             time.sleep(4)
 
@@ -273,21 +281,18 @@ def run_solisfair_solver(stop_event):
     except Exception as e:
         update_status(f"Lỗi nghiêm trọng: {e}")
     finally:
-        if bot and channel_id and message_id:
+        if bot and channel_id and message_id and guild_id:
             try:
-                # SỬA LỖI: 'list' object has no attribute 'get'
                 raw_msg_data = bot.getMessage(channel_id, message_id).json()
-                if isinstance(raw_msg_data, list) and raw_msg_data:
-                    msg_data = raw_msg_data[0]
-                elif isinstance(raw_msg_data, dict):
-                    msg_data = raw_msg_data
-                else:
-                    msg_data = {}
+                if isinstance(raw_msg_data, list) and raw_msg_data: msg_data = raw_msg_data[0]
+                elif isinstance(raw_msg_data, dict): msg_data = raw_msg_data
+                else: msg_data = {}
                 
+                message_flags = msg_data.get('flags', 0)
                 components = msg_data.get('components', [])
                 back_button_id = find_button_id_by_emoji_or_label(components, label='Back')
                 if back_button_id:
-                    bot.interact(channel_id, message_id, custom_id=back_button_id)
+                    click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, back_button_id)
                     update_status("Đã nhấn Back để kết thúc.")
             except Exception as e:
                 update_status(f"Không thể nhấn Back: {e}")
