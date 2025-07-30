@@ -1,8 +1,3 @@
-Đã hiểu, đây là toàn bộ nội dung file `multi_bot_control lỗi.py` của bạn, với hàm `run_solisfair_solver` đã được sửa hoàn chỉnh.
-
-Bạn chỉ cần sao chép tất cả nội dung bên dưới và dán đè lên toàn bộ file cũ của mình.
-
-```python
 # PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG - TÍCH HỢP DROP CLAN - SOLISFAIR ASSISTANT
 import discum
 import threading
