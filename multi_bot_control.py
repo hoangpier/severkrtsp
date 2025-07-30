@@ -144,21 +144,22 @@ def find_button_id_by_emoji_or_label(components, emoji_name=None, label=None):
                     return button.get('custom_id')
     return None
 
-def click_karuta_button(bot, token, channel_id, guild_id, message_id, message_flags, custom_id):
-    headers = { "Authorization": token }
-    url = "https://discord.com/api/v9/interactions"
-    payload = {
-        "type": 3, "application_id": karuta_id, "channel_id": channel_id,
-        "guild_id": guild_id, "message_id": message_id, "message_flags": message_flags,
-        "data": { "component_type": 2, "custom_id": custom_id },
-        "session_id": bot.gateway.session_id, "nonce": str(int(time.time() * 1000))
-    }
+def click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, custom_id):
+    """Bấm nút bằng phương thức request nội bộ của discum."""
     try:
-        # Sử dụng requests để gửi yêu cầu, không dùng bot.s
-        result = requests.post(url, headers=headers, json=payload)
-        result.raise_for_status()
+        bot.click(
+            applicationID=karuta_id,
+            channelID=channel_id,
+            guildID=guild_id,
+            messageID=message_id,
+            messageFlags=message_flags,
+            data={
+                "component_type": 2,
+                "custom_id": custom_id,
+            },
+        )
     except Exception as e:
-        print(f"[Click Error] Lỗi khi gửi yêu cầu bấm nút: {e}", flush=True)
+        print(f"[Click Error] Lỗi khi bấm nút: {e}", flush=True)
 
 # --- HÀM LOGIC SOLISFAIR (PHIÊN BẢN THÔNG MINH HOÀN CHỈNH) ---
 def run_solisfair_solver(stop_event):
@@ -171,7 +172,7 @@ def run_solisfair_solver(stop_event):
     update_status("Bắt đầu khởi động...")
     solisfair_settings["is_running"] = True
     
-    bot = None; channel_id = None; message_id = None; guild_id = None; bot_token = None
+    bot = None; channel_id = None; message_id = None; guild_id = None
     try:
         with bots_lock:
             bot_id_str = solisfair_settings.get("bot_id", "main_1")
@@ -181,7 +182,6 @@ def run_solisfair_solver(stop_event):
             if not (0 <= target_bot_index < len(main_bots)):
                 raise ValueError("Bot ID không hợp lệ.")
             bot = main_bots[target_bot_index]
-            bot_token = main_tokens[target_bot_index].strip()
             bot_name = BOT_NAMES[target_bot_index]
 
         channel_id = solisfair_settings["channel_id"]
@@ -195,7 +195,7 @@ def run_solisfair_solver(stop_event):
 
         update_status(f"Bot {bot_name} đang chuẩn bị...")
         bot.sendMessage(channel_id, "k!event")
-        time.sleep(3) 
+        time.sleep(3.5) 
 
         messages = bot.getMessages(channel_id, num=10).json()
         event_message = next((m for m in messages if m.get('author', {}).get('id') == karuta_id and "Takumi's Solisfair Stand" in m.get('embeds', [{}])[0].get('title', '')), None)
@@ -238,15 +238,14 @@ def run_solisfair_solver(stop_event):
                     if stop_event.is_set(): break
                     update_status(f"Đang đánh giá ô ({r+1},{c+1})...")
                     
-                    # Di chuyển đến ô (r, c)
                     while current_pos['row'] < r:
-                        click_karuta_button(bot, bot_token, channel_id, guild_id, message_id, message_flags, arrow_ids['down']); current_pos['row'] += 1; time.sleep(1.2)
+                        click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, arrow_ids['down']); current_pos['row'] += 1; time.sleep(1.2)
                     while current_pos['row'] > r:
-                        click_karuta_button(bot, bot_token, channel_id, guild_id, message_id, message_flags, arrow_ids['up']); current_pos['row'] -= 1; time.sleep(1.2)
+                        click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, arrow_ids['up']); current_pos['row'] -= 1; time.sleep(1.2)
                     while current_pos['col'] < c:
-                        click_karuta_button(bot, bot_token, channel_id, guild_id, message_id, message_flags, arrow_ids['right']); current_pos['col'] += 1; time.sleep(1.2)
+                        click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, arrow_ids['right']); current_pos['col'] += 1; time.sleep(1.2)
                     while current_pos['col'] > c:
-                        click_karuta_button(bot, bot_token, channel_id, guild_id, message_id, message_flags, arrow_ids['left']); current_pos['col'] -= 1; time.sleep(1.2)
+                        click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, arrow_ids['left']); current_pos['col'] -= 1; time.sleep(1.2)
                     
                     eval_msg_raw = bot.getMessage(channel_id, message_id).json()
                     eval_msg = eval_msg_raw[0] if isinstance(eval_msg_raw, list) else eval_msg_raw
@@ -264,13 +263,13 @@ def run_solisfair_solver(stop_event):
 
             update_status(f"Nước đi tốt nhất là ({best_move['row']+1},{best_move['col']+1}). Đang di chuyển...")
             while current_pos['row'] < best_move['row']:
-                click_karuta_button(bot, bot_token, channel_id, guild_id, message_id, message_flags, arrow_ids['down']); current_pos['row'] += 1; time.sleep(1.2)
+                click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, arrow_ids['down']); current_pos['row'] += 1; time.sleep(1.2)
             while current_pos['row'] > best_move['row']:
-                click_karuta_button(bot, bot_token, channel_id, guild_id, message_id, message_flags, arrow_ids['up']); current_pos['row'] -= 1; time.sleep(1.2)
+                click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, arrow_ids['up']); current_pos['row'] -= 1; time.sleep(1.2)
             while current_pos['col'] < best_move['col']:
-                click_karuta_button(bot, bot_token, channel_id, guild_id, message_id, message_flags, arrow_ids['right']); current_pos['col'] += 1; time.sleep(1.2)
+                click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, arrow_ids['right']); current_pos['col'] += 1; time.sleep(1.2)
             while current_pos['col'] > best_move['col']:
-                click_karuta_button(bot, bot_token, channel_id, guild_id, message_id, message_flags, arrow_ids['left']); current_pos['col'] -= 1; time.sleep(1.2)
+                click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, arrow_ids['left']); current_pos['col'] -= 1; time.sleep(1.2)
 
             update_status("Đã đến vị trí tốt nhất. Bắt đầu xác nhận...")
             final_pos_raw = bot.getMessage(channel_id, message_id).json()
@@ -279,7 +278,7 @@ def run_solisfair_solver(stop_event):
             select_button_id = find_button_id_by_emoji_or_label(final_pos_msg.get('components', []), emoji_name='☑️') or find_button_id_by_emoji_or_label(final_pos_msg.get('components', []), emoji_name='✔️')
             if not select_button_id: update_status("Lỗi: Không tìm thấy nút Chọn."); break
             
-            click_karuta_button(bot, bot_token, channel_id, guild_id, message_id, final_pos_msg.get('flags', 0), select_button_id)
+            click_karuta_button(bot, channel_id, guild_id, message_id, final_pos_msg.get('flags', 0), select_button_id)
             time.sleep(1.5)
 
             confirm_msg_raw = bot.getMessage(channel_id, message_id).json()
@@ -288,7 +287,7 @@ def run_solisfair_solver(stop_event):
             confirm_button_id = find_button_id_by_emoji_or_label(confirm_msg.get('components', []), emoji_name='✅')
             if not confirm_button_id: update_status("Lỗi: Không tìm thấy nút Xác Nhận."); break
 
-            click_karuta_button(bot, bot_token, channel_id, guild_id, message_id, confirm_msg.get('flags', 0), confirm_button_id)
+            click_karuta_button(bot, channel_id, guild_id, message_id, confirm_msg.get('flags', 0), confirm_button_id)
             update_status("Đã xác nhận. Chờ Karuta xử lý...")
             time.sleep(4)
 
@@ -297,14 +296,14 @@ def run_solisfair_solver(stop_event):
     except Exception as e:
         update_status(f"Lỗi nghiêm trọng: {e}")
     finally:
-        if bot and channel_id and message_id and guild_id and bot_token:
+        if bot and channel_id and message_id and guild_id:
             try:
                 raw_msg_data = bot.getMessage(channel_id, message_id).json()
                 msg_data = raw_msg_data[0] if isinstance(raw_msg_data, list) and raw_msg_data else raw_msg_data
                 if isinstance(msg_data, dict):
                     back_button_id = find_button_id_by_emoji_or_label(msg_data.get('components', []), label='Back')
                     if back_button_id:
-                        click_karuta_button(bot, bot_token, channel_id, guild_id, message_id, msg_data.get('flags', 0), back_button_id)
+                        click_karuta_button(bot, channel_id, guild_id, message_id, msg_data.get('flags', 0), back_button_id)
                         update_status("Đã nhấn Back để kết thúc.")
             except Exception as e:
                 update_status(f"Không thể nhấn Back: {e}")
