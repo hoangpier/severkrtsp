@@ -39,7 +39,7 @@ auto_clan_drop_settings = {
     "ktb_channel_id": "",
     "last_cycle_start_time": 0,
     "cycle_interval": 1800, # 30 phút
-    "bot_delay": 70, # 70 giây
+    "bot_delay": 140, # 70 giây
     "heart_thresholds": {}
 }
 
@@ -289,7 +289,7 @@ def run_clan_drop_cycle():
             bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
             print(f"[Clan Drop] Bot {bot_name} đang gửi 'kd'...", flush=True)
             bot.sendMessage(channel_id, "kd")
-            time.sleep(settings.get("bot_delay", 70))
+            time.sleep(settings.get("bot_delay", 140))
         except Exception as e:
             print(f"[Clan Drop] Lỗi khi gửi 'kd' từ bot {bot_num}: {e}", flush=True)
     
