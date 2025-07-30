@@ -200,7 +200,8 @@ def run_solisfair_solver(stop_event):
             
             update_status(f"Bắt đầu vòng lặp thứ {i+1}...")
             time.sleep(1.5)
-            msg_data = bot.getMessage(channel_id, message_id).json()[0]
+            # SỬA LỖI: API getMessage trả về một object, không phải list. Bỏ [0].
+            msg_data = bot.getMessage(channel_id, message_id).json()
             components = msg_data.get('components', [])
             embed_desc = msg_data.get('embeds', [{}])[0].get('description', '')
 
@@ -227,7 +228,8 @@ def run_solisfair_solver(stop_event):
             time.sleep(1.5)
 
             # Bước 2: Nhấn nút xác nhận (tích xanh lá)
-            msg_data = bot.getMessage(channel_id, message_id).json()[0]
+            # SỬA LỖI: API getMessage trả về một object, không phải list. Bỏ [0].
+            msg_data = bot.getMessage(channel_id, message_id).json()
             components = msg_data.get('components', [])
             confirm_button_id = find_button_id_by_emoji_or_label(components, emoji_name='✅')
             
@@ -246,7 +248,8 @@ def run_solisfair_solver(stop_event):
     finally:
         if bot and channel_id and message_id:
             try:
-                msg_data = bot.getMessage(channel_id, message_id).json()[0]
+                # SỬA LỖI: API getMessage trả về một object, không phải list. Bỏ [0].
+                msg_data = bot.getMessage(channel_id, message_id).json()
                 components = msg_data.get('components', [])
                 back_button_id = find_button_id_by_emoji_or_label(components, label='Back')
                 if back_button_id:
@@ -1178,4 +1181,4 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False
