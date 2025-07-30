@@ -1,3 +1,8 @@
+Đã hiểu, đây là toàn bộ nội dung file `multi_bot_control lỗi.py` của bạn, với hàm `run_solisfair_solver` đã được sửa hoàn chỉnh.
+
+Bạn chỉ cần sao chép tất cả nội dung bên dưới và dán đè lên toàn bộ file cũ của mình.
+
+```python
 # PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG - TÍCH HỢP DROP CLAN - SOLISFAIR ASSISTANT
 import discum
 import threading
@@ -161,8 +166,7 @@ def click_karuta_button(bot, channel_id, guild_id, message_id, message_flags, cu
     except Exception as e:
         print(f"[Click Error] Lỗi khi bấm nút: {e}", flush=True)
 
-# --- HÀM LOGIC SOLISFAIR (PHIÊN BẢN THÔNG MINH HOÀN CHỈNH) ---
-# --- HÀM LOGIC SOLISFAIR (PHIÊN BẢN SỬA LỖI VÀ TỐI ƯU) ---
+# --- HÀM LOGIC SOLISFAIR (PHIÊN BẢN HOÀN CHỈNH - ĐÃ SỬA LỖI) ---
 def run_solisfair_solver(stop_event):
     global solisfair_settings
     
@@ -179,7 +183,7 @@ def run_solisfair_solver(stop_event):
     guild_id = None
 
     try:
-        # --- Lấy thông tin bot và kênh (giữ nguyên) ---
+        # --- Lấy thông tin bot và kênh ---
         with bots_lock:
             bot_id_str = solisfair_settings.get("bot_id", "main_1")
             if not bot_active_states.get(bot_id_str, False):
@@ -237,7 +241,9 @@ def run_solisfair_solver(stop_event):
 
             # --- Tối ưu hóa: Phân tích bàn cờ từ description ---
             board_lines = [line.strip() for line in embed_desc.split('\n') if '·' in line]
-            piece_preview_line = next((line for line in embed_desc.split('\n') if line.startswith('`')), None)
+            
+            # **SỬA LỖI TẠI ĐÂY**: Tìm dòng mảnh ghép một cách linh hoạt hơn
+            piece_preview_line = next((line for line in embed_desc.split('\n') if '`' in line and '//' in line), None)
             
             if not piece_preview_line:
                 update_status("Không thể tìm thấy hình dạng mảnh ghép.")
@@ -364,6 +370,7 @@ def run_solisfair_solver(stop_event):
 
         solisfair_settings["is_running"] = False
         save_settings()
+
 
 def handle_clan_drop(bot, msg, bot_num):
     if not (auto_clan_drop_settings.get("enabled") and auto_clan_drop_settings.get("ktb_channel_id")):
@@ -725,7 +732,6 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <!-- PANEL MỚI CHO SOLISFAIR -->
             <div class="panel">
                 <h2><i class="fas fa-cocktail"></i> Trợ Lý Pha Chế Solisfair</h2>
                 <div class="server-sub-panel" style="border-top: none; margin-top: 0; padding-top: 0;">
@@ -752,8 +758,6 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
             </div>
-            <!-- KẾT THÚC PANEL MỚI -->
-
             <div class="panel clan-drop-panel">
                 <h2><i class="fas fa-users"></i> Clan Auto Drop</h2>
                 <div class="status-grid" style="grid-template-columns: 1fr;">
