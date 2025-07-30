@@ -1,4 +1,4 @@
-# PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG - TÍCH HỢP DROP CLAN
+# PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG - TÍCH HỢP DROP CLAN - SOLISFAIR ASSISTANT
 import discum
 import threading
 import time
@@ -43,6 +43,15 @@ auto_clan_drop_settings = {
     "heart_thresholds": {}
 }
 
+# --- CHỨC NĂNG SOLISFAIR: Cài đặt cho Trợ lý Pha chế ---
+solisfair_settings = {
+    "enabled": False, # Chỉ dùng để lưu trạng thái bật/tắt trên UI
+    "is_running": False, # Trạng thái chạy/dừng của bot giải đố
+    "channel_id": "",   # Kênh để chạy lệnh k!event
+    "bot_id": "main_1", # Bot sẽ thực hiện hành động
+    "status_message": "Sẵn sàng." # Tin nhắn trạng thái cho giao diện
+}
+
 # Cài đặt toàn cục
 auto_reboot_enabled = False
 auto_reboot_delay = 3600
@@ -51,7 +60,8 @@ last_reboot_cycle_time = 0
 # Các biến điều khiển luồng
 auto_reboot_stop_event = threading.Event()
 auto_clan_drop_stop_event = threading.Event()
-spam_thread, auto_reboot_thread, auto_clan_drop_thread = None, None, None
+solisfair_stop_event = threading.Event() # Event để dừng luồng Solisfair
+spam_thread, auto_reboot_thread, auto_clan_drop_thread, solisfair_thread = None, None, None, None
 bots_lock = threading.Lock()
 server_start_time = time.time()
 bot_active_states = {}
@@ -68,7 +78,8 @@ def save_settings():
         'bot_active_states': bot_active_states,
         'last_reboot_cycle_time': last_reboot_cycle_time,
         'watermelon_grab_states': watermelon_grab_states,
-        'auto_clan_drop_settings': auto_clan_drop_settings
+        'auto_clan_drop_settings': auto_clan_drop_settings,
+        'solisfair_settings': solisfair_settings # <-- THÊM MỚI
     }
     headers = {'Content-Type': 'application/json', 'X-Master-Key': api_key}
     url = f"https://api.jsonbin.io/v3/b/{bin_id}"
@@ -79,7 +90,7 @@ def save_settings():
     except Exception as e: print(f"[Settings] Exception khi lưu cài đặt: {e}", flush=True)
 
 def load_settings():
-    global servers, auto_reboot_enabled, auto_reboot_delay, bot_active_states, last_reboot_cycle_time, watermelon_grab_states, auto_clan_drop_settings
+    global servers, auto_reboot_enabled, auto_reboot_delay, bot_active_states, last_reboot_cycle_time, watermelon_grab_states, auto_clan_drop_settings, solisfair_settings
     api_key = os.getenv("JSONBIN_API_KEY")
     bin_id = os.getenv("JSONBIN_BIN_ID")
     if not api_key or not bin_id:
@@ -98,12 +109,19 @@ def load_settings():
                 bot_active_states = settings.get('bot_active_states', {})
                 last_reboot_cycle_time = settings.get('last_reboot_cycle_time', 0)
                 watermelon_grab_states = settings.get('watermelon_grab_states', {})
-                # Tải cài đặt cho chức năng mới
+                
                 loaded_clan_settings = settings.get('auto_clan_drop_settings', {})
                 if loaded_clan_settings:
                     if 'heart_thresholds' not in loaded_clan_settings:
                         loaded_clan_settings['heart_thresholds'] = {}
                     auto_clan_drop_settings.update(loaded_clan_settings)
+                
+                # --- TẢI CÀI ĐẶT SOLISFAIR ---
+                loaded_solisfair_settings = settings.get('solisfair_settings', {})
+                if loaded_solisfair_settings:
+                    solisfair_settings.update(loaded_solisfair_settings)
+                    solisfair_settings['is_running'] = False # Luôn bắt đầu ở trạng thái dừng
+
                 print("[Settings] Đã tải cài đặt từ JSONBin.io.", flush=True)
             else:
                 print("[Settings] JSONBin rỗng, bắt đầu với cài đặt mặc định và lưu lại.", flush=True)
@@ -113,7 +131,134 @@ def load_settings():
 
 # --- CÁC HÀM LOGIC BOT ---
 
-# --- CHỨC NĂNG MỚI: Xử lý nhặt thẻ từ drop clan ---
+# --- HÀM MỚI: Tìm custom_id của nút bấm một cách linh động ---
+def find_button_id_by_emoji_or_label(components, emoji_name=None, label=None):
+    """
+    Duyệt qua cấu trúc components của tin nhắn để tìm custom_id của một nút
+    dựa trên emoji hoặc label của nó.
+    """
+    if not components: return None
+    for row in components:
+        for button in row.get('components', []):
+            if emoji_name:
+                button_emoji = button.get('emoji', {})
+                if button_emoji and button_emoji.get('name') == emoji_name:
+                    return button.get('custom_id')
+            if label:
+                button_label = button.get('label', '')
+                if button_label and button_label.lower() == label.lower():
+                    return button.get('custom_id')
+    return None
+
+# --- HÀM MỚI: Logic chính cho Trợ lý Pha chế Solisfair ---
+def run_solisfair_solver(stop_event):
+    global solisfair_settings
+    
+    def update_status(message):
+        print(f"[Solisflair] {message}", flush=True)
+        solisfair_settings["status_message"] = message
+
+    update_status("Bắt đầu khởi động...")
+    solisfair_settings["is_running"] = True
+    
+    bot = None
+    channel_id = None
+    message_id = None
+    try:
+        # --- Lấy bot hành động ---
+        with bots_lock:
+            bot_id_str = solisfair_settings.get("bot_id", "main_1")
+            target_bot_index = int(bot_id_str.split('_')[1]) - 1
+            if not (0 <= target_bot_index < len(main_bots)):
+                raise ValueError("Bot ID không hợp lệ.")
+            bot = main_bots[target_bot_index]
+            bot_name = BOT_NAMES[target_bot_index]
+
+        channel_id = solisfair_settings["channel_id"]
+        if not channel_id:
+            raise ValueError("Chưa cài đặt Channel ID.")
+
+        update_status(f"Bot {bot_name} đang chuẩn bị...")
+        
+        bot.sendMessage(channel_id, "k!event")
+        time.sleep(3) 
+
+        messages = bot.getMessages(channel_id, num=10).json()
+        event_message = next((m for m in messages if m.get('author', {}).get('id') == karuta_id and "Takumi's Solisfair Stand" in m.get('embeds', [{}])[0].get('title', '')), None)
+        
+        if not event_message:
+            raise ValueError("Không tìm thấy tin nhắn k!event. Hãy thử lại.")
+        
+        message_id = event_message['id']
+        update_status("Đã tìm thấy tin nhắn sự kiện.")
+
+        # VÒNG LẶP GIẢI ĐỐ CHÍNH
+        for i in range(100): 
+            if stop_event.is_set():
+                update_status("Đã nhận lệnh dừng.")
+                break
+            
+            update_status(f"Bắt đầu vòng lặp thứ {i+1}...")
+            time.sleep(1.5)
+            msg_data = bot.getMessage(channel_id, message_id).json()[0]
+            components = msg_data.get('components', [])
+            embed_desc = msg_data.get('embeds', [{}])[0].get('description', '')
+
+            if "You don't have any fruit pieces" in embed_desc:
+                update_status("Đã hết mảnh trái cây để đặt.")
+                break
+            if "Move the piece around the board" not in embed_desc:
+                update_status("Không ở trong màn hình đặt mảnh. Dừng lại.")
+                break
+
+            update_status("Đang thực hiện nước đi mặc định...")
+            
+            # Bước 1: Nhấn nút chọn (tích xanh dương)
+            select_button_id = find_button_id_by_emoji_or_label(components, emoji_name='☑️')
+            if not select_button_id:
+                select_button_id = find_button_id_by_emoji_or_label(components, emoji_name='✔️')
+            
+            if not select_button_id:
+                update_status("Lỗi: Không tìm thấy nút Chọn (Tích xanh dương).")
+                break
+            
+            bot.interact(channel_id, message_id, custom_id=select_button_id)
+            update_status("Đã nhấn nút Chọn. Chờ 1.5 giây...")
+            time.sleep(1.5)
+
+            # Bước 2: Nhấn nút xác nhận (tích xanh lá)
+            msg_data = bot.getMessage(channel_id, message_id).json()[0]
+            components = msg_data.get('components', [])
+            confirm_button_id = find_button_id_by_emoji_or_label(components, emoji_name='✅')
+            
+            if not confirm_button_id:
+                update_status("Lỗi: Không tìm thấy nút Xác Nhận (Tích xanh lá).")
+                break
+
+            bot.interact(channel_id, message_id, custom_id=confirm_button_id)
+            update_status("Đã nhấn nút Xác nhận. Chờ Karuta xử lý...")
+            time.sleep(4)
+
+        update_status("Hoàn thành chu trình.")
+
+    except Exception as e:
+        update_status(f"Lỗi nghiêm trọng: {e}")
+    finally:
+        if bot and channel_id and message_id:
+            try:
+                msg_data = bot.getMessage(channel_id, message_id).json()[0]
+                components = msg_data.get('components', [])
+                back_button_id = find_button_id_by_emoji_or_label(components, label='Back')
+                if back_button_id:
+                    bot.interact(channel_id, message_id, custom_id=back_button_id)
+                    update_status("Đã nhấn Back để kết thúc.")
+            except Exception as e:
+                update_status(f"Không thể nhấn Back: {e}")
+
+        solisfair_settings["is_running"] = False
+        save_settings()
+
+# --- Các hàm logic cũ (handle_clan_drop, handle_grab, create_bot, etc.) giữ nguyên ---
 def handle_clan_drop(bot, msg, bot_num):
     if not (auto_clan_drop_settings.get("enabled") and auto_clan_drop_settings.get("ktb_channel_id")):
         return
@@ -166,7 +311,6 @@ def handle_clan_drop(bot, msg, bot_num):
     
     threading.Thread(target=grab_handler).start()
 
-# --- CHỨC NĂNG CŨ: Xử lý nhặt thẻ server (KHÔI PHỤC LOGIC GỐC) ---
 def handle_grab(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
@@ -247,14 +391,11 @@ def create_bot(token, bot_identifier, is_main=False):
                 print(f"Đã đăng nhập: {user_id} ({bot_name})", flush=True)
 
     if is_main:
-        # --- SỬA LỖI: Xây dựng lại bộ định tuyến tin nhắn ---
         @bot.gateway.command
         def on_message(resp):
             if resp.event.message:
                 msg = resp.parsed.auto()
-                # --- FIX --- Sửa điều kiện để bắt được cả 2 loại tin nhắn drop
                 if msg.get("author", {}).get("id") == karuta_id and "dropping" in msg.get("content", "").lower():
-                    # Phân loại drop clan (có mentions) và drop server (không có mentions)
                     if msg.get("mentions"):
                         handle_clan_drop(bot, msg, bot_identifier)
                     else:
@@ -263,9 +404,6 @@ def create_bot(token, bot_identifier, is_main=False):
     threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
 
-# --- CÁC VÒNG LẶP NỀN ---
-
-# --- CHỨC NĂNG MỚI: Logic thực thi một chu kỳ drop ---
 def run_clan_drop_cycle():
     global auto_clan_drop_settings
     print("[Clan Drop] Bắt đầu chu kỳ drop clan.", flush=True)
@@ -296,7 +434,6 @@ def run_clan_drop_cycle():
     auto_clan_drop_settings["last_cycle_start_time"] = time.time()
     save_settings()
 
-# --- CHỨC NĂNG MỚI: Vòng lặp hẹn giờ cho drop clan ---
 def auto_clan_drop_loop():
     while not auto_clan_drop_stop_event.is_set():
         try:
@@ -315,7 +452,6 @@ def auto_clan_drop_loop():
             print(f"[ERROR in auto_clan_drop_loop] {e}", flush=True)
             time.sleep(60)
     print("[Clan Drop] Luồng tự động drop clan đã dừng.", flush=True)
-
 
 def auto_reboot_loop():
     global last_reboot_cycle_time, main_bots
@@ -349,7 +485,6 @@ def spam_loop():
         try:
             current_server_ids = {s['id'] for s in servers}
             
-            # Dừng các luồng không còn server tương ứng
             for server_id in list(active_server_threads.keys()):
                 if server_id not in current_server_ids:
                     print(f"[Spam Control] Dừng luồng spam cho server đã bị xóa: {server_id}", flush=True)
@@ -435,7 +570,7 @@ HTML_TEMPLATE = """
         .btn-small { padding: 5px 10px; font-size: 0.9em;}
         .input-group { display: flex; align-items: stretch; gap: 10px; margin-bottom: 15px; }
         .input-group label { background: #000; border: 1px solid var(--border-color); border-right: 0; padding: 10px 15px; border-radius: 4px 0 0 4px; display:flex; align-items:center; min-width: 120px;}
-        .input-group input, .input-group textarea { flex-grow: 1; background: #000; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 0 4px 4px 0; font-family: 'Courier Prime', monospace; }
+        .input-group input, .input-group textarea, .input-group select { flex-grow: 1; background: #000; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 0 4px 4px 0; font-family: 'Courier Prime', monospace; }
         .grab-section { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 8px;}
         .grab-section h3 { margin: 0; display: flex; align-items: center; gap: 10px; width: 80px; flex-shrink: 0; }
         .grab-section .input-group { margin-bottom: 0; flex-grow: 1; margin-left: 20px;}
@@ -484,6 +619,35 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
+            <!-- PANEL MỚI CHO SOLISFAIR -->
+            <div class="panel">
+                <h2><i class="fas fa-cocktail"></i> Trợ Lý Pha Chế Solisfair</h2>
+                <div class="server-sub-panel" style="border-top: none; margin-top: 0; padding-top: 0;">
+                    <h3><i class="fas fa-robot"></i> Điều Khiển</h3>
+                    <div class="input-group">
+                        <label>Channel ID</label>
+                        <input type="text" id="solisfair-channel-id" value="{{ solisfair_settings.channel_id or '' }}">
+                    </div>
+                    <div class="input-group">
+                        <label>Bot Thực Hiện</label>
+                        <select id="solisfair-bot-id">
+                            {% for bot in main_bots_info %}
+                            <option value="main_{{ bot.id }}" {% if solisfair_settings.bot_id == 'main_' + bot.id|string %}selected{% endif %}>{{ bot.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <button type="button" id="solisfair-save-btn" class="btn btn-small" style="margin-bottom: 15px;">Lưu Cài Đặt</button>
+                    <button type="button" id="solisfair-toggle-btn" class="btn">BẮT ĐẦU</button>
+                </div>
+                 <div class="server-sub-panel">
+                    <h3><i class="fas fa-info-circle"></i> Trạng Thái</h3>
+                    <div id="solisfair-status" style="padding: 10px; background: rgba(0,0,0,0.3); border-radius: 4px; min-height: 40px; font-family: 'Courier Prime', monospace;">
+                        Sẵn sàng.
+                    </div>
+                </div>
+            </div>
+            <!-- KẾT THÚC PANEL MỚI -->
+
             <div class="panel clan-drop-panel">
                 <h2><i class="fas fa-users"></i> Clan Auto Drop</h2>
                 <div class="status-grid" style="grid-template-columns: 1fr;">
@@ -519,7 +683,6 @@ HTML_TEMPLATE = """
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-watermelon-slice"></i> Watermelon Grab (All Servers)</h3>
                     <div id="global-watermelon-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
-                        <!-- JS will populate this -->
                     </div>
                 </div>
             </div>
@@ -528,14 +691,12 @@ HTML_TEMPLATE = """
             <div class="panel server-panel" data-server-id="{{ server.id }}">
                 <button class="btn-delete-server" title="Delete Server"><i class="fas fa-times"></i></button>
                 <h2><i class="fas fa-server"></i> {{ server.name }}</h2>
-                
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-cogs"></i> Channel Config</h3>
                     <div class="input-group"><label>Main Channel ID</label><input type="text" class="channel-input" data-field="main_channel_id" value="{{ server.main_channel_id or '' }}"></div>
                     <div class="input-group"><label>KTB Channel ID</label><input type="text" class="channel-input" data-field="ktb_channel_id" value="{{ server.ktb_channel_id or '' }}"></div>
                     <div class="input-group"><label>Spam Channel ID</label><input type="text" class="channel-input" data-field="spam_channel_id" value="{{ server.spam_channel_id or '' }}"></div>
                 </div>
-
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-crosshairs"></i> Soul Harvest (Card Grab)</h3>
                     {% for bot in main_bots_info %}
@@ -550,7 +711,6 @@ HTML_TEMPLATE = """
                     </div>
                     {% endfor %}
                 </div>
-                
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-paper-plane"></i> Auto Broadcast</h3>
                     <div class="input-group"><label>Message</label><textarea class="spam-message" rows="2">{{ server.spam_message or '' }}</textarea></div>
@@ -602,6 +762,17 @@ HTML_TEMPLATE = """
                     updateElement(document.getElementById('clan-drop-toggle-btn'), { textContent: data.auto_clan_drop_status.enabled ? 'DISABLE' : 'ENABLE' });
                 }
 
+                // --- CẬP NHẬT GIAO DIỆN SOLISFAIR ---
+                if (data.solisfair_settings) {
+                    const settings = data.solisfair_settings;
+                    updateElement(document.getElementById('solisfair-toggle-btn'), { textContent: settings.is_running ? 'DỪNG LẠI' : 'BẮT ĐẦU' });
+                    updateElement(document.getElementById('solisfair-status'), { textContent: settings.status_message });
+                    const channelInput = document.getElementById('solisfair-channel-id');
+                    if (document.activeElement !== channelInput) { updateElement(channelInput, { value: settings.channel_id }); }
+                    const botSelect = document.getElementById('solisfair-bot-id');
+                    if (document.activeElement !== botSelect) { updateElement(botSelect, { value: settings.bot_id }); }
+                }
+
                 const botListContainer = document.getElementById('bot-status-list');
                 botListContainer.innerHTML = ''; 
                 const allBots = [...data.bot_statuses.main_bots, ...data.bot_statuses.sub_accounts];
@@ -651,6 +822,18 @@ HTML_TEMPLATE = """
         document.querySelector('.container').addEventListener('click', e => {
             const button = e.target.closest('button');
             if (!button) return;
+
+            // --- XỬ LÝ NÚT BẤM SOLISFAIR ---
+            if (button.id === 'solisfair-toggle-btn') {
+                postData('/api/solisfair_toggle');
+                return;
+            }
+            if (button.id === 'solisfair-save-btn') {
+                const channel_id = document.getElementById('solisfair-channel-id').value;
+                const bot_id = document.getElementById('solisfair-bot-id').value;
+                postData('/api/solisfair_update_settings', { channel_id, bot_id });
+                return;
+            }
 
             if (button.id === 'clan-drop-toggle-btn') {
                 postData('/api/clan_drop_toggle');
@@ -730,9 +913,38 @@ def index():
         auto_reboot_enabled=auto_reboot_enabled, 
         auto_reboot_delay=auto_reboot_delay, 
         main_bots_info=main_bots_info,
-        auto_clan_drop_settings=auto_clan_drop_settings
+        auto_clan_drop_settings=auto_clan_drop_settings,
+        solisfair_settings=solisfair_settings # <-- THÊM MỚI
     )
 
+# --- API MỚI CHO SOLISFAIR ---
+@app.route("/api/solisfair_toggle", methods=['POST'])
+def api_solisfair_toggle():
+    global solisfair_thread, solisfair_stop_event
+    
+    if solisfair_settings.get("is_running"):
+        solisfair_stop_event.set()
+        solisfair_settings["status_message"] = "Đang dừng..."
+        msg = "Đã gửi yêu cầu dừng Trợ lý Pha chế."
+    else:
+        if not solisfair_settings.get('channel_id'):
+            return jsonify({'status': 'error', 'message': 'Bạn cần cài đặt Channel ID trước.'})
+        solisfair_stop_event.clear()
+        solisfair_thread = threading.Thread(target=run_solisfair_solver, args=(solisfair_stop_event,), daemon=True)
+        solisfair_thread.start()
+        msg = "Trợ lý Pha chế đã được kích hoạt."
+        
+    return jsonify({'status': 'success', 'message': msg})
+
+@app.route("/api/solisfair_update_settings", methods=['POST'])
+def api_solisfair_update_settings():
+    data = request.get_json()
+    solisfair_settings['channel_id'] = data.get('channel_id', '').strip()
+    solisfair_settings['bot_id'] = data.get('bot_id', 'main_1')
+    # Không cần lưu ngay, hàm save_settings() sẽ được gọi chung
+    return jsonify({'status': 'success', 'message': 'Đã cập nhật cài đặt Solisfair.'})
+
+# --- Các API cũ giữ nguyên ---
 @app.route("/api/clan_drop_toggle", methods=['POST'])
 def api_clan_drop_toggle():
     global auto_clan_drop_settings, auto_clan_drop_thread
@@ -742,7 +954,6 @@ def api_clan_drop_toggle():
             auto_clan_drop_settings['enabled'] = False
             return jsonify({'status': 'error', 'message': 'Clan Drop Channel ID and KTB Channel ID must be set first.'})
         
-        # Chạy chu kỳ đầu tiên ngay lập tức trong một luồng riêng
         threading.Thread(target=run_clan_drop_cycle).start()
         
         if auto_clan_drop_thread is None or not auto_clan_drop_thread.is_alive():
@@ -767,7 +978,6 @@ def api_clan_drop_update():
             if isinstance(value, int):
                 auto_clan_drop_settings.setdefault('heart_thresholds', {})[key] = value
     return jsonify({'status': 'success', 'message': 'Clan Drop settings updated.'})
-
 
 @app.route("/api/add_server", methods=['POST'])
 def api_add_server():
@@ -832,7 +1042,7 @@ def api_harvest_toggle():
 def api_watermelon_toggle():
     global watermelon_grab_states
     data = request.get_json()
-    node = data.get('node') # e.g., 'main_1'
+    node = data.get('node')
     if not node or node not in watermelon_grab_states:
         return jsonify({'status': 'error', 'message': 'Invalid bot node.'}), 404
     
@@ -901,7 +1111,6 @@ def status():
     for server in servers:
         server['spam_countdown'] = 0
         if server.get('spam_enabled'):
-            # This logic for countdown is illustrative. A real implementation would need to store last spam time.
             pass
         
     with bots_lock:
@@ -926,7 +1135,8 @@ def status():
         'server_start_time': server_start_time,
         'servers': servers,
         'watermelon_grab_states': watermelon_grab_states,
-        'auto_clan_drop_status': clan_drop_status
+        'auto_clan_drop_status': clan_drop_status,
+        'solisfair_settings': solisfair_settings # <-- THÊM MỚI
     })
 
 # --- MAIN EXECUTION ---
