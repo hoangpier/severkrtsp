@@ -154,7 +154,8 @@ def click_karuta_button(bot, token, channel_id, guild_id, message_id, message_fl
         "session_id": bot.gateway.session_id, "nonce": str(int(time.time() * 1000))
     }
     try:
-        result = bot.s.post(url, json=payload, headers=headers)
+        # Sử dụng requests để gửi yêu cầu, không dùng bot.s
+        result = requests.post(url, headers=headers, json=payload)
         result.raise_for_status()
     except Exception as e:
         print(f"[Click Error] Lỗi khi gửi yêu cầu bấm nút: {e}", flush=True)
