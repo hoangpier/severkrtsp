@@ -18,9 +18,9 @@ tokens = os.getenv("TOKENS").split(",") if os.getenv("TOKENS") else []
 karuta_id = "646937666251915264"
 karibbit_id = "1311684840462225440"
 BOT_NAMES = [ # Tên để hiển thị trên giao diện, bạn có thể thêm nếu cần
-    "ALPHA", "BETA", "GAMMA", "DELTA", "EPSILON",
-    "ZETA", "ETA", "THETA", "IOTA", "KAPPA",
-    "LAMBDA", "MU"
+    "ALPHA", "xsyx", "sofa", "dont", "ayaya",
+    "owo", "astra", "singo", "dia pox", "clam",
+    "rambo", "domixi", "dogi", "sicula", "mo turn", "jan taru", "kio sama"
 ]
 
 # --- BIẾN TRẠNG THÁI ---
