@@ -19,8 +19,8 @@ karuta_id = "646937666251915264"
 karibbit_id = "1311684840462225440"
 BOT_NAMES = [ # Tên để hiển thị trên giao diện, bạn có thể thêm nếu cần
     "ALPHA", "xsyx", "sofa", "dont", "ayaya",
-    "owo", "astra", "singo", "dia pox", "clam",
-    "rambo", "domixi", "dogi", "sicula", "mo turn", "jan taru", "kio sama"
+    "owo", "astra", "singo", "dia pox", "clam girl",
+    "killa killua", "domixi", "dogi", "sicula", "mo turn", "jan taru", "kio sama"
 ]
 
 # --- BIẾN TRẠNG THÁI ---
@@ -221,7 +221,7 @@ def handle_grab(bot, msg, bot_num):
 
         if watermelon_grab_enabled:
             try:
-                time.sleep(0.25)
+                time.sleep(2)
                 full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
                 if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
                     full_msg_obj = full_msg_obj[0]
