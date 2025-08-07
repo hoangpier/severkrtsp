@@ -238,16 +238,16 @@ def handle_grab(bot, token, msg, bot_num):
                 except Exception as e:
                     print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
                 if card_picked: break
-        
-        # <<< START MODIFICATION / BẮT ĐẦU SỬA ĐỔI >>>
+
+        # --- LOGIC NHẶT DƯA HẤU ĐÃ SỬA LỖI ---
         if watermelon_grab_enabled:
-            watermelon_picked = False
-            # Quét trong 5 giây (10 lần x 0.5s) để tìm dưa hấu
-            for _ in range(10):
-                if watermelon_picked: break
+            # Thay vì chờ cố định 5s, ta sẽ kiểm tra lại nhiều lần trong 8 giây.
+            # Điều này giúp chống lại việc lag từ Discord/Karuta.
+            for i in range(8): # Thử lại 8 lần
                 try:
-                    # Lấy thông tin mới nhất của tin nhắn drop
+                    time.sleep(1) # Chờ 1 giây giữa mỗi lần thử
                     full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
+                    
                     if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
                         full_msg_obj = full_msg_obj[0]
                     
@@ -256,15 +256,10 @@ def handle_grab(bot, token, msg, bot_num):
                             bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
                             print(f"[EVENT GRAB | {bot_name}] Phát hiện dưa hấu! Tiến hành nhặt.", flush=True)
                             add_reaction_robust(token, channel_id, last_drop_msg_id, "🍉")
-                            watermelon_picked = True # Đã nhặt, đánh dấu để thoát vòng lặp
+                            break # Đã tìm thấy và xử lý, thoát khỏi vòng lặp
                 except Exception as e:
-                    print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
-                    # Chờ một chút trước khi thử lại để tránh spam lỗi
-                    time.sleep(1)
-                
-                # Chờ một chút trước lần quét tiếp theo
-                time.sleep(0.5)
-        # <<< END MODIFICATION / KẾT THÚC SỬA ĐỔI >>>
+                    print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Lần thử {i+1} - Bot {bot_num}): {e}", flush=True)
+                    # Nếu có lỗi, vẫn tiếp tục thử lại trong các lần sau
 
     threading.Thread(target=grab_handler).start()
 
