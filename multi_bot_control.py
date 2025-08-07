@@ -55,7 +55,9 @@ auto_reboot_stop_event = threading.Event()
 auto_clan_drop_stop_event = threading.Event()
 spam_thread, auto_reboot_thread, auto_clan_drop_thread = None, None, None
 bots_lock = threading.Lock()
-reaction_lock = threading.Lock() # *** SỬA LỖI: Thêm khóa cho reaction để tránh rate limit
+reaction_lock = threading.Lock()
+processed_event_drops = set() # *** SỬA LỖI: Theo dõi các event drop đã được xử lý
+processed_event_drops_lock = threading.Lock() # *** SỬA LỖI: Khóa cho biến trên
 server_start_time = time.time()
 bot_active_states = {}
 
@@ -117,12 +119,11 @@ def load_settings():
 # --- CÁC HÀM LOGIC BOT ---
 
 def add_reaction_robust(token, channel_id, message_id, emoji):
-    with reaction_lock: # *** SỬA LỖI: Chỉ cho phép 1 luồng thực hiện reaction tại một thời điểm
+    with reaction_lock:
         headers = { "Authorization": token, "Content-Type": "application/json" }
         encoded_emoji = urllib.parse.quote(emoji)
         url = f"https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}/reactions/{encoded_emoji}/@me"
         try:
-            # Thêm một khoảng trễ ngẫu nhiên nhỏ để tránh gửi request đồng loạt
             time.sleep(random.uniform(0.2, 0.7))
             response = requests.put(url, headers=headers, timeout=10)
             if response.status_code == 204:
@@ -241,6 +242,12 @@ def handle_grab(bot, token, msg, bot_num):
                 if card_picked: break
 
         if watermelon_grab_enabled:
+            # *** SỬA LỖI: Chỉ cho phép một bot xử lý một event drop duy nhất ***
+            with processed_event_drops_lock:
+                if last_drop_msg_id in processed_event_drops:
+                    return # Thoát nếu event này đã được bot khác xử lý
+                processed_event_drops.add(last_drop_msg_id)
+
             try:
                 time.sleep(5) 
                 full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
@@ -254,6 +261,10 @@ def handle_grab(bot, token, msg, bot_num):
                         add_reaction_robust(token, channel_id, last_drop_msg_id, "🍉")
             except Exception as e:
                 print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
+                # Nếu có lỗi, xóa ID khỏi danh sách đã xử lý để bot khác có thể thử lại
+                with processed_event_drops_lock:
+                    if last_drop_msg_id in processed_event_drops:
+                        processed_event_drops.remove(last_drop_msg_id)
 
     threading.Thread(target=grab_handler).start()
 
