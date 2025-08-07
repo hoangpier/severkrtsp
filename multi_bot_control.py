@@ -1,4 +1,4 @@
-# PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG - TÍCH HỢP DROP CLAN
+# PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG - TÍCH HỢP DROP CLAN - REBOOT CÁ NHÂN
 import discum
 import threading
 import time
@@ -9,8 +9,6 @@ import json
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
 import uuid
-import urllib.parse
-import random
 
 load_dotenv()
 
@@ -33,8 +31,12 @@ bots, acc_names = [], [
 main_bots = []
 servers = []
 watermelon_grab_states = {} # Cài đặt nhặt dưa hấu toàn cục
+bot_active_states = {}
 
-# --- Cài đặt tự động drop clan ---
+# --- CHỨC NĂNG MỚI: Cài đặt reboot cho từng bot ---
+bot_reboot_settings = {} # Cấu trúc: {'main_1': {'enabled': False, 'delay': 3600, 'next_reboot_time': 0}}
+
+# --- CHỨC NĂNG MỚI: Cài đặt cho tính năng tự động drop clan ---
 auto_clan_drop_settings = {
     "enabled": False,
     "channel_id": "",
@@ -45,20 +47,12 @@ auto_clan_drop_settings = {
     "heart_thresholds": {}
 }
 
-# --- Cài đặt reboot toàn cục ---
-auto_reboot_enabled = False
-auto_reboot_delay = 3600
-last_reboot_cycle_time = 0
-
-# --- Các biến điều khiển luồng ---
+# Các biến điều khiển luồng
 auto_reboot_stop_event = threading.Event()
 auto_clan_drop_stop_event = threading.Event()
 spam_thread, auto_reboot_thread, auto_clan_drop_thread = None, None, None
 bots_lock = threading.Lock()
-reaction_lock = threading.Lock()
 server_start_time = time.time()
-bot_active_states = {}
-health_check_failures = {} # Biến theo dõi số lần kết nối thất bại liên tiếp
 
 # --- HÀM LƯU VÀ TẢI CÀI ĐẶT ---
 def save_settings():
@@ -67,10 +61,8 @@ def save_settings():
     if not api_key or not bin_id: return
     settings = {
         'servers': servers,
-        'auto_reboot_enabled': auto_reboot_enabled,
-        'auto_reboot_delay': auto_reboot_delay,
+        'bot_reboot_settings': bot_reboot_settings,
         'bot_active_states': bot_active_states,
-        'last_reboot_cycle_time': last_reboot_cycle_time,
         'watermelon_grab_states': watermelon_grab_states,
         'auto_clan_drop_settings': auto_clan_drop_settings
     }
@@ -83,7 +75,7 @@ def save_settings():
     except Exception as e: print(f"[Settings] Exception khi lưu cài đặt: {e}", flush=True)
 
 def load_settings():
-    global servers, auto_reboot_enabled, auto_reboot_delay, bot_active_states, last_reboot_cycle_time, watermelon_grab_states, auto_clan_drop_settings
+    global servers, bot_reboot_settings, bot_active_states, watermelon_grab_states, auto_clan_drop_settings
     api_key = os.getenv("JSONBIN_API_KEY")
     bin_id = os.getenv("JSONBIN_BIN_ID")
     if not api_key or not bin_id:
@@ -97,10 +89,8 @@ def load_settings():
             settings = req.json().get("record", {})
             if settings:
                 servers.extend(settings.get('servers', []))
-                auto_reboot_enabled = settings.get('auto_reboot_enabled', False)
-                auto_reboot_delay = settings.get('auto_reboot_delay', 3600)
+                bot_reboot_settings = settings.get('bot_reboot_settings', {})
                 bot_active_states = settings.get('bot_active_states', {})
-                last_reboot_cycle_time = settings.get('last_reboot_cycle_time', 0)
                 watermelon_grab_states = settings.get('watermelon_grab_states', {})
                 loaded_clan_settings = settings.get('auto_clan_drop_settings', {})
                 if loaded_clan_settings:
@@ -116,25 +106,7 @@ def load_settings():
 
 # --- CÁC HÀM LOGIC BOT ---
 
-def add_reaction_robust(token, channel_id, message_id, emoji):
-    with reaction_lock:
-        headers = { "Authorization": token, "Content-Type": "application/json" }
-        encoded_emoji = urllib.parse.quote(emoji)
-        url = f"https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}/reactions/{encoded_emoji}/@me"
-        try:
-            time.sleep(random.uniform(0.2, 0.7))
-            response = requests.put(url, headers=headers, timeout=10)
-            if response.status_code == 204:
-                print(f"[REACTION ADDED] Thành công: {emoji} to message {message_id}", flush=True)
-                return True
-            else:
-                print(f"[REACTION FAILED] Lỗi: {response.status_code}", flush=True)
-                return False
-        except Exception as e:
-            print(f"[REACTION EXCEPTION] Lỗi khi thêm reaction: {e}", flush=True)
-            return False
-
-def handle_clan_drop(bot, token, msg, bot_num):
+def handle_clan_drop(bot, msg, bot_num):
     if not (auto_clan_drop_settings.get("enabled") and auto_clan_drop_settings.get("ktb_channel_id")):
         return
     channel_id = msg.get("channel_id")
@@ -173,7 +145,7 @@ def handle_clan_drop(bot, token, msg, bot_num):
                                 log_message = f"[CLAN DROP | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
                                 print(log_message, flush=True)
                                 def grab_action():
-                                    add_reaction_robust(token, channel_id, last_drop_msg_id, emoji)
+                                    bot.addReaction(channel_id, last_drop_msg_id, emoji)
                                     time.sleep(1)
                                     bot.sendMessage(ktb_channel_id, "kt b")
                                 threading.Timer(delay, grab_action).start()
@@ -186,7 +158,7 @@ def handle_clan_drop(bot, token, msg, bot_num):
     
     threading.Thread(target=grab_handler).start()
 
-def handle_grab(bot, token, msg, bot_num):
+def handle_grab(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
     if not target_server: return
@@ -194,7 +166,6 @@ def handle_grab(bot, token, msg, bot_num):
     auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
     heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
     ktb_channel_id = target_server.get('ktb_channel_id')
-    
     watermelon_grab_enabled = watermelon_grab_states.get(f'main_{bot_num}', False)
 
     if not auto_grab_enabled and not watermelon_grab_enabled:
@@ -228,7 +199,7 @@ def handle_grab(bot, token, msg, bot_num):
                                     log_message = f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
                                     print(log_message, flush=True)
                                     def grab_action():
-                                        add_reaction_robust(token, channel_id, last_drop_msg_id, emoji)
+                                        bot.addReaction(channel_id, last_drop_msg_id, emoji)
                                         time.sleep(1)
                                         bot.sendMessage(ktb_channel_id, "kt b")
                                     threading.Timer(delay, grab_action).start()
@@ -239,26 +210,19 @@ def handle_grab(bot, token, msg, bot_num):
                     print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
                 if card_picked: break
 
-        if watermelon_grab_enabled and not card_picked:
-            watermelon_picked = False
-            bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
-            for i in range(15):
-                try:
-                    full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
-                    if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
-                        full_msg_obj = full_msg_obj[0]
-                    if 'reactions' in full_msg_obj:
-                        if any(reaction['emoji']['name'] == '🍉' for reaction in full_msg_obj['reactions']):
-                            print(f"[EVENT GRAB | {bot_name}] Phát hiện dưa hấu sau {(i+1)*0.2:.1f}s! Tiến hành nhặt.", flush=True)
-                            add_reaction_robust(token, channel_id, last_drop_msg_id, "🍉")
-                            watermelon_picked = True
-                            break
-                except Exception as e:
-                    print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
-                    break
-                if watermelon_picked:
-                    break
-                time.sleep(0.2)
+        if watermelon_grab_enabled:
+            try:
+                time.sleep(0.25)
+                full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
+                if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
+                    full_msg_obj = full_msg_obj[0]
+                if 'reactions' in full_msg_obj:
+                    for reaction in full_msg_obj['reactions']:
+                        if reaction['emoji']['name'] == '🍉':
+                            bot.addReaction(channel_id, last_drop_msg_id, "🍉")
+                            break 
+            except Exception as e:
+                print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
 
     threading.Thread(target=grab_handler).start()
 
@@ -280,9 +244,9 @@ def create_bot(token, bot_identifier, is_main=False):
                 msg = resp.parsed.auto()
                 if msg.get("author", {}).get("id") == karuta_id and "dropping" in msg.get("content", "").lower():
                     if msg.get("mentions"):
-                        handle_clan_drop(bot, token, msg, bot_identifier)
+                        handle_clan_drop(bot, msg, bot_identifier)
                     else:
-                        handle_grab(bot, token, msg, bot_identifier)
+                        handle_grab(bot, msg, bot_identifier)
             
     threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
@@ -338,89 +302,62 @@ def auto_clan_drop_loop():
             time.sleep(60)
     print("[Clan Drop] Luồng tự động drop clan đã dừng.", flush=True)
 
-def auto_reboot_loop():
-    global last_reboot_cycle_time, main_bots
-    print("[Reboot] Luồng tự động reboot và kiểm tra sức khỏe đã bắt đầu.", flush=True)
-    
-    # Khởi tạo bộ đếm lỗi cho mỗi bot
-    for i in range(len(main_tokens)):
-        health_check_failures[i] = 0
 
+def auto_reboot_loop():
+    global main_bots
+    print("[Reboot] Luồng tự động reboot cá nhân đã khởi động.", flush=True)
     while not auto_reboot_stop_event.is_set():
         try:
-            # Tăng thời gian chờ giữa các lần kiểm tra lên 3 phút (180 giây) để giảm tải
-            if auto_reboot_stop_event.wait(timeout=180): 
-                break
-            
-            # --- PHẦN 1: KIỂM TRA SỨC KHỎE CHỦ ĐỘNG (FIX BROKEN PIPE) ---
-            print("[Health Check] Bắt đầu kiểm tra sức khỏe định kỳ...", flush=True)
-            with bots_lock:
-                bots_to_reboot = []
-                for i, bot in enumerate(main_bots):
-                    is_connected = bot and hasattr(bot.gateway, 'ws') and bot.gateway.ws and hasattr(bot.gateway.ws, 'sock') and bot.gateway.ws.sock and bot.gateway.ws.sock.connected
-                    
-                    if not is_connected:
-                        health_check_failures[i] = health_check_failures.get(i, 0) + 1
-                        print(f"[Health Check] Bot {i+1} mất kết nối. Đếm lỗi: {health_check_failures[i]}/3.", flush=True)
-                        if health_check_failures[i] >= 3:
-                            bots_to_reboot.append(i)
-                    else:
-                        if health_check_failures.get(i, 0) > 0:
-                           print(f"[Health Check] Bot {i+1} đã kết nối lại. Reset bộ đếm lỗi.", flush=True)
-                        health_check_failures[i] = 0
+            now = time.time()
+            bots_to_reboot = []
 
-                if bots_to_reboot:
-                    print(f"[Reboot Trigger] Phát hiện {len(bots_to_reboot)} bot mất kết nối 3 lần liên tiếp. Tiến hành khởi động lại...", flush=True)
-                    for i in bots_to_reboot:
-                        bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
-                        print(f"[Reboot Trigger] Đang khởi động lại bot {bot_name}...", flush=True)
-                        try:
-                            if i < len(main_bots) and main_bots[i]:
-                                main_bots[i].gateway.close()
-                                time.sleep(2)
-                            
-                            token = main_tokens[i]
-                            new_bot = create_bot(token, bot_identifier=(i+1), is_main=True)
-                            main_bots[i] = new_bot
-                            health_check_failures[i] = 0 # Reset bộ đếm sau khi reboot thành công
-                            print(f"[Reboot Trigger] Bot {bot_name} đã được khởi động lại thành công.", flush=True)
-                            time.sleep(5)
-                        except Exception as e:
-                            print(f"[Reboot Trigger] Lỗi nghiêm trọng khi khởi động lại bot {bot_name}: {e}", flush=True)
-            
-            # --- PHẦN 2: REBOOT TOÀN BỘ THEO LỊCH TRÌNH ---
-            if auto_reboot_enabled and (time.time() - last_reboot_cycle_time) >= auto_reboot_delay:
-                print("[Reboot Scheduler] Hết thời gian chờ, tiến hành reboot toàn bộ các tài khoản chính.", flush=True)
-                
+            # Xác định các bot cần reboot
+            for bot_id, settings in list(bot_reboot_settings.items()):
+                if settings.get('enabled') and now >= settings.get('next_reboot_time', 0):
+                    bots_to_reboot.append(bot_id)
+
+            if bots_to_reboot:
                 with bots_lock:
-                    new_bot_instances = []
-                    for i, token in enumerate(main_tokens):
-                        if token.strip():
-                            try:
-                                if i < len(main_bots) and main_bots[i]:
-                                    main_bots[i].gateway.close()
-                                    time.sleep(2)
-                                
-                                bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
-                                new_bot = create_bot(token, bot_identifier=(i+1), is_main=True)
-                                new_bot_instances.append(new_bot)
-                                health_check_failures[i] = 0 # Reset bộ đếm
-                                print(f"Đã tạo lại kết nối cho bot {bot_name}", flush=True)
-                                time.sleep(5)
-                            except Exception as e:
-                                print(f"[Reboot Scheduler] Lỗi khi xử lý bot {i+1}: {e}", flush=True)
-                    
-                    main_bots = new_bot_instances
-                    print("[Reboot Scheduler] Đã cập nhật danh sách bot chính toàn cục.", flush=True)
+                    new_main_bots = main_bots[:]
+                    for bot_id in bots_to_reboot:
+                        try:
+                            # Lấy index từ bot_id, ví dụ 'main_1' -> 0
+                            bot_index = int(bot_id.split('_')[1]) - 1
+                            if not (0 <= bot_index < len(main_bots)): continue
 
-                last_reboot_cycle_time = time.time()
+                            old_bot = main_bots[bot_index]
+                            token = main_tokens[bot_index]
+                            bot_name = BOT_NAMES[bot_index] if bot_index < len(BOT_NAMES) else f"MAIN_{bot_index+1}"
+
+                            print(f"[Reboot] Tiến hành reboot bot {bot_name} ({bot_id}).", flush=True)
+                            old_bot.gateway.close()
+                            time.sleep(2)
+
+                            new_bot = create_bot(token, bot_identifier=(bot_index + 1), is_main=True)
+                            new_main_bots[bot_index] = new_bot
+                            
+                            # Đặt lại bộ hẹn giờ cho chu kỳ tiếp theo
+                            settings = bot_reboot_settings[bot_id]
+                            settings['next_reboot_time'] = time.time() + settings.get('delay', 3600)
+                            print(f"[Reboot] Đã reboot thành công {bot_name}. Lần reboot tiếp theo trong {settings['delay']} giây.", flush=True)
+                            time.sleep(5)
+
+                        except (ValueError, IndexError, KeyError) as e:
+                            print(f"[Reboot] Lỗi khi xử lý reboot cho {bot_id}: {e}", flush=True)
+                            if bot_id in bot_reboot_settings:
+                                bot_reboot_settings[bot_id]['enabled'] = False
+                    
+                    main_bots = new_main_bots
                 save_settings()
+
+            # Chờ 10 giây trước khi kiểm tra lại
+            if auto_reboot_stop_event.wait(timeout=10): break
 
         except Exception as e:
             print(f"[ERROR in auto_reboot_loop] {e}", flush=True)
             time.sleep(60)
-            
     print("[Reboot] Luồng tự động reboot đã dừng.", flush=True)
+
 
 def spam_loop():
     active_server_threads = {}
@@ -542,23 +479,15 @@ HTML_TEMPLATE = """
         <div id="msg-status-container" class="msg-status"> <span id="msg-status-text"></span></div>
         <div class="main-grid">
             <div class="panel status-panel">
-                <h2><i class="fas fa-heartbeat"></i> System Status</h2>
-                <div class="bot-status-container">
-                    <div class="status-grid">
-                         <div class="status-row">
-                            <span><i class="fas fa-redo"></i> Auto Reboot</span>
-                            <div class="flex-row">
-                                <input type="number" id="auto-reboot-delay" value="{{ auto_reboot_delay }}" style="width: 80px; text-align: right; padding: 5px;">
-                                <span id="reboot-timer" class="timer-display">--:--:--</span>
-                                <button type="button" id="auto-reboot-toggle-btn" class="btn btn-small">{{ 'DISABLE' if auto_reboot_enabled else 'ENABLE' }}</button>
-                            </div>
-                        </div>
-                        <div class="status-row">
-                            <span><i class="fas fa-server"></i> Uptime</span>
-                            <div><span id="uptime-timer" class="timer-display">--:--:--</span></div>
-                        </div>
-                    </div>
-                    <div id="bot-status-list" class="bot-status-grid"></div>
+                <h2><i class="fas fa-heartbeat"></i> System Status & Reboot Control</h2>
+                 <div class="status-row" style="margin-bottom: 20px;">
+                    <span><i class="fas fa-server"></i> Uptime</span>
+                    <div><span id="uptime-timer" class="timer-display">--:--:--</span></div>
+                </div>
+                <div class="server-sub-panel">
+                     <h3><i class="fas fa-robot"></i> Bot Control Matrix</h3>
+                     <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));">
+                         </div>
                 </div>
             </div>
 
@@ -669,27 +598,46 @@ HTML_TEMPLATE = """
             try {
                 const response = await fetch('/status');
                 const data = await response.json();
-                updateElement(document.getElementById('reboot-timer'), { textContent: formatTime(data.reboot_countdown) });
-                updateElement(document.getElementById('auto-reboot-toggle-btn'), { textContent: data.reboot_enabled ? 'DISABLE' : 'ENABLE' });
+                
                 const serverUptimeSeconds = (Date.now() / 1000) - data.server_start_time;
                 updateElement(document.getElementById('uptime-timer'), { textContent: formatTime(serverUptimeSeconds) });
-                
+
                 if (data.auto_clan_drop_status) {
                     updateElement(document.getElementById('clan-drop-timer'), { textContent: formatTime(data.auto_clan_drop_status.countdown) });
                     updateElement(document.getElementById('clan-drop-toggle-btn'), { textContent: data.auto_clan_drop_status.enabled ? 'DISABLE' : 'ENABLE' });
                 }
 
-                const botListContainer = document.getElementById('bot-status-list');
-                botListContainer.innerHTML = ''; 
+                const botControlGrid = document.getElementById('bot-control-grid');
+                botControlGrid.innerHTML = '';
                 const allBots = [...data.bot_statuses.main_bots, ...data.bot_statuses.sub_accounts];
                 allBots.forEach(bot => {
+                    const botId = bot.reboot_id;
                     const item = document.createElement('div');
-                    item.className = 'bot-status-item';
-                    if (bot.type === 'main') item.classList.add('bot-main');
-                    const buttonText = bot.is_active ? 'ONLINE' : 'OFFLINE';
-                    const buttonClass = bot.is_active ? 'btn-rise' : 'btn-rest';
-                    item.innerHTML = `<span>${bot.name}</span><button type="button" data-target="${bot.reboot_id}" class="btn-toggle-state ${buttonClass}">${buttonText}</button>`;
-                    botListContainer.appendChild(item);
+                    item.className = 'status-row';
+                    item.style.cssText = 'flex-direction: column; align-items: stretch; padding: 10px;';
+                    
+                    let controlHtml = `
+                        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
+                           <span style="font-weight: bold; ${bot.type === 'main' ? 'color: #FF4500;' : ''}">${bot.name}</span>
+                           <button type="button" data-target="${botId}" class="btn-toggle-state ${bot.is_active ? 'btn-rise' : 'btn-rest'}">
+                               ${bot.is_active ? 'ONLINE' : 'OFFLINE'}
+                           </button>
+                        </div>`;
+
+                    if (bot.type === 'main' && data.bot_reboot_settings && data.bot_reboot_settings[botId]) {
+                        const r_settings = data.bot_reboot_settings[botId];
+                        controlHtml += `
+                        <div class="input-group" style="margin-top: 10px; margin-bottom: 0;">
+                             <input type="number" class="bot-reboot-delay" value="${r_settings.delay}" data-bot-id="${botId}" style="flex-grow: 1;">
+                             <span class="timer-display bot-reboot-timer" style="padding: 0 10px;">${formatTime(r_settings.countdown)}</span>
+                             <button type="button" class="btn btn-small bot-reboot-toggle" data-bot-id="${botId}">
+                                 ${r_settings.enabled ? 'DISABLE' : 'ENABLE'}
+                             </button>
+                        </div>`;
+                    }
+                    
+                    item.innerHTML = controlHtml;
+                    botControlGrid.appendChild(item);
                 });
 
                 const wmGrid = document.getElementById('global-watermelon-grid');
@@ -729,6 +677,18 @@ HTML_TEMPLATE = """
             const button = e.target.closest('button');
             if (!button) return;
 
+            if (button.classList.contains('bot-reboot-toggle')) {
+                const botId = button.dataset.botId;
+                const delayInput = document.querySelector(`.bot-reboot-delay[data-bot-id="${botId}"]`);
+                postData('/api/bot_reboot_toggle', { bot_id: botId, delay: delayInput.value });
+                return;
+            }
+            
+            if (button.classList.contains('btn-toggle-state')) {
+                postData('/api/toggle_bot_state', { target: button.dataset.target });
+                 return;
+            }
+
             if (button.id === 'clan-drop-toggle-btn') {
                 postData('/api/clan_drop_toggle');
                 return;
@@ -745,8 +705,7 @@ HTML_TEMPLATE = """
             }
 
             if (button.classList.contains('watermelon-toggle')) {
-                const node = button.dataset.node;
-                postData('/api/watermelon_toggle', { node: node });
+                postData('/api/watermelon_toggle', { node: button.dataset.node });
                 return;
             }
 
@@ -765,12 +724,6 @@ HTML_TEMPLATE = """
                     if(confirm('Are you sure? This action cannot be undone.')) { postData('/api/delete_server', { server_id: serverId }); } 
                 }
                 return;
-            }
-            
-            if (button.id === 'auto-reboot-toggle-btn') {
-                postData('/api/reboot_toggle_auto', { delay: document.getElementById('auto-reboot-delay').value });
-            } else if (button.matches('#bot-status-list button[data-target]')) {
-                postData('/api/toggle_bot_state', { target: button.dataset.target });
             }
         });
 
@@ -804,8 +757,6 @@ def index():
     ]
     return render_template_string(HTML_TEMPLATE, 
         servers=sorted_servers, 
-        auto_reboot_enabled=auto_reboot_enabled, 
-        auto_reboot_delay=auto_reboot_delay, 
         main_bots_info=main_bots_info,
         auto_clan_drop_settings=auto_clan_drop_settings
     )
@@ -938,17 +889,36 @@ def api_broadcast_toggle():
     msg = f"Spam {'ENABLED' if server['spam_enabled'] else 'DISABLED'} for {server['name']}."
     return jsonify({'status': 'success', 'message': msg})
 
-@app.route("/api/reboot_toggle_auto", methods=['POST'])
-def api_reboot_toggle_auto():
-    global auto_reboot_enabled, auto_reboot_delay, last_reboot_cycle_time
+@app.route("/api/bot_reboot_toggle", methods=['POST'])
+def api_bot_reboot_toggle():
+    global bot_reboot_settings, auto_reboot_thread
     data = request.get_json()
-    auto_reboot_enabled = not auto_reboot_enabled
-    auto_reboot_delay = int(data.get("delay", 3600))
-    if auto_reboot_enabled:
-        last_reboot_cycle_time = time.time()
-        msg = "Global Auto Reboot ENABLED."
+    bot_id = data.get('bot_id')
+    delay = int(data.get("delay", 3600))
+
+    if not bot_id or bot_id not in bot_reboot_settings:
+        return jsonify({'status': 'error', 'message': 'Bot ID không hợp lệ.'}), 400
+
+    settings = bot_reboot_settings[bot_id]
+    settings['enabled'] = not settings.get('enabled', False)
+    settings['delay'] = delay
+
+    bot_name_index = int(bot_id.split('_')[1]) - 1
+    bot_name = BOT_NAMES[bot_name_index] if bot_name_index < len(BOT_NAMES) else bot_id
+
+    if settings['enabled']:
+        settings['next_reboot_time'] = time.time() + delay
+        # Khởi động luồng quản lý reboot nếu nó chưa chạy
+        if auto_reboot_thread is None or not auto_reboot_thread.is_alive():
+            print("Kích hoạt luồng quản lý reboot chung.", flush=True)
+            auto_reboot_stop_event.clear()
+            auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
+            auto_reboot_thread.start()
+        msg = f"Tự động Reboot BẬT cho {bot_name} với chu kỳ {delay} giây."
     else:
-        msg = "Global Auto Reboot DISABLED."
+        settings['next_reboot_time'] = 0
+        msg = f"Tự động Reboot TẮT cho {bot_name}."
+
     return jsonify({'status': 'success', 'message': msg})
 
 @app.route("/api/toggle_bot_state", methods=['POST'])
@@ -988,9 +958,15 @@ def status():
         "countdown": (auto_clan_drop_settings.get("last_cycle_start_time", 0) + auto_clan_drop_settings.get("cycle_interval", 1800) - now) if auto_clan_drop_settings.get("enabled", False) else 0
     }
 
+    # Tính toán thời gian đếm ngược cho mỗi bot
+    for bot_id, settings in bot_reboot_settings.items():
+        if settings.get('enabled'):
+            settings['countdown'] = max(0, settings.get('next_reboot_time', 0) - now)
+        else:
+            settings['countdown'] = 0
+
     return jsonify({
-        'reboot_enabled': auto_reboot_enabled, 
-        'reboot_countdown': (last_reboot_cycle_time + auto_reboot_delay - now) if auto_reboot_enabled else 0,
+        'bot_reboot_settings': bot_reboot_settings,
         'bot_statuses': {"main_bots": main_bot_statuses, "sub_accounts": sub_bot_statuses},
         'server_start_time': server_start_time,
         'servers': servers,
@@ -1013,7 +989,9 @@ if __name__ == "__main__":
                 if bot_id not in watermelon_grab_states: watermelon_grab_states[bot_id] = False
                 if bot_id not in auto_clan_drop_settings.get('heart_thresholds', {}):
                     auto_clan_drop_settings.setdefault('heart_thresholds', {})[bot_id] = 50
-        
+                if bot_id not in bot_reboot_settings:
+                    bot_reboot_settings[bot_id] = {'enabled': False, 'delay': 3600, 'next_reboot_time': 0}
+
         for i, token in enumerate(tokens):
             if token.strip():
                 bot_id = f'sub_{i}'
@@ -1025,9 +1003,11 @@ if __name__ == "__main__":
     spam_thread = threading.Thread(target=spam_loop, daemon=True)
     spam_thread.start()
     
-    auto_reboot_stop_event.clear()
-    auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
-    auto_reboot_thread.start()
+    # Khởi động luồng reboot nếu có bất kỳ bot nào được bật reboot từ lần chạy trước
+    if any(s.get('enabled') for s in bot_reboot_settings.values()):
+        auto_reboot_stop_event.clear()
+        auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
+        auto_reboot_thread.start()
 
     if auto_clan_drop_settings.get("enabled"):
         auto_clan_drop_stop_event.clear()
