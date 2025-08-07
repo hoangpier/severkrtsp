@@ -114,23 +114,13 @@ def load_settings():
 
 # --- CÁC HÀM LOGIC BOT ---
 
-# =====================================================================
-# ======================== HÀM HỖ TRỢ MỚI =============================
-# =====================================================================
 def add_reaction_robust(token, channel_id, message_id, emoji):
-    """
-    Gửi yêu cầu thêm reaction trực tiếp đến API của Discord.
-    Hàm này đáng tin cậy hơn so với hàm có sẵn của thư viện.
-    """
-    headers = {
-        "Authorization": token,
-        "Content-Type": "application/json"
-    }
+    headers = { "Authorization": token, "Content-Type": "application/json" }
     encoded_emoji = urllib.parse.quote(emoji)
     url = f"https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}/reactions/{encoded_emoji}/@me"
     try:
         response = requests.put(url, headers=headers, timeout=10)
-        if response.status_code == 204: # 204 No Content là mã thành công cho API này
+        if response.status_code == 204:
             print(f"[REACTION ADDED] Thành công: {emoji} to message {message_id}", flush=True)
             return True
         else:
@@ -139,9 +129,8 @@ def add_reaction_robust(token, channel_id, message_id, emoji):
     except Exception as e:
         print(f"[REACTION EXCEPTION] Lỗi khi thêm reaction: {e}", flush=True)
         return False
-# =====================================================================
 
-def handle_clan_drop(bot, msg, bot_num):
+def handle_clan_drop(bot, token, msg, bot_num):
     if not (auto_clan_drop_settings.get("enabled") and auto_clan_drop_settings.get("ktb_channel_id")):
         return
     channel_id = msg.get("channel_id")
@@ -180,7 +169,7 @@ def handle_clan_drop(bot, msg, bot_num):
                                 log_message = f"[CLAN DROP | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
                                 print(log_message, flush=True)
                                 def grab_action():
-                                    add_reaction_robust(bot.token, channel_id, last_drop_msg_id, emoji)
+                                    add_reaction_robust(token, channel_id, last_drop_msg_id, emoji)
                                     time.sleep(1)
                                     bot.sendMessage(ktb_channel_id, "kt b")
                                 threading.Timer(delay, grab_action).start()
@@ -193,7 +182,7 @@ def handle_clan_drop(bot, msg, bot_num):
     
     threading.Thread(target=grab_handler).start()
 
-def handle_grab(bot, msg, bot_num):
+def handle_grab(bot, token, msg, bot_num):
     channel_id = msg.get("channel_id")
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
     if not target_server: return
@@ -235,7 +224,7 @@ def handle_grab(bot, msg, bot_num):
                                     log_message = f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
                                     print(log_message, flush=True)
                                     def grab_action():
-                                        add_reaction_robust(bot.token, channel_id, last_drop_msg_id, emoji)
+                                        add_reaction_robust(token, channel_id, last_drop_msg_id, emoji)
                                         time.sleep(1)
                                         bot.sendMessage(ktb_channel_id, "kt b")
                                     threading.Timer(delay, grab_action).start()
@@ -257,7 +246,7 @@ def handle_grab(bot, msg, bot_num):
                     if any(reaction['emoji']['name'] == '🍉' for reaction in full_msg_obj['reactions']):
                         bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
                         print(f"[EVENT GRAB | {bot_name}] Phát hiện dưa hấu! Tiến hành nhặt.", flush=True)
-                        add_reaction_robust(bot.token, channel_id, last_drop_msg_id, "🍉")
+                        add_reaction_robust(token, channel_id, last_drop_msg_id, "🍉")
             except Exception as e:
                 print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
 
@@ -265,7 +254,6 @@ def handle_grab(bot, msg, bot_num):
 
 def create_bot(token, bot_identifier, is_main=False):
     bot = discum.Client(token=token, log=False)
-    bot.token = token # *** SỬA LỖI: Gán token vào đối tượng bot ***
     
     @bot.gateway.command
     def on_ready(resp):
@@ -282,9 +270,9 @@ def create_bot(token, bot_identifier, is_main=False):
                 msg = resp.parsed.auto()
                 if msg.get("author", {}).get("id") == karuta_id and "dropping" in msg.get("content", "").lower():
                     if msg.get("mentions"):
-                        handle_clan_drop(bot, msg, bot_identifier)
+                        handle_clan_drop(bot, token, msg, bot_identifier)
                     else:
-                        handle_grab(bot, msg, bot_identifier)
+                        handle_grab(bot, token, msg, bot_identifier)
             
     threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
