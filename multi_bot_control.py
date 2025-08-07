@@ -257,7 +257,6 @@ def handle_grab(bot, msg, bot_num):
                     if any(reaction['emoji']['name'] == '🍉' for reaction in full_msg_obj['reactions']):
                         bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
                         print(f"[EVENT GRAB | {bot_name}] Phát hiện dưa hấu! Tiến hành nhặt.", flush=True)
-                        # --- SỬA LỖI: Dùng phương thức request trực tiếp và đáng tin cậy hơn ---
                         add_reaction_robust(bot.token, channel_id, last_drop_msg_id, "🍉")
             except Exception as e:
                 print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
@@ -266,6 +265,7 @@ def handle_grab(bot, msg, bot_num):
 
 def create_bot(token, bot_identifier, is_main=False):
     bot = discum.Client(token=token, log=False)
+    bot.token = token # *** SỬA LỖI: Gán token vào đối tượng bot ***
     
     @bot.gateway.command
     def on_ready(resp):
@@ -1002,4 +1002,4 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False
