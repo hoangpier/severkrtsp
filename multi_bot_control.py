@@ -326,31 +326,57 @@ def auto_clan_drop_loop():
     print("[Clan Drop] Luồng tự động drop clan đã dừng.", flush=True)
 
 
+# =====================================================================
+# ======================== PHIÊN BẢN ĐÃ SỬA LỖI ========================
+# =====================================================================
 def auto_reboot_loop():
     global last_reboot_cycle_time, main_bots
     while not auto_reboot_stop_event.is_set():
         try:
-            if auto_reboot_stop_event.wait(timeout=60): break
+            # Chờ 60 giây, nếu sự kiện stop được set thì thoát ngay
+            if auto_reboot_stop_event.wait(timeout=60): 
+                break
+            
+            # Kiểm tra xem có đến lúc reboot chưa
             if auto_reboot_enabled and (time.time() - last_reboot_cycle_time) >= auto_reboot_delay:
                 print("[Reboot] Hết thời gian chờ, tiến hành reboot các tài khoản chính.", flush=True)
+                
                 with bots_lock:
-                    new_main_bots = []
-                    for i, bot in enumerate(main_bots):
-                        if i < len(main_tokens):
-                            bot.gateway.close()
-                            time.sleep(2)
-                            bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
-                            new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
-                            new_main_bots.append(new_bot)
-                            print(f"Đã reboot bot {bot_name}", flush=True)
-                            time.sleep(5)
-                    main_bots = new_main_bots
+                    new_bot_instances = []
+                    # Tạo các bot mới trước
+                    for i, token in enumerate(main_tokens):
+                        if token.strip():
+                            try:
+                                # Đóng kết nối của bot cũ một cách an toàn
+                                if i < len(main_bots) and main_bots[i]:
+                                    main_bots[i].gateway.close()
+                                    time.sleep(2) # Chờ một chút để kết nối đóng hoàn toàn
+                                
+                                bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
+                                new_bot = create_bot(token, bot_identifier=(i+1), is_main=True)
+                                new_bot_instances.append(new_bot)
+                                print(f"Đã tạo lại kết nối cho bot {bot_name}", flush=True)
+                                time.sleep(5) # Giãn cách giữa các lần tạo bot
+                            except Exception as e:
+                                print(f"[Reboot] Lỗi khi xử lý bot {i+1}: {e}", flush=True)
+
+                    # *** PHẦN SỬA LỖI QUAN TRỌNG ***
+                    # Cập nhật danh sách bot chính toàn cục một cách chính xác
+                    main_bots.clear()
+                    main_bots.extend(new_bot_instances)
+                    print("[Reboot] Đã cập nhật danh sách bot chính toàn cục.", flush=True)
+
+                # Reset thời gian và lưu cài đặt
                 last_reboot_cycle_time = time.time()
                 save_settings()
+
         except Exception as e:
             print(f"[ERROR in auto_reboot_loop] {e}", flush=True)
-            time.sleep(60)
+            time.sleep(60) # Chờ 1 phút nếu có lỗi nghiêm trọng
+            
     print("[Reboot] Luồng tự động reboot đã dừng.", flush=True)
+# =====================================================================
+# =====================================================================
 
 def spam_loop():
     active_server_threads = {}
