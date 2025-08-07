@@ -9,6 +9,8 @@ import json
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
 import uuid
+import urllib.parse
+import random
 
 load_dotenv()
 
@@ -18,9 +20,9 @@ tokens = os.getenv("TOKENS").split(",") if os.getenv("TOKENS") else []
 karuta_id = "646937666251915264"
 karibbit_id = "1311684840462225440"
 BOT_NAMES = [ # Tên để hiển thị trên giao diện, bạn có thể thêm nếu cần
-    "xsyx", "sofa", "dont", "ayaya",
+    "ALPHA", "xsyx", "sofa", "dont", "ayaya",
     "owo", "astra", "singo", "dia pox", "clam",
-    "rambo", "domixi", "dogi", "sicula", "mo turn", "jan taru", "kio sama", "gidur"
+    "rambo", "domixi", "dogi", "sicula", "mo turn", "jan taru", "kio sama"
 ]
 
 # --- BIẾN TRẠNG THÁI ---
@@ -32,7 +34,7 @@ main_bots = []
 servers = []
 watermelon_grab_states = {} # Cài đặt nhặt dưa hấu toàn cục
 
-# --- CHỨC NĂNG MỚI: Cài đặt cho tính năng tự động drop clan ---
+# --- Cài đặt tự động drop clan ---
 auto_clan_drop_settings = {
     "enabled": False,
     "channel_id": "",
@@ -43,16 +45,17 @@ auto_clan_drop_settings = {
     "heart_thresholds": {}
 }
 
-# Cài đặt toàn cục
+# --- Cài đặt reboot toàn cục ---
 auto_reboot_enabled = False
 auto_reboot_delay = 3600
 last_reboot_cycle_time = 0
 
-# Các biến điều khiển luồng
+# --- Các biến điều khiển luồng ---
 auto_reboot_stop_event = threading.Event()
 auto_clan_drop_stop_event = threading.Event()
 spam_thread, auto_reboot_thread, auto_clan_drop_thread = None, None, None
 bots_lock = threading.Lock()
+reaction_lock = threading.Lock()
 server_start_time = time.time()
 bot_active_states = {}
 
@@ -112,6 +115,76 @@ def load_settings():
 
 # --- CÁC HÀM LOGIC BOT ---
 
+def add_reaction_robust(token, channel_id, message_id, emoji):
+    with reaction_lock:
+        headers = { "Authorization": token, "Content-Type": "application/json" }
+        encoded_emoji = urllib.parse.quote(emoji)
+        url = f"https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}/reactions/{encoded_emoji}/@me"
+        try:
+            time.sleep(random.uniform(0.2, 0.7))
+            response = requests.put(url, headers=headers, timeout=10)
+            if response.status_code == 204:
+                print(f"[REACTION ADDED] Thành công: {emoji} to message {message_id}", flush=True)
+                return True
+            else:
+                print(f"[REACTION FAILED] Lỗi: {response.status_code}", flush=True)
+                return False
+        except Exception as e:
+            print(f"[REACTION EXCEPTION] Lỗi khi thêm reaction: {e}", flush=True)
+            return False
+
+def handle_clan_drop(bot, token, msg, bot_num):
+    if not (auto_clan_drop_settings.get("enabled") and auto_clan_drop_settings.get("ktb_channel_id")):
+        return
+    channel_id = msg.get("channel_id")
+    if channel_id != auto_clan_drop_settings.get("channel_id"):
+        return
+
+    last_drop_msg_id = msg["id"]
+    
+    def grab_handler():
+        card_picked = False
+        ktb_channel_id = auto_clan_drop_settings["ktb_channel_id"]
+        
+        for _ in range(6):
+            time.sleep(0.5)
+            try:
+                messages = bot.getMessages(channel_id, num=5).json()
+                for msg_item in messages:
+                    if msg_item.get("author", {}).get("id") == karibbit_id and int(msg_item["id"]) > int(last_drop_msg_id):
+                        if "embeds" in msg_item and len(msg_item["embeds"]) > 0:
+                            desc = msg_item["embeds"][0].get("description", "")
+                            if '♡' not in desc: continue
+                            lines = desc.split('\n')
+                            heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
+                            if not any(heart_numbers): break 
+                            max_num = max(heart_numbers)
+                            bot_id_str = f'main_{bot_num}'
+                            heart_threshold = auto_clan_drop_settings.get("heart_thresholds", {}).get(bot_id_str, 50)
+                            
+                            if max_num >= heart_threshold:
+                                max_index = heart_numbers.index(max_num)
+                                delays = { 1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5] }
+                                bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
+                                emojis = ["1️⃣", "2️⃣", "3️⃣"]
+                                emoji = emojis[max_index]
+                                delay = bot_delays[max_index]
+                                log_message = f"[CLAN DROP | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
+                                print(log_message, flush=True)
+                                def grab_action():
+                                    add_reaction_robust(token, channel_id, last_drop_msg_id, emoji)
+                                    time.sleep(1)
+                                    bot.sendMessage(ktb_channel_id, "kt b")
+                                threading.Timer(delay, grab_action).start()
+                                card_picked = True
+                        if card_picked: break
+                if card_picked: break
+            except Exception as e:
+                print(f"Lỗi khi đọc Karibbit (Clan Drop - Bot {bot_num}): {e}", flush=True)
+            if card_picked: break
+    
+    threading.Thread(target=grab_handler).start()
+
 def handle_grab(bot, token, msg, bot_num):
     channel_id = msg.get("channel_id")
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
@@ -121,92 +194,6 @@ def handle_grab(bot, token, msg, bot_num):
     heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
     ktb_channel_id = target_server.get('ktb_channel_id')
     
-    watermelon_grab_enabled = watermelon_grab_states.get(f'main_{bot_num}', False)
-
-    if not auto_grab_enabled and not watermelon_grab_enabled:
-        return
-
-    last_drop_msg_id = msg["id"]
-    
-    def grab_handler():
-        card_picked = False
-        # --- LOGIC NHẶT THẺ (GIỮ NGUYÊN) ---
-        if auto_grab_enabled and ktb_channel_id:
-            for _ in range(6):
-                time.sleep(1)
-                try:
-                    messages = bot.getMessages(channel_id, num=5).json()
-                    for msg_item in messages:
-                        if msg_item.get("author", {}).get("id") == karibbit_id and int(msg_item["id"]) > int(last_drop_msg_id):
-                            if "embeds" in msg_item and len(msg_item["embeds"]) > 0:
-                                desc = msg_item["embeds"][0].get("description", "")
-                                if '♡' not in desc: continue
-                                lines = desc.split('\n')
-                                heart_numbers = [int(match.group(1)) if (match := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
-                                if not any(heart_numbers): break 
-                                max_num = max(heart_numbers)
-                                if max_num >= heart_threshold:
-                                    max_index = heart_numbers.index(max_num)
-                                    delays = { 1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5] }
-                                    bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
-                                    emojis = ["1️⃣", "2️⃣", "3️⃣"]
-                                    emoji = emojis[max_index]
-                                    delay = bot_delays[max_index]
-                                    log_message = f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
-                                    print(log_message, flush=True)
-                                    def grab_action():
-                                        add_reaction_robust(token, channel_id, last_drop_msg_id, emoji)
-                                        time.sleep(1)
-                                        bot.sendMessage(ktb_channel_id, "kt b")
-                                    threading.Timer(delay, grab_action).start()
-                                    card_picked = True
-                            if card_picked: break
-                    if card_picked: break
-                except Exception as e:
-                    print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
-                if card_picked: break
-        
-        # <<< PHẦN CẢI TIẾN LOGIC NHẶT DƯA HẤU >>>
-        # Thay vì đợi 5 giây, cơ chế mới sẽ liên tục kiểm tra tin nhắn trong 3 giây.
-        if watermelon_grab_enabled and not card_picked:
-            watermelon_picked = False
-            bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
-            
-            # Vòng lặp kiểm tra 15 lần trong 3 giây (mỗi lần cách nhau 0.2 giây)
-            for i in range(15):
-                try:
-                    # Lấy thông tin mới nhất của tin nhắn drop
-                    full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
-                    if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
-                        full_msg_obj = full_msg_obj[0]
-                    
-                    # Kiểm tra xem có reaction '🍉' không
-                    if 'reactions' in full_msg_obj:
-                        if any(reaction['emoji']['name'] == '🍉' for reaction in full_msg_obj['reactions']):
-                            print(f"[EVENT GRAB | {bot_name}] Phát hiện dưa hấu sau {(i+1)*0.2:.1f}s! Tiến hành nhặt.", flush=True)
-                            add_reaction_robust(token, channel_id, last_drop_msg_id, "🍉")
-                            watermelon_picked = True
-                            break # Thoát khỏi vòng lặp ngay khi đã nhặt
-                except Exception as e:
-                    print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
-                    break # Dừng lại nếu có lỗi xảy ra
-
-                if watermelon_picked:
-                    break # Thoát khỏi vòng lặp bên ngoài
-                
-                time.sleep(0.2) # Đợi 0.2 giây rồi kiểm tra lại
-        # <<< KẾT THÚC PHẦN CẢI TIẾN >>>
-
-    threading.Thread(target=grab_handler).start()
-
-def handle_grab(bot, msg, bot_num):
-    channel_id = msg.get("channel_id")
-    target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
-    if not target_server: return
-
-    auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
-    heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
-    ktb_channel_id = target_server.get('ktb_channel_id')
     watermelon_grab_enabled = watermelon_grab_states.get(f'main_{bot_num}', False)
 
     if not auto_grab_enabled and not watermelon_grab_enabled:
@@ -240,7 +227,7 @@ def handle_grab(bot, msg, bot_num):
                                     log_message = f"[{target_server['name']} | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num} tim -> Emoji {emoji} sau {delay}s"
                                     print(log_message, flush=True)
                                     def grab_action():
-                                        bot.addReaction(channel_id, last_drop_msg_id, emoji)
+                                        add_reaction_robust(token, channel_id, last_drop_msg_id, emoji)
                                         time.sleep(1)
                                         bot.sendMessage(ktb_channel_id, "kt b")
                                     threading.Timer(delay, grab_action).start()
@@ -253,24 +240,24 @@ def handle_grab(bot, msg, bot_num):
 
         if watermelon_grab_enabled and not card_picked:
             watermelon_picked = False
-            for _ in range(6): 
+            bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
+            for i in range(15):
                 try:
                     full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
                     if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
                         full_msg_obj = full_msg_obj[0]
                     if 'reactions' in full_msg_obj:
-                        for reaction in full_msg_obj['reactions']:
-                            if reaction['emoji']['name'] == '🍉':
-                                print(f"[{target_server['name']} | Bot {bot_num}] Phát hiện dưa hấu! Đang tiến hành nhặt...", flush=True)
-                                bot.addReaction(channel_id, last_drop_msg_id, "🍉")
-                                watermelon_picked = True
-                                break 
-                    if watermelon_picked:
-                        break 
-                    time.sleep(0.5)
+                        if any(reaction['emoji']['name'] == '🍉' for reaction in full_msg_obj['reactions']):
+                            print(f"[EVENT GRAB | {bot_name}] Phát hiện dưa hấu sau {(i+1)*0.2:.1f}s! Tiến hành nhặt.", flush=True)
+                            add_reaction_robust(token, channel_id, last_drop_msg_id, "🍉")
+                            watermelon_picked = True
+                            break
                 except Exception as e:
                     print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
                     break
+                if watermelon_picked:
+                    break
+                time.sleep(0.2)
 
     threading.Thread(target=grab_handler).start()
 
@@ -292,9 +279,9 @@ def create_bot(token, bot_identifier, is_main=False):
                 msg = resp.parsed.auto()
                 if msg.get("author", {}).get("id") == karuta_id and "dropping" in msg.get("content", "").lower():
                     if msg.get("mentions"):
-                        handle_clan_drop(bot, msg, bot_identifier)
+                        handle_clan_drop(bot, token, msg, bot_identifier)
                     else:
-                        handle_grab(bot, msg, bot_identifier)
+                        handle_grab(bot, token, msg, bot_identifier)
             
     threading.Thread(target=bot.gateway.run, daemon=True).start()
     return bot
@@ -350,8 +337,6 @@ def auto_clan_drop_loop():
             time.sleep(60)
     print("[Clan Drop] Luồng tự động drop clan đã dừng.", flush=True)
 
-# <<< ĐÃ CẬP NHẬT THEO YÊU CẦU >>>
-# HÀM NÀY ĐÃ ĐƯỢC CẢI TIẾN - KẾT HỢP KIỂM TRA SỨC KHỎE VÀ REBOOT ĐỊNH KỲ
 def auto_reboot_loop():
     global last_reboot_cycle_time, main_bots
     print("[Reboot] Luồng tự động reboot và kiểm tra sức khỏe đã bắt đầu.", flush=True)
@@ -365,8 +350,6 @@ def auto_reboot_loop():
             with bots_lock:
                 bots_to_reboot = []
                 for i, bot in enumerate(main_bots):
-                    # Kiểm tra xem bot có tồn tại và kết nối websocket có còn "sống" không
-                    # Đây là cách trực tiếp để phát hiện Broken Pipe
                     is_connected = bot and hasattr(bot.gateway, 'ws') and bot.gateway.ws and hasattr(bot.gateway.ws, 'sock') and bot.gateway.ws.sock and bot.gateway.ws.sock.connected
                     if not is_connected:
                         bots_to_reboot.append(i)
@@ -378,18 +361,18 @@ def auto_reboot_loop():
                         print(f"[Health Check] Đang khởi động lại bot {bot_name}...", flush=True)
                         try:
                             if i < len(main_bots) and main_bots[i]:
-                                main_bots[i].gateway.close() # Cố gắng đóng kết nối cũ
+                                main_bots[i].gateway.close()
                                 time.sleep(2)
                             
                             token = main_tokens[i]
                             new_bot = create_bot(token, bot_identifier=(i+1), is_main=True)
-                            main_bots[i] = new_bot # Thay thế bot cũ bằng bot mới
+                            main_bots[i] = new_bot
                             print(f"[Health Check] Bot {bot_name} đã được khởi động lại thành công.", flush=True)
-                            time.sleep(5) # Chờ 5s trước khi reboot bot tiếp theo
+                            time.sleep(5)
                         except Exception as e:
                             print(f"[Health Check] Lỗi nghiêm trọng khi khởi động lại bot {bot_name}: {e}", flush=True)
             
-            # --- PHẦN 2: REBOOT TOÀN BỘ THEO LỊCH TRÌNH (NHƯ CŨ) ---
+            # --- PHẦN 2: REBOOT TOÀN BỘ THEO LỊCH TRÌNH ---
             if auto_reboot_enabled and (time.time() - last_reboot_cycle_time) >= auto_reboot_delay:
                 print("[Reboot Scheduler] Hết thời gian chờ, tiến hành reboot toàn bộ các tài khoản chính.", flush=True)
                 
@@ -409,7 +392,8 @@ def auto_reboot_loop():
                                 time.sleep(5)
                             except Exception as e:
                                 print(f"[Reboot Scheduler] Lỗi khi xử lý bot {i+1}: {e}", flush=True)
-
+                    
+                    # Cần phải thay thế list cũ bằng list mới, không phải clear và extend
                     main_bots = new_bot_instances
                     print("[Reboot Scheduler] Đã cập nhật danh sách bot chính toàn cục.", flush=True)
 
@@ -489,7 +473,7 @@ def periodic_save_loop():
         
 app = Flask(__name__)
 
-# --- GIAO DIỆN WEB (Không thay đổi) ---
+# --- GIAO DIỆN WEB ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -794,7 +778,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- FLASK ROUTES (Không thay đổi) ---
+# --- FLASK ROUTES ---
 @app.route("/")
 def index():
     sorted_servers = sorted(servers, key=lambda s: s.get('name', ''))
@@ -843,6 +827,7 @@ def api_clan_drop_update():
             if isinstance(value, int):
                 auto_clan_drop_settings.setdefault('heart_thresholds', {})[key] = value
     return jsonify({'status': 'success', 'message': 'Clan Drop settings updated.'})
+
 
 @app.route("/api/add_server", methods=['POST'])
 def api_add_server():
@@ -939,20 +924,15 @@ def api_broadcast_toggle():
 
 @app.route("/api/reboot_toggle_auto", methods=['POST'])
 def api_reboot_toggle_auto():
-    global auto_reboot_enabled, auto_reboot_delay, auto_reboot_thread, auto_reboot_stop_event, last_reboot_cycle_time
+    global auto_reboot_enabled, auto_reboot_delay, auto_reboot_thread, last_reboot_cycle_time
     data = request.get_json()
     auto_reboot_enabled = not auto_reboot_enabled
     auto_reboot_delay = int(data.get("delay", 3600))
     if auto_reboot_enabled:
         last_reboot_cycle_time = time.time()
-        if auto_reboot_thread is None or not auto_reboot_thread.is_alive():
-            auto_reboot_stop_event.clear()
-            auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
-            auto_reboot_thread.start()
+        # Luồng chính đã được khởi động, chỉ cần thay đổi biến là đủ
         msg = "Global Auto Reboot ENABLED."
     else:
-        # Chuyển trạng thái bật/tắt chứ không dừng hẳn luồng
-        # Luồng auto_reboot_loop sẽ tự kiểm tra biến auto_reboot_enabled
         msg = "Global Auto Reboot DISABLED."
     return jsonify({'status': 'success', 'message': msg})
 
@@ -1030,7 +1010,6 @@ if __name__ == "__main__":
     spam_thread = threading.Thread(target=spam_loop, daemon=True)
     spam_thread.start()
     
-    # Khởi động luồng reboot/health-check chính
     auto_reboot_stop_event.clear()
     auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
     auto_reboot_thread.start()
@@ -1039,8 +1018,6 @@ if __name__ == "__main__":
         auto_clan_drop_stop_event.clear()
         auto_clan_drop_thread = threading.Thread(target=auto_clan_drop_loop, daemon=True)
         auto_clan_drop_thread.start()
-    
-    # <<< ĐÃ XÓA >>> Luồng health_check_thread đã bị loại bỏ vì logic đã được tích hợp vào auto_reboot_loop
     
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
