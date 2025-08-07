@@ -18,9 +18,9 @@ tokens = os.getenv("TOKENS").split(",") if os.getenv("TOKENS") else []
 karuta_id = "646937666251915264"
 karibbit_id = "1311684840462225440"
 BOT_NAMES = [ # Tên để hiển thị trên giao diện, bạn có thể thêm nếu cần
-    "ALPHA", "xsyx", "sofa", "dont", "ayaya",
+    "xsyx", "sofa", "dont", "ayaya",
     "owo", "astra", "singo", "dia pox", "clam",
-    "rambo", "domixi", "dogi", "sicula", "mo turn", "jan taru", "kio sama"
+    "rambo", "domixi", "dogi", "sicula", "mo turn", "jan taru", "kio sama", "gidur"
 ]
 
 # --- BIẾN TRẠNG THÁI ---
@@ -98,7 +98,6 @@ def load_settings():
                 bot_active_states = settings.get('bot_active_states', {})
                 last_reboot_cycle_time = settings.get('last_reboot_cycle_time', 0)
                 watermelon_grab_states = settings.get('watermelon_grab_states', {})
-                # Tải cài đặt cho chức năng mới
                 loaded_clan_settings = settings.get('auto_clan_drop_settings', {})
                 if loaded_clan_settings:
                     if 'heart_thresholds' not in loaded_clan_settings:
@@ -113,7 +112,6 @@ def load_settings():
 
 # --- CÁC HÀM LOGIC BOT ---
 
-# --- CHỨC NĂNG MỚI: Xử lý nhặt thẻ từ drop clan ---
 def handle_clan_drop(bot, msg, bot_num):
     if not (auto_clan_drop_settings.get("enabled") and auto_clan_drop_settings.get("ktb_channel_id")):
         return
@@ -166,7 +164,6 @@ def handle_clan_drop(bot, msg, bot_num):
     
     threading.Thread(target=grab_handler).start()
 
-# --- CHỨC NĂNG CŨ: Xử lý nhặt thẻ server (KHÔI PHỤC LOGIC GỐC) ---
 def handle_grab(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
@@ -219,36 +216,26 @@ def handle_grab(bot, msg, bot_num):
                     print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
                 if card_picked: break
 
-        # <<< FIX 2: SỬA LỖI LOGIC NHẶT DƯA HẤU >>>
-        # Logic cũ chỉ kiểm tra reaction 1 lần. Logic mới sẽ kiểm tra lặp lại trong 3 giây
-        # để bắt kịp sự kiện reaction '🍉' được thêm vào tin nhắn drop.
-        if watermelon_grab_enabled and not card_picked: # Chỉ nhặt dưa khi không nhặt thẻ
+        if watermelon_grab_enabled and not card_picked:
             watermelon_picked = False
-            # Thử kiểm tra 6 lần trong 3 giây (mỗi 0.5 giây)
             for _ in range(6): 
                 try:
-                    # Lấy thông tin mới nhất của tin nhắn drop
                     full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
                     if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
                         full_msg_obj = full_msg_obj[0]
-
-                    # Kiểm tra xem có reaction '🍉' không
                     if 'reactions' in full_msg_obj:
                         for reaction in full_msg_obj['reactions']:
                             if reaction['emoji']['name'] == '🍉':
                                 print(f"[{target_server['name']} | Bot {bot_num}] Phát hiện dưa hấu! Đang tiến hành nhặt...", flush=True)
                                 bot.addReaction(channel_id, last_drop_msg_id, "🍉")
                                 watermelon_picked = True
-                                break # Thoát khỏi vòng lặp reaction
+                                break 
                     if watermelon_picked:
-                        break # Thoát khỏi vòng lặp kiểm tra
-                    
-                    time.sleep(0.5) # Đợi 0.5s rồi kiểm tra lại
-
+                        break 
+                    time.sleep(0.5)
                 except Exception as e:
                     print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
-                    break # Dừng nếu có lỗi
-        # <<< KẾT THÚC FIX 2 >>>
+                    break
 
     threading.Thread(target=grab_handler).start()
 
@@ -278,49 +265,6 @@ def create_bot(token, bot_identifier, is_main=False):
     return bot
 
 # --- CÁC VÒNG LẶP NỀN ---
-
-# <<< FIX 1: THÊM VÒNG LẶP KIỂM TRA SỨC KHỎE VÀ TỰ REBOOT >>>
-# Luồng này sẽ chạy ngầm, định kỳ kiểm tra kết nối của các bot chính.
-# Nếu phát hiện bot nào bị mất kết nối (gây ra lỗi BrokenPipeError), nó sẽ tự khởi động lại bot đó.
-def health_check_and_reboot_loop():
-    global main_bots
-    print("[Health Check] Luồng kiểm tra sức khỏe và tự động reboot đã được kích hoạt.", flush=True)
-    while True:
-        time.sleep(300) # Kiểm tra mỗi 5 phút
-        print("[Health Check] Bắt đầu kiểm tra kết nối của các bot chính...", flush=True)
-        with bots_lock:
-            # Tạo một bản sao để tránh lỗi khi thay đổi list trong lúc duyệt
-            bots_to_check = list(enumerate(main_bots))
-            
-            for i, bot in bots_to_check:
-                try:
-                    # Cách đáng tin cậy để kiểm tra kết nối là xem socket có còn tồn tại và được kết nối không
-                    is_connected = bot.gateway.ws.sock and bot.gateway.ws.sock.connected
-                    if not is_connected:
-                        bot_num = i + 1
-                        bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{bot_num}"
-                        print(f"[Health Check] Phát hiện bot {bot_name} (ID: {bot_num}) bị mất kết nối! Đang tiến hành reboot...", flush=True)
-                        
-                        # Đóng kết nối cũ một cách an toàn
-                        try:
-                            bot.gateway.close()
-                        except:
-                            pass
-                        
-                        time.sleep(2) # Chờ một chút để giải phóng tài nguyên
-                        
-                        # Tạo lại bot mới
-                        new_bot = create_bot(main_tokens[i], bot_identifier=bot_num, is_main=True)
-                        main_bots[i] = new_bot # Thay thế bot cũ trong list
-                        
-                        print(f"[Health Check] Đã reboot thành công bot {bot_name}.", flush=True)
-                        time.sleep(5) # Giãn cách giữa các lần reboot nếu có nhiều bot cùng lỗi
-
-                except Exception as e:
-                    print(f"[Health Check] Gặp lỗi khi kiểm tra bot {i+1}: {e}", flush=True)
-
-# <<< KẾT THÚC FIX 1 >>>
-
 
 def run_clan_drop_cycle():
     global auto_clan_drop_settings
@@ -371,31 +315,76 @@ def auto_clan_drop_loop():
             time.sleep(60)
     print("[Clan Drop] Luồng tự động drop clan đã dừng.", flush=True)
 
-
+# <<< ĐÃ CẬP NHẬT THEO YÊU CẦU >>>
+# HÀM NÀY ĐÃ ĐƯỢC CẢI TIẾN - KẾT HỢP KIỂM TRA SỨC KHỎE VÀ REBOOT ĐỊNH KỲ
 def auto_reboot_loop():
     global last_reboot_cycle_time, main_bots
+    print("[Reboot] Luồng tự động reboot và kiểm tra sức khỏe đã bắt đầu.", flush=True)
     while not auto_reboot_stop_event.is_set():
         try:
-            if auto_reboot_stop_event.wait(timeout=60): break
+            # Vòng lặp sẽ kiểm tra mỗi 60 giây
+            if auto_reboot_stop_event.wait(timeout=60): 
+                break
+            
+            # --- PHẦN 1: KIỂM TRA SỨC KHỎE CHỦ ĐỘNG (FIX BROKEN PIPE) ---
+            with bots_lock:
+                bots_to_reboot = []
+                for i, bot in enumerate(main_bots):
+                    # Kiểm tra xem bot có tồn tại và kết nối websocket có còn "sống" không
+                    # Đây là cách trực tiếp để phát hiện Broken Pipe
+                    is_connected = bot and hasattr(bot.gateway, 'ws') and bot.gateway.ws and hasattr(bot.gateway.ws, 'sock') and bot.gateway.ws.sock and bot.gateway.ws.sock.connected
+                    if not is_connected:
+                        bots_to_reboot.append(i)
+
+                if bots_to_reboot:
+                    print(f"[Health Check] Phát hiện {len(bots_to_reboot)} bot mất kết nối. Tiến hành khởi động lại...", flush=True)
+                    for i in bots_to_reboot:
+                        bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
+                        print(f"[Health Check] Đang khởi động lại bot {bot_name}...", flush=True)
+                        try:
+                            if i < len(main_bots) and main_bots[i]:
+                                main_bots[i].gateway.close() # Cố gắng đóng kết nối cũ
+                                time.sleep(2)
+                            
+                            token = main_tokens[i]
+                            new_bot = create_bot(token, bot_identifier=(i+1), is_main=True)
+                            main_bots[i] = new_bot # Thay thế bot cũ bằng bot mới
+                            print(f"[Health Check] Bot {bot_name} đã được khởi động lại thành công.", flush=True)
+                            time.sleep(5) # Chờ 5s trước khi reboot bot tiếp theo
+                        except Exception as e:
+                            print(f"[Health Check] Lỗi nghiêm trọng khi khởi động lại bot {bot_name}: {e}", flush=True)
+            
+            # --- PHẦN 2: REBOOT TOÀN BỘ THEO LỊCH TRÌNH (NHƯ CŨ) ---
             if auto_reboot_enabled and (time.time() - last_reboot_cycle_time) >= auto_reboot_delay:
-                print("[Reboot] Hết thời gian chờ, tiến hành reboot các tài khoản chính.", flush=True)
+                print("[Reboot Scheduler] Hết thời gian chờ, tiến hành reboot toàn bộ các tài khoản chính.", flush=True)
+                
                 with bots_lock:
-                    new_main_bots = []
-                    for i, bot in enumerate(main_bots):
-                        if i < len(main_tokens):
-                            bot.gateway.close()
-                            time.sleep(2)
-                            bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
-                            new_bot = create_bot(main_tokens[i], bot_identifier=(i+1), is_main=True)
-                            new_main_bots.append(new_bot)
-                            print(f"Đã reboot bot {bot_name}", flush=True)
-                            time.sleep(5)
-                    main_bots = new_main_bots
+                    new_bot_instances = []
+                    for i, token in enumerate(main_tokens):
+                        if token.strip():
+                            try:
+                                if i < len(main_bots) and main_bots[i]:
+                                    main_bots[i].gateway.close()
+                                    time.sleep(2)
+                                
+                                bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
+                                new_bot = create_bot(token, bot_identifier=(i+1), is_main=True)
+                                new_bot_instances.append(new_bot)
+                                print(f"Đã tạo lại kết nối cho bot {bot_name}", flush=True)
+                                time.sleep(5)
+                            except Exception as e:
+                                print(f"[Reboot Scheduler] Lỗi khi xử lý bot {i+1}: {e}", flush=True)
+
+                    main_bots = new_bot_instances
+                    print("[Reboot Scheduler] Đã cập nhật danh sách bot chính toàn cục.", flush=True)
+
                 last_reboot_cycle_time = time.time()
                 save_settings()
+
         except Exception as e:
             print(f"[ERROR in auto_reboot_loop] {e}", flush=True)
             time.sleep(60)
+            
     print("[Reboot] Luồng tự động reboot đã dừng.", flush=True)
 
 def spam_loop():
@@ -404,7 +393,6 @@ def spam_loop():
         try:
             current_server_ids = {s['id'] for s in servers}
             
-            # Dừng các luồng không còn server tương ứng
             for server_id in list(active_server_threads.keys()):
                 if server_id not in current_server_ids:
                     print(f"[Spam Control] Dừng luồng spam cho server đã bị xóa: {server_id}", flush=True)
@@ -466,7 +454,7 @@ def periodic_save_loop():
         
 app = Flask(__name__)
 
-# --- GIAO DIỆN WEB (Không thay đổi, giữ nguyên) ---
+# --- GIAO DIỆN WEB (Không thay đổi) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -771,7 +759,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- FLASK ROUTES (Không thay đổi, giữ nguyên) ---
+# --- FLASK ROUTES (Không thay đổi) ---
 @app.route("/")
 def index():
     sorted_servers = sorted(servers, key=lambda s: s.get('name', ''))
@@ -820,7 +808,6 @@ def api_clan_drop_update():
             if isinstance(value, int):
                 auto_clan_drop_settings.setdefault('heart_thresholds', {})[key] = value
     return jsonify({'status': 'success', 'message': 'Clan Drop settings updated.'})
-
 
 @app.route("/api/add_server", methods=['POST'])
 def api_add_server():
@@ -885,7 +872,7 @@ def api_harvest_toggle():
 def api_watermelon_toggle():
     global watermelon_grab_states
     data = request.get_json()
-    node = data.get('node') # e.g., 'main_1'
+    node = data.get('node')
     if not node or node not in watermelon_grab_states:
         return jsonify({'status': 'error', 'message': 'Invalid bot node.'}), 404
     
@@ -929,8 +916,8 @@ def api_reboot_toggle_auto():
             auto_reboot_thread.start()
         msg = "Global Auto Reboot ENABLED."
     else:
-        if auto_reboot_stop_event: auto_reboot_stop_event.set()
-        auto_reboot_thread = None
+        # Chuyển trạng thái bật/tắt chứ không dừng hẳn luồng
+        # Luồng auto_reboot_loop sẽ tự kiểm tra biến auto_reboot_enabled
         msg = "Global Auto Reboot DISABLED."
     return jsonify({'status': 'success', 'message': msg})
 
@@ -954,7 +941,6 @@ def status():
     for server in servers:
         server['spam_countdown'] = 0
         if server.get('spam_enabled'):
-            # This logic for countdown is illustrative. A real implementation would need to store last spam time.
             pass
         
     with bots_lock:
@@ -1009,21 +995,18 @@ if __name__ == "__main__":
     spam_thread = threading.Thread(target=spam_loop, daemon=True)
     spam_thread.start()
     
-    if auto_reboot_enabled:
-        auto_reboot_stop_event.clear()
-        auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
-        auto_reboot_thread.start()
+    # Khởi động luồng reboot/health-check chính
+    auto_reboot_stop_event.clear()
+    auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
+    auto_reboot_thread.start()
 
     if auto_clan_drop_settings.get("enabled"):
         auto_clan_drop_stop_event.clear()
         auto_clan_drop_thread = threading.Thread(target=auto_clan_drop_loop, daemon=True)
         auto_clan_drop_thread.start()
     
-    # <<< FIX 3: KHỞI ĐỘNG LUỒNG KIỂM TRA SỨC KHỎE >>>
-    health_check_thread = threading.Thread(target=health_check_and_reboot_loop, daemon=True)
-    health_check_thread.start()
-    # <<< KẾT THÚC FIX 3 >>>
-
+    # <<< ĐÃ XÓA >>> Luồng health_check_thread đã bị loại bỏ vì logic đã được tích hợp vào auto_reboot_loop
+    
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
