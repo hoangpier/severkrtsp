@@ -486,7 +486,7 @@ HTML_TEMPLATE = """
                 </div>
                 <div class="server-sub-panel">
                      <h3><i class="fas fa-robot"></i> Bot Control Matrix</h3>
-                     <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));">
+                     <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));">
                          </div>
                 </div>
             </div>
@@ -628,7 +628,7 @@ HTML_TEMPLATE = """
                         const r_settings = data.bot_reboot_settings[botId];
                         controlHtml += `
                         <div class="input-group" style="margin-top: 10px; margin-bottom: 0;">
-                             <input type="number" class="bot-reboot-delay" value="${r_settings.delay}" data-bot-id="${botId}" style="flex-grow: 1;">
+                             <input type="number" class="bot-reboot-delay" value="${r_settings.delay}" data-bot-id="${botId}" style="width: 80px; text-align: right; flex-grow: 0;">
                              <span class="timer-display bot-reboot-timer" style="padding: 0 10px;">${formatTime(r_settings.countdown)}</span>
                              <button type="button" class="btn btn-small bot-reboot-toggle" data-bot-id="${botId}">
                                  ${r_settings.enabled ? 'DISABLE' : 'ENABLE'}
