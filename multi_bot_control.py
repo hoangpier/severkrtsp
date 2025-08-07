@@ -19,8 +19,8 @@ karuta_id = "646937666251915264"
 karibbit_id = "1311684840462225440"
 BOT_NAMES = [ # Tên để hiển thị trên giao diện, bạn có thể thêm nếu cần
     "ALPHA", "xsyx", "sofa", "dont", "ayaya",
-    "owo", "astra", "singo", "dia pox", "clam girl",
-    "killa killua", "domixi", "dogi", "sicula", "mo turn", "jan taru", "kio sama"
+    "owo", "astra", "singo", "dia pox", "clam",
+    "rambo", "domixi", "dogi", "sicula", "mo turn", "jan taru", "kio sama"
 ]
 
 # --- BIẾN TRẠNG THÁI ---
@@ -175,6 +175,8 @@ def handle_grab(bot, msg, bot_num):
     auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
     heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
     ktb_channel_id = target_server.get('ktb_channel_id')
+    
+    # Lấy trạng thái nhặt dưa hấu cho bot hiện tại
     watermelon_grab_enabled = watermelon_grab_states.get(f'main_{bot_num}', False)
 
     if not auto_grab_enabled and not watermelon_grab_enabled:
@@ -183,6 +185,7 @@ def handle_grab(bot, msg, bot_num):
     last_drop_msg_id = msg["id"]
     
     def grab_handler():
+        # --- LOGIC NHẶT THẺ (CARD GRAB) ---
         card_picked = False
         if auto_grab_enabled and ktb_channel_id:
             for _ in range(6):
@@ -219,17 +222,23 @@ def handle_grab(bot, msg, bot_num):
                     print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
                 if card_picked: break
 
+        # --- LOGIC NHẶT DƯA HẤU (EVENT GRAB) - ĐÃ CẬP NHẬT ---
         if watermelon_grab_enabled:
             try:
-                time.sleep(5)
+                # Chờ 5 giây để các reaction khác xuất hiện (logic từ Tool 2)
+                time.sleep(5) 
+                
+                # Lấy thông tin đầy đủ của tin nhắn drop
                 full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
                 if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
                     full_msg_obj = full_msg_obj[0]
+                
+                # Kiểm tra xem có reaction '🍉' không
                 if 'reactions' in full_msg_obj:
-                    for reaction in full_msg_obj['reactions']:
-                        if reaction['emoji']['name'] == '🍉':
-                            bot.addReaction(channel_id, last_drop_msg_id, "🍉")
-                            break 
+                    if any(reaction['emoji']['name'] == '🍉' for reaction in full_msg_obj['reactions']):
+                        bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
+                        print(f"[EVENT GRAB | {bot_name}] Phát hiện dưa hấu! Tiến hành nhặt.", flush=True)
+                        bot.addReaction(channel_id, last_drop_msg_id, "🍉")
             except Exception as e:
                 print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
 
