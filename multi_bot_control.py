@@ -10,6 +10,7 @@ from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
 import uuid
 import urllib.parse
+import random
 
 load_dotenv()
 
@@ -54,6 +55,7 @@ auto_reboot_stop_event = threading.Event()
 auto_clan_drop_stop_event = threading.Event()
 spam_thread, auto_reboot_thread, auto_clan_drop_thread = None, None, None
 bots_lock = threading.Lock()
+reaction_lock = threading.Lock() # *** SỬA LỖI: Thêm khóa cho reaction để tránh rate limit
 server_start_time = time.time()
 bot_active_states = {}
 
@@ -115,20 +117,23 @@ def load_settings():
 # --- CÁC HÀM LOGIC BOT ---
 
 def add_reaction_robust(token, channel_id, message_id, emoji):
-    headers = { "Authorization": token, "Content-Type": "application/json" }
-    encoded_emoji = urllib.parse.quote(emoji)
-    url = f"https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}/reactions/{encoded_emoji}/@me"
-    try:
-        response = requests.put(url, headers=headers, timeout=10)
-        if response.status_code == 204:
-            print(f"[REACTION ADDED] Thành công: {emoji} to message {message_id}", flush=True)
-            return True
-        else:
-            print(f"[REACTION FAILED] Lỗi: {response.status_code} - {response.text}", flush=True)
+    with reaction_lock: # *** SỬA LỖI: Chỉ cho phép 1 luồng thực hiện reaction tại một thời điểm
+        headers = { "Authorization": token, "Content-Type": "application/json" }
+        encoded_emoji = urllib.parse.quote(emoji)
+        url = f"https://discord.com/api/v9/channels/{channel_id}/messages/{message_id}/reactions/{encoded_emoji}/@me"
+        try:
+            # Thêm một khoảng trễ ngẫu nhiên nhỏ để tránh gửi request đồng loạt
+            time.sleep(random.uniform(0.2, 0.7))
+            response = requests.put(url, headers=headers, timeout=10)
+            if response.status_code == 204:
+                print(f"[REACTION ADDED] Thành công: {emoji} to message {message_id}", flush=True)
+                return True
+            else:
+                print(f"[REACTION FAILED] Lỗi: {response.status_code}", flush=True)
+                return False
+        except Exception as e:
+            print(f"[REACTION EXCEPTION] Lỗi khi thêm reaction: {e}", flush=True)
             return False
-    except Exception as e:
-        print(f"[REACTION EXCEPTION] Lỗi khi thêm reaction: {e}", flush=True)
-        return False
 
 def handle_clan_drop(bot, token, msg, bot_num):
     if not (auto_clan_drop_settings.get("enabled") and auto_clan_drop_settings.get("ktb_channel_id")):
@@ -990,4 +995,4 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"Khởi động Web Server tại http://0.0.0.0:{port}", flush=True)
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False
