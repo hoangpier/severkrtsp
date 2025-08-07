@@ -58,6 +58,7 @@ bots_lock = threading.Lock()
 reaction_lock = threading.Lock()
 server_start_time = time.time()
 bot_active_states = {}
+health_check_failures = {} # Biến theo dõi số lần kết nối thất bại liên tiếp
 
 # --- HÀM LƯU VÀ TẢI CÀI ĐẶT ---
 def save_settings():
@@ -340,25 +341,39 @@ def auto_clan_drop_loop():
 def auto_reboot_loop():
     global last_reboot_cycle_time, main_bots
     print("[Reboot] Luồng tự động reboot và kiểm tra sức khỏe đã bắt đầu.", flush=True)
+    
+    # Khởi tạo bộ đếm lỗi cho mỗi bot
+    for i in range(len(main_tokens)):
+        health_check_failures[i] = 0
+
     while not auto_reboot_stop_event.is_set():
         try:
-            # Vòng lặp sẽ kiểm tra mỗi 60 giây
-            if auto_reboot_stop_event.wait(timeout=60): 
+            # Tăng thời gian chờ giữa các lần kiểm tra lên 3 phút (180 giây) để giảm tải
+            if auto_reboot_stop_event.wait(timeout=180): 
                 break
             
             # --- PHẦN 1: KIỂM TRA SỨC KHỎE CHỦ ĐỘNG (FIX BROKEN PIPE) ---
+            print("[Health Check] Bắt đầu kiểm tra sức khỏe định kỳ...", flush=True)
             with bots_lock:
                 bots_to_reboot = []
                 for i, bot in enumerate(main_bots):
                     is_connected = bot and hasattr(bot.gateway, 'ws') and bot.gateway.ws and hasattr(bot.gateway.ws, 'sock') and bot.gateway.ws.sock and bot.gateway.ws.sock.connected
+                    
                     if not is_connected:
-                        bots_to_reboot.append(i)
+                        health_check_failures[i] = health_check_failures.get(i, 0) + 1
+                        print(f"[Health Check] Bot {i+1} mất kết nối. Đếm lỗi: {health_check_failures[i]}/3.", flush=True)
+                        if health_check_failures[i] >= 3:
+                            bots_to_reboot.append(i)
+                    else:
+                        if health_check_failures.get(i, 0) > 0:
+                           print(f"[Health Check] Bot {i+1} đã kết nối lại. Reset bộ đếm lỗi.", flush=True)
+                        health_check_failures[i] = 0
 
                 if bots_to_reboot:
-                    print(f"[Health Check] Phát hiện {len(bots_to_reboot)} bot mất kết nối. Tiến hành khởi động lại...", flush=True)
+                    print(f"[Reboot Trigger] Phát hiện {len(bots_to_reboot)} bot mất kết nối 3 lần liên tiếp. Tiến hành khởi động lại...", flush=True)
                     for i in bots_to_reboot:
                         bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
-                        print(f"[Health Check] Đang khởi động lại bot {bot_name}...", flush=True)
+                        print(f"[Reboot Trigger] Đang khởi động lại bot {bot_name}...", flush=True)
                         try:
                             if i < len(main_bots) and main_bots[i]:
                                 main_bots[i].gateway.close()
@@ -367,10 +382,11 @@ def auto_reboot_loop():
                             token = main_tokens[i]
                             new_bot = create_bot(token, bot_identifier=(i+1), is_main=True)
                             main_bots[i] = new_bot
-                            print(f"[Health Check] Bot {bot_name} đã được khởi động lại thành công.", flush=True)
+                            health_check_failures[i] = 0 # Reset bộ đếm sau khi reboot thành công
+                            print(f"[Reboot Trigger] Bot {bot_name} đã được khởi động lại thành công.", flush=True)
                             time.sleep(5)
                         except Exception as e:
-                            print(f"[Health Check] Lỗi nghiêm trọng khi khởi động lại bot {bot_name}: {e}", flush=True)
+                            print(f"[Reboot Trigger] Lỗi nghiêm trọng khi khởi động lại bot {bot_name}: {e}", flush=True)
             
             # --- PHẦN 2: REBOOT TOÀN BỘ THEO LỊCH TRÌNH ---
             if auto_reboot_enabled and (time.time() - last_reboot_cycle_time) >= auto_reboot_delay:
@@ -388,12 +404,12 @@ def auto_reboot_loop():
                                 bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
                                 new_bot = create_bot(token, bot_identifier=(i+1), is_main=True)
                                 new_bot_instances.append(new_bot)
+                                health_check_failures[i] = 0 # Reset bộ đếm
                                 print(f"Đã tạo lại kết nối cho bot {bot_name}", flush=True)
                                 time.sleep(5)
                             except Exception as e:
                                 print(f"[Reboot Scheduler] Lỗi khi xử lý bot {i+1}: {e}", flush=True)
                     
-                    # Cần phải thay thế list cũ bằng list mới, không phải clear và extend
                     main_bots = new_bot_instances
                     print("[Reboot Scheduler] Đã cập nhật danh sách bot chính toàn cục.", flush=True)
 
@@ -924,13 +940,12 @@ def api_broadcast_toggle():
 
 @app.route("/api/reboot_toggle_auto", methods=['POST'])
 def api_reboot_toggle_auto():
-    global auto_reboot_enabled, auto_reboot_delay, auto_reboot_thread, last_reboot_cycle_time
+    global auto_reboot_enabled, auto_reboot_delay, last_reboot_cycle_time
     data = request.get_json()
     auto_reboot_enabled = not auto_reboot_enabled
     auto_reboot_delay = int(data.get("delay", 3600))
     if auto_reboot_enabled:
         last_reboot_cycle_time = time.time()
-        # Luồng chính đã được khởi động, chỉ cần thay đổi biến là đủ
         msg = "Global Auto Reboot ENABLED."
     else:
         msg = "Global Auto Reboot DISABLED."
