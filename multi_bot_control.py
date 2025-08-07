@@ -1,3 +1,23 @@
+Chào bạn, tôi đã hiểu rõ yêu cầu. Vấn đề nhặt dưa hấu không ổn định là do cơ chế cũ chỉ kiểm tra reaction một lần duy nhất, nếu reaction `🍉` xuất hiện sau thời điểm kiểm tra đó thì bot sẽ bỏ lỡ.
+
+Tôi sẽ sửa lại mã nguồn trong file bạn đã gửi bằng cách thay thế cơ chế "nhìn một lần" đó bằng một vòng lặp quét liên tục, tương tự như cách nhặt thẻ đã hoạt động ổn định. Bot sẽ kiên trì kiểm tra tin nhắn drop trong vài giây để đảm bảo không bỏ lỡ sự kiện dưa hấu.
+
+Về yêu cầu cho phép tất cả các bot cùng nhặt thẻ, mã nguồn bạn cung cấp vốn đã hỗ trợ điều này. Mỗi bot hoạt động độc lập và sẽ tự động nhặt thẻ nếu được kích hoạt trong phần cài đặt của server đó.
+
+Dưới đây là toàn bộ nội dung file `multi_bot_control().py` đã được cập nhật với logic nhặt dưa hấu mới.
+
+-----
+
+### Tóm tắt thay đổi:
+
+Trong hàm `handle_grab`, phần logic xử lý `watermelon_grab_enabled` đã được sửa đổi:
+
+  * **Trước đây:** `time.sleep(5)` rồi kiểm tra tin nhắn một lần.
+  * **Bây giờ:** Một vòng lặp `for` chạy trong khoảng 5 giây. Trong mỗi vòng lặp, nó sẽ nạp lại thông tin tin nhắn và kiểm tra xem reaction `🍉` đã xuất hiện chưa. Nếu có, nó sẽ nhặt và thoát khỏi vòng lặp.
+
+Đây là phiên bản hoàn chỉnh đã được cập nhật:
+
+```python
 # PHIÊN BẢN HOÀN CHỈNH - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG - TÍCH HỢP DROP CLAN
 import discum
 import threading
@@ -238,21 +258,33 @@ def handle_grab(bot, token, msg, bot_num):
                 except Exception as e:
                     print(f"Lỗi khi đọc Karibbit (Bot {bot_num} @ {target_server['name']}): {e}", flush=True)
                 if card_picked: break
-
+        
+        # <<< START MODIFICATION / BẮT ĐẦU SỬA ĐỔI >>>
         if watermelon_grab_enabled:
-            try:
-                time.sleep(5) 
-                full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
-                if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
-                    full_msg_obj = full_msg_obj[0]
+            watermelon_picked = False
+            # Quét trong 5 giây (10 lần x 0.5s) để tìm dưa hấu
+            for _ in range(10):
+                if watermelon_picked: break
+                try:
+                    # Lấy thông tin mới nhất của tin nhắn drop
+                    full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
+                    if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
+                        full_msg_obj = full_msg_obj[0]
+                    
+                    if 'reactions' in full_msg_obj:
+                        if any(reaction['emoji']['name'] == '🍉' for reaction in full_msg_obj['reactions']):
+                            bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
+                            print(f"[EVENT GRAB | {bot_name}] Phát hiện dưa hấu! Tiến hành nhặt.", flush=True)
+                            add_reaction_robust(token, channel_id, last_drop_msg_id, "🍉")
+                            watermelon_picked = True # Đã nhặt, đánh dấu để thoát vòng lặp
+                except Exception as e:
+                    print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
+                    # Chờ một chút trước khi thử lại để tránh spam lỗi
+                    time.sleep(1)
                 
-                if 'reactions' in full_msg_obj:
-                    if any(reaction['emoji']['name'] == '🍉' for reaction in full_msg_obj['reactions']):
-                        bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
-                        print(f"[EVENT GRAB | {bot_name}] Phát hiện dưa hấu! Tiến hành nhặt.", flush=True)
-                        add_reaction_robust(token, channel_id, last_drop_msg_id, "🍉")
-            except Exception as e:
-                print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
+                # Chờ một chút trước lần quét tiếp theo
+                time.sleep(0.5)
+        # <<< END MODIFICATION / KẾT THÚC SỬA ĐỔI >>>
 
     threading.Thread(target=grab_handler).start()
 
@@ -545,8 +577,7 @@ HTML_TEMPLATE = """
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-watermelon-slice"></i> Watermelon Grab (All Servers)</h3>
                     <div id="global-watermelon-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
-                        <!-- JS will populate this -->
-                    </div>
+                        </div>
                 </div>
             </div>
 
