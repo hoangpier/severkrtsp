@@ -337,15 +337,46 @@ def auto_clan_drop_loop():
             time.sleep(60)
     print("[Clan Drop] Luồng tự động drop clan đã dừng.", flush=True)
 
+# <<< HÀM NÀY ĐÃ ĐƯỢC CẬP NHẬT ĐỂ FIX LỖI BROKEN PIPE >>>
 def auto_reboot_loop():
     global last_reboot_cycle_time, main_bots
     while not auto_reboot_stop_event.is_set():
         try:
+            # Vòng lặp sẽ kiểm tra mỗi 60 giây
             if auto_reboot_stop_event.wait(timeout=60): 
                 break
             
+            # --- PHẦN 1: KIỂM TRA SỨC KHỎE CHỦ ĐỘNG (FIX BROKEN PIPE) ---
+            with bots_lock:
+                bots_to_reboot = []
+                for i, bot in enumerate(main_bots):
+                    # Kiểm tra xem bot có tồn tại và kết nối websocket có còn "sống" không
+                    # Đây là cách trực tiếp để phát hiện Broken Pipe
+                    is_connected = bot and hasattr(bot.gateway.ws, 'sock') and bot.gateway.ws.sock and bot.gateway.ws.sock.connected
+                    if not is_connected:
+                        bots_to_reboot.append(i)
+
+                if bots_to_reboot:
+                    print(f"[Health Check] Phát hiện {len(bots_to_reboot)} bot mất kết nối. Tiến hành khởi động lại...", flush=True)
+                    for i in bots_to_reboot:
+                        bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
+                        print(f"[Health Check] Đang khởi động lại bot {bot_name}...", flush=True)
+                        try:
+                            if i < len(main_bots) and main_bots[i]:
+                                main_bots[i].gateway.close() # Cố gắng đóng kết nối cũ
+                                time.sleep(2)
+                            
+                            token = main_tokens[i]
+                            new_bot = create_bot(token, bot_identifier=(i+1), is_main=True)
+                            main_bots[i] = new_bot # Thay thế bot cũ bằng bot mới
+                            print(f"[Health Check] Bot {bot_name} đã được khởi động lại thành công.", flush=True)
+                            time.sleep(5) # Chờ 5s trước khi reboot bot tiếp theo
+                        except Exception as e:
+                            print(f"[Health Check] Lỗi nghiêm trọng khi khởi động lại bot {bot_name}: {e}", flush=True)
+            
+            # --- PHẦN 2: REBOOT TOÀN BỘ THEO LỊCH TRÌNH (NHƯ CŨ) ---
             if auto_reboot_enabled and (time.time() - last_reboot_cycle_time) >= auto_reboot_delay:
-                print("[Reboot] Hết thời gian chờ, tiến hành reboot các tài khoản chính.", flush=True)
+                print("[Reboot Scheduler] Hết thời gian chờ, tiến hành reboot toàn bộ các tài khoản chính.", flush=True)
                 
                 with bots_lock:
                     new_bot_instances = []
@@ -362,11 +393,11 @@ def auto_reboot_loop():
                                 print(f"Đã tạo lại kết nối cho bot {bot_name}", flush=True)
                                 time.sleep(5)
                             except Exception as e:
-                                print(f"[Reboot] Lỗi khi xử lý bot {i+1}: {e}", flush=True)
+                                print(f"[Reboot Scheduler] Lỗi khi xử lý bot {i+1}: {e}", flush=True)
 
                     main_bots.clear()
                     main_bots.extend(new_bot_instances)
-                    print("[Reboot] Đã cập nhật danh sách bot chính toàn cục.", flush=True)
+                    print("[Reboot Scheduler] Đã cập nhật danh sách bot chính toàn cục.", flush=True)
 
                 last_reboot_cycle_time = time.time()
                 save_settings()
@@ -988,10 +1019,11 @@ if __name__ == "__main__":
     spam_thread = threading.Thread(target=spam_loop, daemon=True)
     spam_thread.start()
     
-    if auto_reboot_enabled:
-        auto_reboot_stop_event.clear()
-        auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
-        auto_reboot_thread.start()
+    # Luồng auto_reboot_loop sẽ luôn chạy để kiểm tra sức khỏe, 
+    # nhưng chỉ reboot theo lịch khi auto_reboot_enabled là True
+    auto_reboot_stop_event.clear()
+    auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
+    auto_reboot_thread.start()
 
     if auto_clan_drop_settings.get("enabled"):
         auto_clan_drop_stop_event.clear()
