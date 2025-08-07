@@ -56,8 +56,6 @@ auto_clan_drop_stop_event = threading.Event()
 spam_thread, auto_reboot_thread, auto_clan_drop_thread = None, None, None
 bots_lock = threading.Lock()
 reaction_lock = threading.Lock()
-processed_drops = set() # *** SỬA LỖI: Theo dõi TẤT CẢ drops đã được xử lý
-processed_drops_lock = threading.Lock() # *** SỬA LỖI: Khóa cho biến trên
 server_start_time = time.time()
 bot_active_states = {}
 
@@ -145,11 +143,6 @@ def handle_clan_drop(bot, token, msg, bot_num):
 
     last_drop_msg_id = msg["id"]
     
-    with processed_drops_lock:
-        if last_drop_msg_id in processed_drops:
-            return
-        processed_drops.add(last_drop_msg_id)
-
     def grab_handler():
         card_picked = False
         ktb_channel_id = auto_clan_drop_settings["ktb_channel_id"]
@@ -209,11 +202,6 @@ def handle_grab(bot, token, msg, bot_num):
 
     last_drop_msg_id = msg["id"]
     
-    with processed_drops_lock:
-        if last_drop_msg_id in processed_drops:
-            return
-        processed_drops.add(last_drop_msg_id)
-
     def grab_handler():
         card_picked = False
         if auto_grab_enabled and ktb_channel_id:
@@ -265,9 +253,6 @@ def handle_grab(bot, token, msg, bot_num):
                         add_reaction_robust(token, channel_id, last_drop_msg_id, "🍉")
             except Exception as e:
                 print(f"Lỗi khi kiểm tra sự kiện dưa hấu (Bot {bot_num}): {e}", flush=True)
-                with processed_drops_lock:
-                    if last_drop_msg_id in processed_drops:
-                        processed_drops.remove(last_drop_msg_id)
 
     threading.Thread(target=grab_handler).start()
 
