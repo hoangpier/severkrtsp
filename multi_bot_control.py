@@ -1,4 +1,4 @@
-# PHIÊN BẢN CẢI TIẾN - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG - TÍCH HỢP DROP CLAN - REBOOT AN TOÀN
+# PHIÊN BẢN CẢI TIẾN - HỖ TRỢ N TÀI KHOẢN CHÍNH - SPAM SONG SONG - TÍCH HỢP DROP CLAN - REBOOT AN TOÀN - SỬA LỖI NHẶT DƯA
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -160,42 +160,53 @@ def handle_grab(bot, msg, bot_num):
     
     last_drop_msg_id = msg["id"]
 
+    # <<< BẮT ĐẦU KHỐI CODE ĐƯỢC THAY THẾ >>>
     def grab_logic_thread():
-        # Card Grab Logic
+        # --- Chạy song song cả hai logic ---
+
+        # 1. Luồng nhặt thẻ (Card Grab Logic)
         if auto_grab_enabled and target_server.get('ktb_channel_id'):
             threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
-            if _find_and_select_card(bot, channel_id, last_drop_msg_id, threshold, bot_num, target_server.get('ktb_channel_id')):
-                return # Nếu grab card thành công thì không cần check dưa hấu nữa
+            # Chạy việc tìm thẻ trong một luồng riêng để không chặn việc nhặt dưa
+            threading.Thread(target=_find_and_select_card, args=(bot, channel_id, last_drop_msg_id, threshold, bot_num, target_server.get('ktb_channel_id')), daemon=True).start()
 
-        # Watermelon Grab Logic
+        # 2. Luồng nhặt dưa hấu (Watermelon Grab Logic) - Áp dụng phương pháp của tool cũ
         if watermelon_grab_enabled:
-            print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu hunting...", flush=True)
-            max_check_duration, check_interval = 15, 0.3
-            start_time = time.time()
             
-            while time.time() - start_time < max_check_duration:
+            def check_for_watermelon_patiently():
+                print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu canh dưa (chờ 5 giây)...", flush=True)
+                # Chờ 5 giây cho các bot khác phản ứng
+                time.sleep(5) 
+                
                 try:
+                    # Lấy lại thông tin tin nhắn MỚI NHẤT sau khi chờ
                     target_message = bot.getMessage(channel_id, last_drop_msg_id).json()[0]
                     reactions = target_message.get('reactions', [])
+                    
                     for reaction in reactions:
                         emoji_name = reaction.get('emoji', {}).get('name', '')
                         if '🍉' in emoji_name or 'watermelon' in emoji_name.lower() or 'dua' in emoji_name.lower():
                             print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DỰA HẤU!", flush=True)
-                            for _ in range(3):
-                                try:
-                                    bot.addReaction(channel_id, last_drop_msg_id, "🍉")
-                                    print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DỰA THÀNH CÔNG!", flush=True)
-                                    return # Thoát thread
-                                except Exception as e:
-                                    print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react: {e}", flush=True)
-                                    time.sleep(0.2)
-                            return # Dù thành công hay thất bại, đã thử thì thoát
-                    time.sleep(check_interval)
-                except Exception:
-                    time.sleep(check_interval)
-            print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu.", flush=True)
+                            try:
+                                # Thử nhặt
+                                bot.addReaction(channel_id, last_drop_msg_id, "🍉")
+                                print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DỰA THÀNH CÔNG!", flush=True)
+                                return # Nhặt xong thì kết thúc
+                            except Exception as e:
+                                print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
+                            return
+                            
+                    # Nếu chạy hết vòng lặp mà không thấy, tức là không có dưa
+                    print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau khi chờ.", flush=True)
+
+                except Exception as e:
+                    print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi lấy tin nhắn để check dưa: {e}", flush=True)
+
+            # Chạy luồng canh dưa
+            threading.Thread(target=check_for_watermelon_patiently, daemon=True).start()
 
     threading.Thread(target=grab_logic_thread, daemon=True).start()
+    # <<< KẾT THÚC KHỐI CODE ĐƯỢC THAY THẾ >>>
 
 # --- HỆ THỐNG REBOOT & HEALTH CHECK ---
 def check_bot_health(bot, bot_id):
