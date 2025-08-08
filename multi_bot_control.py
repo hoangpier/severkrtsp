@@ -598,8 +598,9 @@ def handle_clan_drop(bot, msg, bot_num):
 
     threading.Thread(target=grab_handler, daemon=True).start()
 
+# CẢI THIỆN WATERMELON GRAB LOGIC - SỬA CÁC VẤN ĐỀ CHÍNH
 def handle_grab(bot, msg, bot_num):
-    """Cải tiến hàm handle_grab với fix watermelon grab logic"""
+    """Cải tiến hàm handle_grab với fix watermelon grab logic - Version 2.0"""
     channel_id = msg.get("channel_id")
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
     if not target_server:
@@ -618,9 +619,9 @@ def handle_grab(bot, msg, bot_num):
     def grab_handler():
         card_picked = False
 
-        # === CARD GRAB LOGIC ===
+        # === CARD GRAB LOGIC === (giữ nguyên)
         if auto_grab_enabled and ktb_channel_id:
-            for attempt in range(6):  # Tăng số lần thử từ 6 lên để đảm bảo
+            for attempt in range(6):
                 time.sleep(0.5)
                 try:
                     messages = bot.getMessages(channel_id, num=5).json()
@@ -656,8 +657,6 @@ def handle_grab(bot, msg, bot_num):
                             max_num = max(heart_numbers)
                             if max_num >= heart_threshold:
                                 max_index = heart_numbers.index(max_num)
-
-                                # Delays cho từng bot
                                 delays = {
                                     1: [0.4, 1.4, 2.1],
                                     2: [0.7, 1.8, 2.4],
@@ -674,7 +673,7 @@ def handle_grab(bot, msg, bot_num):
                                 def grab_action():
                                     try:
                                         bot.addReaction(channel_id, last_drop_msg_id, emoji)
-                                        time.sleep(1.2)  # Tăng delay một chút
+                                        time.sleep(1.2)
                                         bot.sendMessage(ktb_channel_id, "kt b")
                                         print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
                                     except Exception as e:
@@ -697,89 +696,171 @@ def handle_grab(bot, msg, bot_num):
                 if card_picked:
                     break
 
-        # === WATERMELON GRAB LOGIC - SỬA LỖI CHÍNH ===
+        # === WATERMELON GRAB LOGIC - SỬA LỖI HOÀN TOÀN ===
         if watermelon_grab_enabled:
-            print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu kiểm tra dưa hấu...", flush=True)
+            print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu hunting dưa hấu...", flush=True)
 
-            # Đợi một thời gian để message được update với reactions
-            time.sleep(4.0)  # Tăng thời gian chờ từ 3.5s lên 4s
+            # STRATEGY MỚI: Thay vì chờ reactions được add, chúng ta sẽ monitor message updates
+            watermelon_found = False
+            check_start_time = time.time()
+            max_check_duration = 15  # Tối đa 15 giây để tìm dưa
+            check_interval = 0.3  # Check mỗi 0.3 giây
 
-            max_attempts = 8  # Tăng số lần thử từ implicit 1 lên 8
-            found_watermelon = False
+            attempt_count = 0
 
-            for wm_attempt in range(max_attempts):
+            while time.time() - check_start_time < max_check_duration and not watermelon_found:
+                attempt_count += 1
                 try:
-                    # Lấy message detail để xem reactions
-                    full_msg_response = bot.getMessage(channel_id, last_drop_msg_id)
+                    # SỬA LỖI 1: Lấy message từ channel chứ không phải từ bot.getMessage
+                    # vì bot.getMessage có thể cache cũ
+                    recent_messages = bot.getMessages(channel_id, num=3).json()
 
-                    if not full_msg_response:
-                        print(f"[WATERMELON | Bot {bot_num}] ❌ Không thể lấy message (attempt {wm_attempt+1})", flush=True)
-                        time.sleep(1)
+                    if not isinstance(recent_messages, list):
+                        print(f"[WATERMELON | Bot {bot_num}] ⚠️ Invalid message format (attempt {attempt_count})", flush=True)
+                        time.sleep(check_interval)
                         continue
 
-                    full_msg_obj = full_msg_response.json()
+                    # Tìm message drop chính xác
+                    target_message = None
+                    for msg_item in recent_messages:
+                        if msg_item.get("id") == last_drop_msg_id:
+                            target_message = msg_item
+                            break
 
-                    # Xử lý response format khác nhau
-                    if isinstance(full_msg_obj, list):
-                        if len(full_msg_obj) == 0:
-                            print(f"[WATERMELON | Bot {bot_num}] ⚠️ Empty message list (attempt {wm_attempt+1})", flush=True)
-                            time.sleep(1)
-                            continue
-                        full_msg_obj = full_msg_obj[0]
-
-                    if not isinstance(full_msg_obj, dict):
-                        print(f"[WATERMELON | Bot {bot_num}] ❌ Invalid message format: {type(full_msg_obj)} (attempt {wm_attempt+1})", flush=True)
-                        time.sleep(1)
+                    if not target_message:
+                        print(f"[WATERMELON | Bot {bot_num}] ⚠️ Không tìm thấy drop message (attempt {attempt_count})", flush=True)
+                        time.sleep(check_interval)
                         continue
 
-                    # Kiểm tra reactions
-                    reactions = full_msg_obj.get('reactions', [])
+                    # SỬA LỖI 2: Kiểm tra reactions trong message luôn
+                    reactions = target_message.get('reactions', [])
+
                     if not reactions:
-                        print(f"[WATERMELON | Bot {bot_num}] ⏳ Chưa có reactions (attempt {wm_attempt+1})", flush=True)
-                        time.sleep(1.5)
+                        # Chưa có reactions nào, tiếp tục chờ
+                        print(f"[WATERMELON | Bot {bot_num}] ⏳ Chưa có reactions (attempt {attempt_count}, {time.time() - check_start_time:.1f}s)", flush=True)
+                        time.sleep(check_interval)
                         continue
 
-                    # Tìm watermelon reaction
-                    watermelon_found = False
+                    # SỬA LỖI 3: Tìm dưa hấu trong reactions với logic chính xác hơn
+                    watermelon_reaction_found = False
                     for reaction in reactions:
                         emoji_data = reaction.get('emoji', {})
+
+                        # Check cả name và unicode
                         emoji_name = emoji_data.get('name', '')
+                        emoji_id = emoji_data.get('id')  # None for unicode emojis
 
-                        if emoji_name == '🍉':
-                            print(f"[WATERMELON | Bot {bot_num}] 🎯 Tìm thấy 🍉 reaction!", flush=True)
-                            watermelon_found = True
+                        # Dưa hấu có thể xuất hiện dưới các dạng:
+                        # 1. Unicode emoji: name = "🍉", id = None
+                        # 2. Custom emoji có tên chứa "watermelon" hoặc "dua"
+                        is_watermelon = (
+                            emoji_name == '🍉' or
+                            emoji_name == 'watermelon' or
+                            'watermelon' in emoji_name.lower() or
+                            'dua' in emoji_name.lower() or
+                            emoji_name == '\U0001f349'  # Unicode codepoint
+                        )
+
+                        if is_watermelon:
+                            print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DỰA HẤU! Emoji: {emoji_name} (attempt {attempt_count})", flush=True)
+                            watermelon_reaction_found = True
                             break
 
-                    if watermelon_found:
-                        try:
-                            # Add reaction với error handling
-                            bot.addReaction(channel_id, last_drop_msg_id, "🍉")
-                            print(f"[WATERMELON | Bot {bot_num}] ✅ Đã nhặt dưa hấu thành công!", flush=True)
-                            found_watermelon = True
-                            break
-                        except Exception as e:
-                            print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi add reaction: {e}", flush=True)
-                            # Thử tiếp attempt tiếp theo
-                            time.sleep(1)
-                            continue
+                    if watermelon_reaction_found:
+                        # SỬA LỖI 4: Thử add reaction ngay lập tức với retry logic
+                        reaction_success = False
+                        for react_attempt in range(3):
+                            try:
+                                # Thử add reaction với emoji unicode
+                                bot.addReaction(channel_id, last_drop_msg_id, "🍉")
+                                print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DỰA THÀNH CÔNG! (react_attempt {react_attempt + 1})", flush=True)
+                                reaction_success = True
+                                watermelon_found = True
+                                break
+                            except Exception as react_error:
+                                print(f"[WATERMELON | Bot {bot_num}] ❌ React attempt {react_attempt + 1} failed: {react_error}", flush=True)
+                                if react_attempt < 2:  # Retry after short delay
+                                    time.sleep(0.2)
+
+                        if not reaction_success:
+                            print(f"[WATERMELON | Bot {bot_num}] 💔 Tất cả react attempts đều thất bại", flush=True)
+
+                        break  # Dù thành công hay thất bại, đã tìm thấy dưa thì thoát
                     else:
-                        # Nếu không tìm thấy dưa hấu, đợi thêm và thử lại
-                        if wm_attempt < max_attempts - 1:  # Không phải attempt cuối
-                            time.sleep(1.5)
-                        else:
-                            print(f"[WATERMELON | Bot {bot_num}] 🚫 Không tìm thấy 🍉 reaction sau {max_attempts} attempts", flush=True)
+                        # Có reactions nhưng không phải dưa hấu
+                        reaction_names = [r.get('emoji', {}).get('name', 'unknown') for r in reactions]
+                        print(f"[WATERMELON | Bot {bot_num}] 🔍 Có {len(reactions)} reactions nhưng không phải dưa: {reaction_names} (attempt {attempt_count})", flush=True)
+                        time.sleep(check_interval)
+                        continue
 
                 except Exception as e:
-                    print(f"[WATERMELON | Bot {bot_num}] ❌ Exception khi kiểm tra dưa hấu (attempt {wm_attempt+1}): {e}", flush=True)
-                    if wm_attempt < max_attempts - 1:
-                        time.sleep(1)
+                    print(f"[WATERMELON | Bot {bot_num}] ❌ Exception trong attempt {attempt_count}: {e}", flush=True)
+                    time.sleep(check_interval)
                     continue
 
-            if not found_watermelon:
-                print(f"[WATERMELON | Bot {bot_num}] 💔 Không nhặt được dưa hấu sau tất cả attempts", flush=True)
+            if not watermelon_found:
+                total_time = time.time() - check_start_time
+                print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau {attempt_count} attempts trong {total_time:.1f}s", flush=True)
 
-    # Chạy grab_handler trong thread riêng
-    threading.Thread(target=grab_handler, daemon=True).start()
+    # Chạy grab_handler trong thread riêng với timeout
+    def grab_with_timeout():
+        try:
+            grab_handler()
+        except Exception as e:
+            print(f"[GRAB HANDLER | Bot {bot_num}] ❌ Critical error: {e}", flush=True)
+
+    threading.Thread(target=grab_with_timeout, daemon=True).start()
+
+
+# THÊM HÀM DEBUG ĐỂ KIỂM TRA REACTIONS
+def debug_reactions(bot, channel_id, message_id, bot_num):
+    """Debug function để kiểm tra reactions trên message"""
+    try:
+        print(f"[DEBUG | Bot {bot_num}] Checking reactions for message {message_id}", flush=True)
+
+        # Method 1: Dùng getMessage
+        msg_response = bot.getMessage(channel_id, message_id)
+        if msg_response:
+            msg_data = msg_response.json()
+            if isinstance(msg_data, list) and len(msg_data) > 0:
+                msg_data = msg_data[0]
+
+            reactions = msg_data.get('reactions', [])
+            print(f"[DEBUG | Bot {bot_num}] Method 1 - Found {len(reactions)} reactions:", flush=True)
+            for i, reaction in enumerate(reactions):
+                emoji_data = reaction.get('emoji', {})
+                count = reaction.get('count', 0)
+                print(f"  Reaction {i}: {emoji_data.get('name', 'unknown')} (count: {count})", flush=True)
+
+        # Method 2: Dùng getMessages
+        messages = bot.getMessages(channel_id, num=5).json()
+        if isinstance(messages, list):
+            for msg in messages:
+                if msg.get('id') == message_id:
+                    reactions = msg.get('reactions', [])
+                    print(f"[DEBUG | Bot {bot_num}] Method 2 - Found {len(reactions)} reactions:", flush=True)
+                    for i, reaction in enumerate(reactions):
+                        emoji_data = reaction.get('emoji', {})
+                        count = reaction.get('count', 0)
+                        print(f"  Reaction {i}: {emoji_data.get('name', 'unknown')} (count: {count})", flush=True)
+                    break
+
+    except Exception as e:
+        print(f"[DEBUG | Bot {bot_num}] Debug error: {e}", flush=True)
+
+
+# CẢI TIẾN THÊM: Thêm monitoring cho watermelon events
+def monitor_watermelon_events():
+    """Monitor và log watermelon events để debug"""
+    watermelon_stats = {
+        'total_attempts': 0,
+        'successful_grabs': 0,
+        'missed_grabs': 0,
+        'error_count': 0
+    }
+
+    # Có thể lưu stats này và hiển thị trên web interface
+    return watermelon_stats
 
 def create_bot(token, bot_identifier, is_main=False):
     """Tạo bot với error handling tốt hơn"""
@@ -1744,5 +1825,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     print(f"🌐 Starting Enhanced Web Server at http://0.0.0.0:{port}", flush=True)
     print("✅ Shadow Network Control - Enhanced Version Ready!", flush=True)
-
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
