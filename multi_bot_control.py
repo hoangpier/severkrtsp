@@ -511,7 +511,122 @@ def auto_reboot_loop():
     print("[Safe Reboot] 🛑 Luồng tự động reboot đã dừng", flush=True)
 
 
-# --- CÁC HÀM LOGIC BOT (CẬP NHẬT) ---
+# --- CÁC HÀM LOGIC BOT (CẬP NHẬT VỚI BẢN SỬA LỖI) ---
+
+def create_bot(token, bot_identifier, is_main=False):
+    """Tạo bot với enhanced message detection cho watermelon"""
+    try:
+        print(f"[Bot Creation] 🔌 Đang tạo bot {bot_identifier} ({'main' if is_main else 'sub'})...", flush=True)
+
+        bot = discum.Client(token=token, log=False)
+
+        @bot.gateway.command
+        def on_ready(resp):
+            if resp.event.ready:
+                user = resp.raw.get("user", {})
+                if isinstance(user, dict) and (user_id := user.get("id")):
+                    bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else acc_names[bot_identifier] if not is_main and bot_identifier < len(acc_names) else f"Bot {bot_identifier}"
+                    print(f"[Bot Creation] ✅ Đã đăng nhập: {user_id} ({bot_name})", flush=True)
+
+                    if is_main:
+                        bot_id = f"main_{bot_identifier}"
+                        if bot_id not in bot_health_stats:
+                            bot_health_stats[bot_id] = {
+                                'last_health_check': time.time(),
+                                'consecutive_failures': 0,
+                                'total_checks': 0,
+                                'created_time': time.time()
+                            }
+
+        if is_main:
+            @bot.gateway.command
+            def on_message(resp):
+                if resp.event.message:
+                    msg = resp.parsed.auto()
+                    
+                    # LOG TẤT CẢ MESSAGES TỪ KARUTA/KARIBBIT để debug
+                    author_id = msg.get("author", {}).get("id")
+                    content = msg.get("content", "").lower()
+                    
+                    if author_id == karuta_id:
+                        print(f"[MESSAGE DEBUG | Bot {bot_identifier}] KARUTA MSG: {content[:50]}...", flush=True)
+                        
+                        if "dropping" in content:
+                            if msg.get("mentions"):
+                                print(f"[MESSAGE DEBUG | Bot {bot_identifier}] 👥 CLAN DROP detected", flush=True)
+                                handle_clan_drop(bot, msg, bot_identifier)
+                            else:
+                                print(f"[MESSAGE DEBUG | Bot {bot_identifier}] 🃏 CARD DROP detected", flush=True)
+                                # QUAN TRỌNG: Luôn gọi handle_grab cho mọi drop message
+                                handle_grab(bot, msg, bot_identifier)
+                    
+                    elif author_id == karibbit_id:
+                        print(f"[MESSAGE DEBUG | Bot {bot_identifier}] KARIBBIT MSG: {content[:50]}...", flush=True)
+                        # Karibbit messages cũng có thể là drops
+                        if any(keyword in content for keyword in ["drop", "grab", "pick"]):
+                            print(f"[MESSAGE DEBUG | Bot {bot_identifier}] 🎯 KARIBBIT DROP detected", flush=True)
+                            handle_grab(bot, msg, bot_identifier)
+            
+            # THÊM: Lắng nghe REACTION_ADD events để detect watermelon nhanh hơn
+            @bot.gateway.command  
+            def on_reaction_add(resp):
+                if resp.event.message_reaction_add:
+                    reaction_data = resp.parsed.auto()
+                    
+                    # Log tất cả reactions để debug
+                    emoji = reaction_data.get("emoji", {})
+                    emoji_name = emoji.get("name", "")
+                    message_id = reaction_data.get("message_id")
+                    channel_id = reaction_data.get("channel_id")
+                    
+                    # Check if it's watermelon reaction
+                    watermelon_patterns = ['🍉', 'watermelon', 'melon', 'dua', 'duahau']
+                    is_watermelon = any(pattern in emoji_name.lower() for pattern in watermelon_patterns) or emoji_name == '🍉'
+                    
+                    if is_watermelon:
+                        print(f"[WATERMELON REACTION | Bot {bot_identifier}] 🍉 Detected watermelon reaction: {emoji_name} on message {message_id}", flush=True)
+                        
+                        # Quick grab attempt
+                        if watermelon_grab_states.get(f'main_{bot_identifier}', False):
+                            try:
+                                # Immediate reaction attempt
+                                threading.Thread(target=lambda: quick_watermelon_grab(bot, channel_id, message_id, bot_identifier), daemon=True).start()
+                            except Exception as e:
+                                print(f"[WATERMELON REACTION | Bot {bot_identifier}] ❌ Quick grab error: {e}", flush=True)
+
+        threading.Thread(target=bot.gateway.run, daemon=True).start()
+        time.sleep(2)
+        return bot
+
+    except Exception as e:
+        print(f"[Bot Creation] ❌ Lỗi tạo bot {bot_identifier}: {e}", flush=True)
+        print(f"[Bot Creation] 📊 Traceback: {traceback.format_exc()}", flush=True)
+        return None
+
+def quick_watermelon_grab(bot, channel_id, message_id, bot_num):
+    """Quick watermelon grab khi detect được reaction"""
+    try:
+        print(f"[QUICK WATERMELON | Bot {bot_num}] 🚀 Attempting quick grab on message {message_id}", flush=True)
+        
+        # Try multiple emoji formats immediately
+        emoji_attempts = ['🍉', '\U0001f349']
+        
+        for emoji in emoji_attempts:
+            try:
+                bot.addReaction(channel_id, message_id, emoji)
+                print(f"[QUICK WATERMELON | Bot {bot_num}] ✅ Quick grab SUCCESS with {emoji}!", flush=True)
+                return True
+            except Exception as e:
+                print(f"[QUICK WATERMELON | Bot {bot_num}] ⚠️ Quick grab failed with {emoji}: {e}", flush=True)
+                continue
+        
+        print(f"[QUICK WATERMELON | Bot {bot_num}] 💔 All quick grab attempts failed", flush=True)
+        return False
+        
+    except Exception as e:
+        print(f"[QUICK WATERMELON | Bot {bot_num}] ❌ Quick grab error: {e}", flush=True)
+        return False
+
 def handle_clan_drop(bot, msg, bot_num):
     """Cải tiến hàm handle_clan_drop tương tự"""
     if not (auto_clan_drop_settings.get("enabled") and auto_clan_drop_settings.get("ktb_channel_id")):
@@ -598,9 +713,8 @@ def handle_clan_drop(bot, msg, bot_num):
 
     threading.Thread(target=grab_handler, daemon=True).start()
 
-# CẢI THIỆN WATERMELON GRAB LOGIC - SỬA CÁC VẤN ĐỀ CHÍNH
 def handle_grab(bot, msg, bot_num):
-    """Cải tiến hàm handle_grab với fix watermelon grab logic - Version 2.0"""
+    """Enhanced handle_grab với better message detection và dual-strategy watermelon grab"""
     channel_id = msg.get("channel_id")
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
     if not target_server:
@@ -615,27 +729,34 @@ def handle_grab(bot, msg, bot_num):
         return
 
     last_drop_msg_id = msg["id"]
+    
+    # LOG drop message để debug
+    content = msg.get("content", "")
+    print(f"[GRAB HANDLER | Bot {bot_num}] 📥 Processing drop message: {content[:100]}...", flush=True)
+    print(f"[GRAB HANDLER | Bot {bot_num}] 🎯 Card grab: {auto_grab_enabled}, Watermelon: {watermelon_grab_enabled}", flush=True)
 
     def grab_handler():
         card_picked = False
 
         # === CARD GRAB LOGIC === (giữ nguyên)
         if auto_grab_enabled and ktb_channel_id:
+            print(f"[CARD GRAB | Bot {bot_num}] 🃏 Starting card grab process...", flush=True)
+            
             for attempt in range(6):
                 time.sleep(0.5)
                 try:
                     messages = bot.getMessages(channel_id, num=5).json()
                     if not isinstance(messages, list):
-                        print(f"[ERROR] Invalid messages format: {type(messages)}", flush=True)
+                        print(f"[CARD GRAB | Bot {bot_num}] ❌ Invalid messages format: {type(messages)}", flush=True)
                         continue
 
                     for msg_item in messages:
                         author_id = msg_item.get("author", {}).get("id")
                         msg_id = msg_item.get("id")
 
-                        if author_id == karibbit_id and msg_id and int(msg_id) > int(last_drop_msg_id):
+                        if author_id in [karibbit_id, karuta_id] and msg_id and int(msg_id) >= int(last_drop_msg_id):
                             embeds = msg_item.get("embeds", [])
-                            if not embeds or len(embeds) == 0:
+                            if not embeds:
                                 continue
 
                             desc = embeds[0].get("description", "")
@@ -668,16 +789,16 @@ def handle_grab(bot, msg, bot_num):
                                 emoji = emojis[max_index]
                                 delay = bot_delays[max_index]
 
-                                print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
+                                print(f"[CARD GRAB | Bot {bot_num}] ✅ Found card: {max_num}♡ -> {emoji} after {delay}s", flush=True)
 
                                 def grab_action():
                                     try:
                                         bot.addReaction(channel_id, last_drop_msg_id, emoji)
                                         time.sleep(1.2)
                                         bot.sendMessage(ktb_channel_id, "kt b")
-                                        print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
+                                        print(f"[CARD GRAB | Bot {bot_num}] ✅ Card grabbed and kt b sent", flush=True)
                                     except Exception as e:
-                                        print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
+                                        print(f"[CARD GRAB | Bot {bot_num}] ❌ Grab error: {e}", flush=True)
 
                                 threading.Timer(delay, grab_action).start()
                                 card_picked = True
@@ -690,119 +811,24 @@ def handle_grab(bot, msg, bot_num):
                         break
 
                 except Exception as e:
-                    print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi đọc messages (attempt {attempt+1}): {e}", flush=True)
+                    print(f"[CARD GRAB | Bot {bot_num}] ❌ Error reading messages (attempt {attempt+1}): {e}", flush=True)
                     continue
 
                 if card_picked:
                     break
 
-        # === WATERMELON GRAB LOGIC - SỬA LỖI HOÀN TOÀN ===
+        # === ENHANCED WATERMELON GRAB LOGIC - DUAL STRATEGY ===
         if watermelon_grab_enabled:
-            print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu hunting dưa hấu...", flush=True)
+            print(f"[WATERMELON | Bot {bot_num}] 🍉 Starting ENHANCED watermelon hunt...", flush=True)
+            
+            # STRATEGY 1: Immediate grab attempt (trong trường hợp bot đã thấy dưa)
+            immediate_success = attempt_immediate_watermelon_grab(bot, channel_id, last_drop_msg_id, bot_num)
+            
+            if not immediate_success:
+                # STRATEGY 2: Polling strategy với enhanced detection
+                polling_watermelon_grab(bot, channel_id, last_drop_msg_id, bot_num)
 
-            # STRATEGY MỚI: Thay vì chờ reactions được add, chúng ta sẽ monitor message updates
-            watermelon_found = False
-            check_start_time = time.time()
-            max_check_duration = 15  # Tối đa 15 giây để tìm dưa
-            check_interval = 0.3  # Check mỗi 0.3 giây
-
-            attempt_count = 0
-
-            while time.time() - check_start_time < max_check_duration and not watermelon_found:
-                attempt_count += 1
-                try:
-                    # SỬA LỖI 1: Lấy message từ channel chứ không phải từ bot.getMessage
-                    # vì bot.getMessage có thể cache cũ
-                    recent_messages = bot.getMessages(channel_id, num=3).json()
-
-                    if not isinstance(recent_messages, list):
-                        print(f"[WATERMELON | Bot {bot_num}] ⚠️ Invalid message format (attempt {attempt_count})", flush=True)
-                        time.sleep(check_interval)
-                        continue
-
-                    # Tìm message drop chính xác
-                    target_message = None
-                    for msg_item in recent_messages:
-                        if msg_item.get("id") == last_drop_msg_id:
-                            target_message = msg_item
-                            break
-
-                    if not target_message:
-                        print(f"[WATERMELON | Bot {bot_num}] ⚠️ Không tìm thấy drop message (attempt {attempt_count})", flush=True)
-                        time.sleep(check_interval)
-                        continue
-
-                    # SỬA LỖI 2: Kiểm tra reactions trong message luôn
-                    reactions = target_message.get('reactions', [])
-
-                    if not reactions:
-                        # Chưa có reactions nào, tiếp tục chờ
-                        print(f"[WATERMELON | Bot {bot_num}] ⏳ Chưa có reactions (attempt {attempt_count}, {time.time() - check_start_time:.1f}s)", flush=True)
-                        time.sleep(check_interval)
-                        continue
-
-                    # SỬA LỖI 3: Tìm dưa hấu trong reactions với logic chính xác hơn
-                    watermelon_reaction_found = False
-                    for reaction in reactions:
-                        emoji_data = reaction.get('emoji', {})
-
-                        # Check cả name và unicode
-                        emoji_name = emoji_data.get('name', '')
-                        emoji_id = emoji_data.get('id')  # None for unicode emojis
-
-                        # Dưa hấu có thể xuất hiện dưới các dạng:
-                        # 1. Unicode emoji: name = "🍉", id = None
-                        # 2. Custom emoji có tên chứa "watermelon" hoặc "dua"
-                        is_watermelon = (
-                            emoji_name == '🍉' or
-                            emoji_name == 'watermelon' or
-                            'watermelon' in emoji_name.lower() or
-                            'dua' in emoji_name.lower() or
-                            emoji_name == '\U0001f349'  # Unicode codepoint
-                        )
-
-                        if is_watermelon:
-                            print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DỰA HẤU! Emoji: {emoji_name} (attempt {attempt_count})", flush=True)
-                            watermelon_reaction_found = True
-                            break
-
-                    if watermelon_reaction_found:
-                        # SỬA LỖI 4: Thử add reaction ngay lập tức với retry logic
-                        reaction_success = False
-                        for react_attempt in range(3):
-                            try:
-                                # Thử add reaction với emoji unicode
-                                bot.addReaction(channel_id, last_drop_msg_id, "🍉")
-                                print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DỰA THÀNH CÔNG! (react_attempt {react_attempt + 1})", flush=True)
-                                reaction_success = True
-                                watermelon_found = True
-                                break
-                            except Exception as react_error:
-                                print(f"[WATERMELON | Bot {bot_num}] ❌ React attempt {react_attempt + 1} failed: {react_error}", flush=True)
-                                if react_attempt < 2:  # Retry after short delay
-                                    time.sleep(0.2)
-
-                        if not reaction_success:
-                            print(f"[WATERMELON | Bot {bot_num}] 💔 Tất cả react attempts đều thất bại", flush=True)
-
-                        break  # Dù thành công hay thất bại, đã tìm thấy dưa thì thoát
-                    else:
-                        # Có reactions nhưng không phải dưa hấu
-                        reaction_names = [r.get('emoji', {}).get('name', 'unknown') for r in reactions]
-                        print(f"[WATERMELON | Bot {bot_num}] 🔍 Có {len(reactions)} reactions nhưng không phải dưa: {reaction_names} (attempt {attempt_count})", flush=True)
-                        time.sleep(check_interval)
-                        continue
-
-                except Exception as e:
-                    print(f"[WATERMELON | Bot {bot_num}] ❌ Exception trong attempt {attempt_count}: {e}", flush=True)
-                    time.sleep(check_interval)
-                    continue
-
-            if not watermelon_found:
-                total_time = time.time() - check_start_time
-                print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau {attempt_count} attempts trong {total_time:.1f}s", flush=True)
-
-    # Chạy grab_handler trong thread riêng với timeout
+    # Chạy grab_handler trong thread riêng
     def grab_with_timeout():
         try:
             grab_handler()
@@ -811,105 +837,179 @@ def handle_grab(bot, msg, bot_num):
 
     threading.Thread(target=grab_with_timeout, daemon=True).start()
 
-
-# THÊM HÀM DEBUG ĐỂ KIỂM TRA REACTIONS
-def debug_reactions(bot, channel_id, message_id, bot_num):
-    """Debug function để kiểm tra reactions trên message"""
+def attempt_immediate_watermelon_grab(bot, channel_id, message_id, bot_num):
+    """Attempt immediate watermelon grab"""
     try:
-        print(f"[DEBUG | Bot {bot_num}] Checking reactions for message {message_id}", flush=True)
+        print(f"[IMMEDIATE WATERMELON | Bot {bot_num}] 🚀 Attempting immediate watermelon grab...", flush=True)
+        
+        # Try to grab immediately in case watermelon is already there
+        emoji_attempts = ['🍉', '\U0001f349']
+        
+        for emoji in emoji_attempts:
+            try:
+                bot.addReaction(channel_id, message_id, emoji)
+                print(f"[IMMEDIATE WATERMELON | Bot {bot_num}] ✅ IMMEDIATE SUCCESS with {emoji}!", flush=True)
+                return True
+            except Exception as e:
+                # This is expected if watermelon isn't there yet
+                continue
+        
+        print(f"[IMMEDIATE WATERMELON | Bot {bot_num}] ℹ️ No immediate watermelon found, switching to polling...", flush=True)
+        return False
+        
+    except Exception as e:
+        print(f"[IMMEDIATE WATERMELON | Bot {bot_num}] ❌ Immediate grab error: {e}", flush=True)
+        return False
 
-        # Method 1: Dùng getMessage
-        msg_response = bot.getMessage(channel_id, message_id)
-        if msg_response:
-            msg_data = msg_response.json()
-            if isinstance(msg_data, list) and len(msg_data) > 0:
-                msg_data = msg_data[0]
+def polling_watermelon_grab(bot, channel_id, message_id, bot_num):
+    """Enhanced polling strategy for watermelon grab"""
+    print(f"[POLLING WATERMELON | Bot {bot_num}] 🔍 Starting enhanced polling strategy...", flush=True)
+    
+    watermelon_found = False
+    check_start_time = time.time()
+    max_check_duration = 25  # Tăng lên 25 giây
+    
+    watermelon_patterns = ['🍉', '\U0001f349', 'watermelon', 'melon', 'dua', 'duahau']
+    attempt_count = 0
+    last_reaction_count = 0
+    consecutive_empty_checks = 0
+    
+    while time.time() - check_start_time < max_check_duration and not watermelon_found:
+        attempt_count += 1
+        elapsed_time = time.time() - check_start_time
+        
+        try:
+            # ENHANCED: Try both getMessage and getMessages
+            target_message = None
+            
+            # Method 1: Direct message get
+            try:
+                single_msg = bot.getMessage(channel_id, message_id)
+                if single_msg and single_msg.json():
+                    msg_data = single_msg.json()
+                    if isinstance(msg_data, list) and len(msg_data) > 0:
+                        target_message = msg_data[0]
+                    elif isinstance(msg_data, dict):
+                        target_message = msg_data
+            except:
+                pass
+            
+            # Method 2: Recent messages scan (fallback)
+            if not target_message:
+                recent_messages = bot.getMessages(channel_id, num=5).json()
+                if isinstance(recent_messages, list):
+                    for msg_item in recent_messages:
+                        if msg_item.get("id") == message_id:
+                            target_message = msg_item
+                            break
 
-            reactions = msg_data.get('reactions', [])
-            print(f"[DEBUG | Bot {bot_num}] Method 1 - Found {len(reactions)} reactions:", flush=True)
-            for i, reaction in enumerate(reactions):
-                emoji_data = reaction.get('emoji', {})
-                count = reaction.get('count', 0)
-                print(f"  Reaction {i}: {emoji_data.get('name', 'unknown')} (count: {count})", flush=True)
-
-        # Method 2: Dùng getMessages
-        messages = bot.getMessages(channel_id, num=5).json()
-        if isinstance(messages, list):
-            for msg in messages:
-                if msg.get('id') == message_id:
-                    reactions = msg.get('reactions', [])
-                    print(f"[DEBUG | Bot {bot_num}] Method 2 - Found {len(reactions)} reactions:", flush=True)
-                    for i, reaction in enumerate(reactions):
-                        emoji_data = reaction.get('emoji', {})
-                        count = reaction.get('count', 0)
-                        print(f"  Reaction {i}: {emoji_data.get('name', 'unknown')} (count: {count})", flush=True)
+            if not target_message:
+                consecutive_empty_checks += 1
+                if consecutive_empty_checks >= 10:
+                    print(f"[POLLING WATERMELON | Bot {bot_num}] ⚠️ Message disappeared after {consecutive_empty_checks} empty checks", flush=True)
                     break
+                time.sleep(0.3)
+                continue
+            else:
+                consecutive_empty_checks = 0
 
-    except Exception as e:
-        print(f"[DEBUG | Bot {bot_num}] Debug error: {e}", flush=True)
+            reactions = target_message.get('reactions', [])
+            
+            # Progress logging
+            if attempt_count % 20 == 0:  # Every 4 seconds
+                print(f"[POLLING WATERMELON | Bot {bot_num}] ⏳ {elapsed_time:.1f}s elapsed, {len(reactions)} reactions", flush=True)
+            
+            current_reaction_count = len(reactions)
+            if current_reaction_count > last_reaction_count:
+                print(f"[POLLING WATERMELON | Bot {bot_num}] 👀 New reactions: {current_reaction_count} total", flush=True)
+                last_reaction_count = current_reaction_count
+            
+            # Watermelon detection với enhanced logging
+            for reaction in reactions:
+                emoji_data = reaction.get('emoji', {})
+                emoji_name = emoji_data.get('name', '')
+                emoji_id = emoji_data.get('id')
+                
+                # Enhanced watermelon detection
+                is_watermelon = False
+                matched_pattern = None
+                
+                for pattern in watermelon_patterns:
+                    if (emoji_name == pattern or 
+                        pattern.lower() in emoji_name.lower() or
+                        (emoji_id is None and emoji_name in watermelon_patterns)):
+                        is_watermelon = True
+                        matched_pattern = pattern
+                        break
+                
+                if is_watermelon:
+                    print(f"[POLLING WATERMELON | Bot {bot_num}] 🎯 WATERMELON FOUND! '{emoji_name}' (matched: {matched_pattern})", flush=True)
+                    
+                    # Multi-method grab attempt
+                    grab_methods = [
+                        '🍉',
+                        '\U0001f349',
+                        emoji_name  # Try the exact emoji name found
+                    ]
+                    
+                    # If custom emoji, try that format too
+                    if emoji_id:
+                        custom_format = f"<:{emoji_name}:{emoji_id}>"
+                        grab_methods.insert(0, custom_format)
+                    
+                    for method in grab_methods:
+                        try:
+                            time.sleep(0.05)  # Very small delay
+                            bot.addReaction(channel_id, message_id, method)
+                            print(f"[POLLING WATERMELON | Bot {bot_num}] ✅ GRAB SUCCESS with method: {method}!", flush=True)
+                            watermelon_found = True
+                            break
+                        except Exception as grab_error:
+                            print(f"[POLLING WATERMELON | Bot {bot_num}] ⚠️ Method '{method}' failed: {grab_error}", flush=True)
+                            continue
+                    
+                    break  # Exit reactions loop
+            
+            if not watermelon_found:
+                # Adaptive sleep based on reaction activity
+                if current_reaction_count > last_reaction_count:
+                    time.sleep(0.15)  # Faster check when reactions are active
+                else:
+                    time.sleep(0.25)  # Slower check when no activity
 
+        except Exception as e:
+            print(f"[POLLING WATERMELON | Bot {bot_num}] ❌ Polling error (attempt {attempt_count}): {e}", flush=True)
+            time.sleep(0.3)
+            continue
 
-# CẢI TIẾN THÊM: Thêm monitoring cho watermelon events
-def monitor_watermelon_events():
-    """Monitor và log watermelon events để debug"""
-    watermelon_stats = {
-        'total_attempts': 0,
-        'successful_grabs': 0,
-        'missed_grabs': 0,
-        'error_count': 0
-    }
+    # Final result
+    total_time = time.time() - check_start_time
+    if watermelon_found:
+        print(f"[POLLING WATERMELON | Bot {bot_num}] 🎉 SUCCESS! Grabbed watermelon in {total_time:.1f}s ({attempt_count} attempts)", flush=True)
+    else:
+        print(f"[POLLING WATERMELON | Bot {bot_num}] 😞 FAILED after {total_time:.1f}s ({attempt_count} attempts)", flush=True)
+    
+    return watermelon_found
 
-    # Có thể lưu stats này và hiển thị trên web interface
-    return watermelon_stats
-
-def create_bot(token, bot_identifier, is_main=False):
-    """Tạo bot với error handling tốt hơn"""
+def test_message_visibility(bot, channel_id, bot_num):
+    """Test if bot can see recent messages"""
     try:
-        print(f"[Bot Creation] 🔌 Đang tạo bot {bot_identifier} ({'main' if is_main else 'sub'})...", flush=True)
-
-        bot = discum.Client(token=token, log=False)
-
-        @bot.gateway.command
-        def on_ready(resp):
-            if resp.event.ready:
-                user = resp.raw.get("user", {})
-                if isinstance(user, dict) and (user_id := user.get("id")):
-                    bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else acc_names[bot_identifier] if not is_main and bot_identifier < len(acc_names) else f"Bot {bot_identifier}"
-                    print(f"[Bot Creation] ✅ Đã đăng nhập: {user_id} ({bot_name})", flush=True)
-
-                    # Initialize health stats
-                    if is_main:
-                        bot_id = f"main_{bot_identifier}"
-                        if bot_id not in bot_health_stats:
-                            bot_health_stats[bot_id] = {
-                                'last_health_check': time.time(),
-                                'consecutive_failures': 0,
-                                'total_checks': 0,
-                                'created_time': time.time()
-                            }
-
-        if is_main:
-            @bot.gateway.command
-            def on_message(resp):
-                if resp.event.message:
-                    msg = resp.parsed.auto()
-                    if msg.get("author", {}).get("id") == karuta_id and "dropping" in msg.get("content", "").lower():
-                        if msg.get("mentions"):
-                            handle_clan_drop(bot, msg, bot_identifier)
-                        else:
-                            handle_grab(bot, msg, bot_identifier)
-
-        threading.Thread(target=bot.gateway.run, daemon=True).start()
-
-        # Wait a moment to ensure connection is established
-        time.sleep(2)
-
-        return bot
-
+        print(f"[MESSAGE TEST | Bot {bot_num}] Testing message visibility in channel {channel_id}...", flush=True)
+        
+        # Test getMessages
+        messages = bot.getMessages(channel_id, num=10).json()
+        if isinstance(messages, list):
+            print(f"[MESSAGE TEST | Bot {bot_num}] ✅ Can see {len(messages)} recent messages", flush=True)
+            for i, msg in enumerate(messages[:3]):
+                author_id = msg.get("author", {}).get("id")
+                content = msg.get("content", "")[:50]
+                msg_id = msg.get("id")
+                print(f"  Message {i+1}: {author_id} - {content}... (ID: {msg_id})", flush=True)
+        else:
+            print(f"[MESSAGE TEST | Bot {bot_num}] ❌ Invalid message format: {type(messages)}", flush=True)
+    
     except Exception as e:
-        print(f"[Bot Creation] ❌ Lỗi tạo bot {bot_identifier}: {e}", flush=True)
-        print(f"[Bot Creation] 📊 Traceback: {traceback.format_exc()}", flush=True)
-        return None
+        print(f"[MESSAGE TEST | Bot {bot_num}] ❌ Test failed: {e}", flush=True)
 
 # --- CÁC VÒNG LẶP NỀN (Cải tiến) ---
 def run_clan_drop_cycle():
@@ -1667,7 +1767,11 @@ def api_save_settings():
 def status():
     now = time.time()
     for server in servers:
-        server['spam_countdown'] = 0
+        if server.get('spam_enabled'):
+            countdown = (server.get('last_spam_time', 0) + server.get('spam_delay', 10)) - now
+            server['spam_countdown'] = max(0, countdown)
+        else:
+            server['spam_countdown'] = 0
 
     with bots_lock:
         main_bot_statuses = []
@@ -1722,14 +1826,18 @@ def status():
                     if auto_clan_drop_settings.get("enabled", False) else 0
     }
 
+    reboot_settings_with_countdown = {}
     for bot_id, settings in bot_reboot_settings.items():
-        if settings.get('enabled'):
-            settings['countdown'] = max(0, settings.get('next_reboot_time', 0) - now)
+        new_settings = settings.copy()
+        if new_settings.get('enabled'):
+            new_settings['countdown'] = max(0, new_settings.get('next_reboot_time', 0) - now)
         else:
-            settings['countdown'] = 0
+            new_settings['countdown'] = 0
+        reboot_settings_with_countdown[bot_id] = new_settings
+
 
     return jsonify({
-        'bot_reboot_settings': bot_reboot_settings,
+        'bot_reboot_settings': reboot_settings_with_countdown,
         'bot_statuses': {
             "main_bots": main_bot_statuses,
             "sub_accounts": sub_bot_statuses
