@@ -68,7 +68,6 @@ def save_settings():
     api_key = os.getenv("JSONBIN_API_KEY")
     bin_id = os.getenv("JSONBIN_BIN_ID")
     if not api_key or not bin_id:
-        #print("[Settings] Missing JSONBin credentials, saving locally instead", flush=True)
         return save_settings_locally()
 
     settings = {
@@ -356,21 +355,22 @@ def create_bot(token, bot_identifier, is_main=False):
                 # Xử lý tin nhắn mới
                 if hasattr(resp.event, 'message'):
                     msg = resp.parsed.auto()
-                    author_object = msg.get("author")
                     
-                    # >>>>> DÒNG SỬA LỖI NẰM Ở ĐÂY <<<<<<<
-                    if isinstance(author_object, dict):
-                        author_id = author_object.get("id")
-                        content = msg.get("content", "").lower()
-                        
-                        if author_id == karuta_id and "dropping" in content:
-                            if msg.get("mentions"):
-                                handle_clan_drop(bot, msg, bot_identifier)
-                            else:
+                    # >>>>> BẢN SỬA LỖI MỚI NHẤT <<<<<<<
+                    if msg is not None:
+                        author_object = msg.get("author")
+                        if isinstance(author_object, dict):
+                            author_id = author_object.get("id")
+                            content = msg.get("content", "").lower()
+                            
+                            if author_id == karuta_id and "dropping" in content:
+                                if msg.get("mentions"):
+                                    handle_clan_drop(bot, msg, bot_identifier)
+                                else:
+                                    handle_grab(bot, msg, bot_identifier)
+                            
+                            elif author_id == karibbit_id and any(k in content for k in ["drop", "grab", "pick"]):
                                 handle_grab(bot, msg, bot_identifier)
-                        
-                        elif author_id == karibbit_id and any(k in content for k in ["drop", "grab", "pick"]):
-                            handle_grab(bot, msg, bot_identifier)
 
                 # Xử lý reaction mới
                 if hasattr(resp.event, 'message_reaction_add'):
