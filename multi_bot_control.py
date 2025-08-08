@@ -39,7 +39,7 @@ watermelon_grab_states = {}
 bot_active_states = {}
 
 # --- Cải tiến: Cấu trúc reboot settings với safety features ---
-bot_reboot_settings = {}  # Sẽ được init với failure tracking
+bot_reboot_settings = {}
 
 # --- Cài đặt cho tính năng tự động drop clan ---
 auto_clan_drop_settings = {
@@ -60,8 +60,7 @@ bots_lock = threading.Lock()
 server_start_time = time.time()
 
 # --- CẢI TIẾN: Health monitoring ---
-bot_health_stats = {}  # Track bot performance metrics
-last_health_check = {}
+bot_health_stats = {}
 
 # --- HÀM LƯU VÀ TẢI CÀI ĐẶT ---
 def save_settings():
@@ -69,7 +68,7 @@ def save_settings():
     api_key = os.getenv("JSONBIN_API_KEY")
     bin_id = os.getenv("JSONBIN_BIN_ID")
     if not api_key or not bin_id:
-        print("[Settings] Missing JSONBin credentials, saving locally instead", flush=True)
+        #print("[Settings] Missing JSONBin credentials, saving locally instead", flush=True)
         return save_settings_locally()
 
     settings = {
@@ -90,10 +89,10 @@ def save_settings():
             print("[Settings] ✅ Đã lưu cài đặt lên JSONBin.io thành công.", flush=True)
         else:
             print(f"[Settings] ❌ Lỗi khi lưu cài đặt: {req.status_code} - {req.text}", flush=True)
-            save_settings_locally()  # Fallback to local save
+            save_settings_locally()
     except Exception as e:
         print(f"[Settings] ❌ Exception khi lưu cài đặt: {e}", flush=True)
-        save_settings_locally()  # Fallback to local save
+        save_settings_locally()
 
 def save_settings_locally():
     """Backup save to local file"""
@@ -114,12 +113,9 @@ def save_settings_locally():
 
 def load_settings():
     """Tải cài đặt với fallback options"""
-    global servers, bot_reboot_settings, bot_active_states, watermelon_grab_states, auto_clan_drop_settings, bot_health_stats
-
     api_key = os.getenv("JSONBIN_API_KEY")
     bin_id = os.getenv("JSONBIN_BIN_ID")
 
-    # Try JSONBin first
     if api_key and bin_id:
         headers = {'X-Master-Key': api_key}
         url = f"https://api.jsonbin.io/v3/b/{bin_id}/latest"
@@ -133,7 +129,6 @@ def load_settings():
         except Exception as e:
             print(f"[Settings] ⚠️ Lỗi khi tải từ JSONBin: {e}", flush=True)
 
-    # Fallback to local file
     try:
         with open('backup_settings.json', 'r') as f:
             settings = json.load(f)
@@ -145,14 +140,13 @@ def load_settings():
     except Exception as e:
         print(f"[Settings] ⚠️ Lỗi khi tải backup: {e}", flush=True)
 
-    # Initialize with defaults
     print("[Settings] 🔧 Khởi tạo với cài đặt mặc định.", flush=True)
-    initialize_default_settings()
 
 def load_settings_from_dict(settings):
     """Helper function to load settings from dictionary"""
     global servers, bot_reboot_settings, bot_active_states, watermelon_grab_states, auto_clan_drop_settings, bot_health_stats
     try:
+        servers.clear()
         servers.extend(settings.get('servers', []))
         bot_reboot_settings.update(settings.get('bot_reboot_settings', {}))
         bot_active_states.update(settings.get('bot_active_states', {}))
@@ -160,9 +154,9 @@ def load_settings_from_dict(settings):
 
         loaded_clan_settings = settings.get('auto_clan_drop_settings', {})
         if loaded_clan_settings:
-            if 'heart_thresholds' not in loaded_clan_settings:
-                loaded_clan_settings['heart_thresholds'] = {}
             auto_clan_drop_settings.update(loaded_clan_settings)
+        if 'heart_thresholds' not in auto_clan_drop_settings:
+            auto_clan_drop_settings['heart_thresholds'] = {}
 
         bot_health_stats.update(settings.get('bot_health_stats', {}))
         return True
@@ -170,355 +164,178 @@ def load_settings_from_dict(settings):
         print(f"[Settings] ❌ Lỗi khi parse settings: {e}", flush=True)
         return False
 
-def initialize_default_settings():
-    """Initialize default settings"""
-    # Sẽ được gọi sau khi khởi tạo bots
-    pass
-
-# --- CẢI TIẾN: SAFE REBOOT FUNCTIONS - BẢN SỬA LỖI ---
+# --- CẢI TIẾN: SAFE REBOOT FUNCTIONS ---
 def safe_reboot_bot(bot_id):
-    """Reboot bot một cách an toàn với proper error handling - Fixed version"""
+    """Reboot bot một cách an toàn với proper error handling"""
     try:
         print(f"[Safe Reboot] 🔄 Bắt đầu reboot bot {bot_id}...", flush=True)
-
-        # Parse bot info với validation tốt hơn
-        if not isinstance(bot_id, str) or '_' not in bot_id:
+        if not isinstance(bot_id, str) or '_' not in bot_id or not bot_id.startswith('main_'):
             raise ValueError(f"Invalid bot_id format: {bot_id}")
 
-        parts = bot_id.split('_')
-        if len(parts) != 2 or parts[0] != 'main':
-            raise ValueError(f"Invalid bot_id format: {bot_id}")
-
-        try:
-            bot_index = int(parts[1]) - 1
-        except ValueError:
-            raise ValueError(f"Invalid bot index in bot_id: {bot_id}")
-
-        if bot_index < 0 or bot_index >= len(main_tokens):
-            raise ValueError(f"Bot index out of range: {bot_index} (available: 0-{len(main_tokens)-1})")
+        bot_index = int(bot_id.split('_')[1]) - 1
+        if not (0 <= bot_index < len(main_tokens)):
+            raise ValueError(f"Bot index out of range: {bot_index}")
 
         token = main_tokens[bot_index].strip()
-        if not token:
-            raise ValueError(f"Empty token for bot {bot_id}")
+        if not token: raise ValueError(f"Empty token for bot {bot_id}")
 
         bot_name = BOT_NAMES[bot_index] if bot_index < len(BOT_NAMES) else f"MAIN_{bot_index+1}"
 
-        # Health check first - với try-catch riêng
-        try:
-            current_bot = main_bots[bot_index] if bot_index < len(main_bots) and main_bots[bot_index] else None
-            if current_bot and not should_reboot_bot(current_bot, bot_id):
-                # Bot is healthy, postpone reboot
-                settings = bot_reboot_settings.get(bot_id, {})
-                settings['next_reboot_time'] = time.time() + settings.get('delay', 3600)
-                print(f"[Safe Reboot] ✅ Bot {bot_name} khỏe mạnh, hoãn reboot", flush=True)
-                return True
-        except Exception as health_error:
-            print(f"[Safe Reboot] ⚠️ Health check failed: {health_error}, continuing with reboot", flush=True)
+        current_bot = main_bots[bot_index] if bot_index < len(main_bots) else None
+        if current_bot and not should_reboot_bot(current_bot, bot_id):
+            settings = bot_reboot_settings.get(bot_id, {})
+            settings['next_reboot_time'] = time.time() + settings.get('delay', 3600)
+            print(f"[Safe Reboot] ✅ Bot {bot_name} khỏe mạnh, hoãn reboot", flush=True)
+            return True
 
         start_time = time.time()
-
-        # Step 1: Graceful shutdown với timeout
         if bot_index < len(main_bots) and main_bots[bot_index]:
             try:
                 print(f"[Safe Reboot] 📴 Đóng connection cũ cho {bot_name}...", flush=True)
-                current_bot = main_bots[bot_index]
-                if hasattr(current_bot, 'gateway') and current_bot.gateway:
-                    current_bot.gateway.close()
-                # Set to None immediately để tránh race condition
+                main_bots[bot_index].gateway.close()
                 main_bots[bot_index] = None
             except Exception as e:
                 print(f"[Safe Reboot] ⚠️ Lỗi khi đóng connection: {e}", flush=True)
 
-        # Step 2: Extended wait với random factor để tránh detection
-        base_wait = random.uniform(20, 40)
-        print(f"[Safe Reboot] ⏳ Chờ {base_wait:.1f}s để cleanup...", flush=True)
-        time.sleep(base_wait)
+        time.sleep(random.uniform(20, 40))
 
-        # Step 3: Additional safety delay based on failure history
         settings = bot_reboot_settings.get(bot_id, {})
         failure_count = settings.get('failure_count', 0)
         if failure_count > 0:
             extra_delay = min(failure_count * 30, 300)
-            print(f"[Safe Reboot] ⏳ Delay thêm {extra_delay}s do {failure_count} lần thất bại trước đó", flush=True)
+            print(f"[Safe Reboot] ⏳ Delay thêm {extra_delay}s do {failure_count} lần thất bại", flush=True)
             time.sleep(extra_delay)
 
-        # Step 4: Create new bot instance với proper error handling
         print(f"[Safe Reboot] 🔌 Tạo connection mới cho {bot_name}...", flush=True)
-        new_bot = None
-        max_retries = 3
-
-        for attempt in range(max_retries):
-            try:
-                new_bot = create_bot(token, bot_identifier=(bot_index + 1), is_main=True)
-                if new_bot:
-                    # Test connection briefly
-                    time.sleep(3)  # Wait for connection to establish
-                    break
-                else:
-                    print(f"[Safe Reboot] ⚠️ Attempt {attempt + 1}/{max_retries} failed for {bot_name}", flush=True)
-                    if attempt < max_retries - 1:
-                        time.sleep(10)  # Wait between retries
-            except Exception as create_error:
-                print(f"[Safe Reboot] ❌ Create attempt {attempt + 1} error: {create_error}", flush=True)
-                if attempt < max_retries - 1:
-                    time.sleep(10)
+        new_bot = create_bot(token, bot_identifier=(bot_index + 1), is_main=True)
 
         if not new_bot:
-            raise Exception(f"Failed to create new bot instance after {max_retries} attempts")
+            raise Exception("Failed to create new bot instance")
 
-        # Step 5: Replace old bot với proper locking
         with bots_lock:
-            # Ensure main_bots list is long enough
-            while len(main_bots) <= bot_index:
-                main_bots.append(None)
+            while len(main_bots) <= bot_index: main_bots.append(None)
             main_bots[bot_index] = new_bot
 
-        # Step 6: Update settings với proper error handling
-        if bot_id not in bot_reboot_settings:
-            bot_reboot_settings[bot_id] = {}
-
-        settings = bot_reboot_settings[bot_id]
         settings['next_reboot_time'] = time.time() + settings.get('delay', 3600)
-        settings['failure_count'] = 0  # Reset failure counter
+        settings['failure_count'] = 0
         settings['last_reboot_time'] = time.time()
-
-        # Reset health stats
+        
         if bot_id in bot_health_stats:
             bot_health_stats[bot_id]['consecutive_failures'] = 0
-            bot_health_stats[bot_id]['last_health_check'] = time.time()
 
         duration = time.time() - start_time
         print(f"[Safe Reboot] ✅ Reboot thành công {bot_name} trong {duration:.1f}s", flush=True)
-
         return True
-
     except Exception as e:
-        print(f"[Safe Reboot] ❌ Reboot thất bại cho {bot_id}: {e}", flush=True)
-        print(f"[Safe Reboot] 📊 Traceback: {traceback.format_exc()}", flush=True)
-
-        # Handle failure với error handling
-        try:
-            handle_reboot_failure(bot_id)
-        except Exception as handle_error:
-            print(f"[Safe Reboot] ❌ Error in handle_reboot_failure: {handle_error}", flush=True)
-
+        print(f"[Safe Reboot] ❌ Reboot thất bại cho {bot_id}: {e}\n{traceback.format_exc()}", flush=True)
+        handle_reboot_failure(bot_id)
         return False
 
 def handle_reboot_failure(bot_id):
-    """Xử lý khi reboot thất bại - Fixed version"""
+    """Xử lý khi reboot thất bại"""
     try:
-        # Ensure bot_reboot_settings has the bot_id
         if bot_id not in bot_reboot_settings:
-            bot_reboot_settings[bot_id] = {
-                'enabled': True,
-                'delay': 3600,
-                'failure_count': 0,
-                'next_reboot_time': 0
-            }
-
+            bot_reboot_settings[bot_id] = {'enabled': True, 'delay': 3600, 'failure_count': 0, 'next_reboot_time': 0}
+        
         settings = bot_reboot_settings[bot_id]
         failure_count = settings.get('failure_count', 0) + 1
         settings['failure_count'] = failure_count
 
-        # Exponential backoff với cap
-        base_delay = max(settings.get('delay', 3600), 300)  # Minimum 5 minutes
-        backoff_multiplier = min(2 ** failure_count, 8)  # Max 8x delay
+        base_delay = max(settings.get('delay', 3600), 300)
+        backoff_multiplier = min(2 ** failure_count, 8)
         backoff_delay = base_delay * backoff_multiplier
-
         settings['next_reboot_time'] = time.time() + backoff_delay
 
-        print(f"[Safe Reboot] 🔴 Failure #{failure_count} cho {bot_id}", flush=True)
-        print(f"[Safe Reboot] ⏰ Next attempt trong {backoff_delay}s (backoff x{backoff_multiplier})", flush=True)
+        print(f"[Safe Reboot] 🔴 Failure #{failure_count} cho {bot_id}. Next attempt in {backoff_delay}s", flush=True)
 
-        # Disable after too many failures
         if failure_count >= 5:
             settings['enabled'] = False
             print(f"[Safe Reboot] ❌ Tắt auto-reboot cho {bot_id} sau {failure_count} lần thất bại", flush=True)
-
     except Exception as e:
         print(f"[Safe Reboot] ❌ Lỗi trong handle_reboot_failure: {e}", flush=True)
 
 def should_reboot_bot(bot, bot_id):
-    """Quyết định có nên reboot bot không - Fixed version"""
+    """Quyết định có nên reboot bot không"""
+    if not bot:
+        print(f"[Health Check] 🔴 Bot {bot_id} không tồn tại, cần reboot", flush=True)
+        return True
     try:
-        # Kiểm tra bot có tồn tại không
-        if not bot:
-            print(f"[Health Check] 🔴 Bot {bot_id} không tồn tại, cần reboot", flush=True)
-            return True
-
-        # Check if bot is healthy với proper error handling
-        try:
-            is_healthy = check_bot_health(bot, bot_id)
-        except Exception as health_error:
-            print(f"[Health Check] ❌ Health check error cho {bot_id}: {health_error}", flush=True)
-            return True  # Assume unhealthy if check fails
-
+        is_healthy = check_bot_health(bot, bot_id)
         if is_healthy:
-            print(f"[Health Check] ✅ Bot {bot_id} đang hoạt động tốt", flush=True)
             return False
-
-        # Check failure threshold
+        
         stats = bot_health_stats.get(bot_id, {})
         consecutive_failures = stats.get('consecutive_failures', 0)
-
         if consecutive_failures >= 3:
-            print(f"[Health Check] 🔴 Bot {bot_id} có {consecutive_failures} lần kiểm tra thất bại liên tiếp, cần reboot", flush=True)
+            print(f"[Health Check] 🔴 Bot {bot_id} có {consecutive_failures} lần check lỗi, cần reboot", flush=True)
             return True
-
-        print(f"[Health Check] 🟡 Bot {bot_id} có vấn đề nhỏ ({consecutive_failures} failures), chờ thêm", flush=True)
         return False
-
     except Exception as e:
         print(f"[Health Check] ❌ Lỗi khi kiểm tra bot {bot_id}: {e}", flush=True)
-        # When in doubt, assume reboot is needed
         return True
 
 def check_bot_health(bot, bot_id):
-    """Kiểm tra sức khỏe của bot - Improved version"""
+    """Kiểm tra sức khỏe của bot"""
     try:
-        if not bot:
-            return False
-
-        # Test basic connection với timeout
-        start_time = time.time()
-
-        # Simple health check - try to access bot gateway state
-        is_connected = False
-        try:
-            if hasattr(bot, 'gateway'):
-                if hasattr(bot.gateway, 'connected'):
-                    is_connected = bool(bot.gateway.connected)
-                else:
-                    # Fallback check
-                    is_connected = hasattr(bot.gateway, 'session_id') and bot.gateway.session_id is not None
-            else:
-                # Bot doesn't have gateway attribute
-                return False
-        except Exception as gateway_error:
-            print(f"[Health Check] ⚠️ Gateway check error for {bot_id}: {gateway_error}", flush=True)
-            return False
-
-        response_time = time.time() - start_time
-
-        # Update health stats
-        if bot_id not in bot_health_stats:
-            bot_health_stats[bot_id] = {
-                'last_health_check': time.time(),
-                'consecutive_failures': 0,
-                'total_checks': 0,
-                'avg_response_time': 0
-            }
-
-        stats = bot_health_stats[bot_id]
-        stats['last_health_check'] = time.time()
-        stats['total_checks'] += 1
-
-        if is_connected:
-            stats['consecutive_failures'] = 0
-            # Update average response time
-            current_avg = stats.get('avg_response_time', 0)
-            if current_avg == 0:
-                stats['avg_response_time'] = response_time
-            else:
-                stats['avg_response_time'] = (current_avg + response_time) / 2
-            return True
+        if not bot or not hasattr(bot, 'gateway') or not bot.gateway.connected:
+            is_connected = False
         else:
-            print(f"[Health Check] ⚠️ Bot {bot_id} gateway not connected", flush=True)
-            stats['consecutive_failures'] += 1
-            return False
+            is_connected = True
 
-    except Exception as e:
-        print(f"[Health Check] ❌ Bot {bot_id} health check failed: {e}", flush=True)
-
-        # Update failure stats
         if bot_id not in bot_health_stats:
             bot_health_stats[bot_id] = {'consecutive_failures': 0}
-        bot_health_stats[bot_id]['consecutive_failures'] = bot_health_stats[bot_id].get('consecutive_failures', 0) + 1
-
+        
+        stats = bot_health_stats[bot_id]
+        if is_connected:
+            stats['consecutive_failures'] = 0
+            return True
+        else:
+            stats['consecutive_failures'] = stats.get('consecutive_failures', 0) + 1
+            print(f"[Health Check] ⚠️ Bot {bot_id} gateway not connected ({stats['consecutive_failures']} failures)", flush=True)
+            return False
+    except Exception as e:
+        print(f"[Health Check] ❌ Bot {bot_id} health check failed: {e}", flush=True)
+        if bot_id in bot_health_stats:
+            bot_health_stats[bot_id]['consecutive_failures'] = bot_health_stats[bot_id].get('consecutive_failures', 0) + 1
         return False
 
 def auto_reboot_loop():
-    """Vòng lặp reboot cải tiến với safety features - Fixed version"""
-    global main_bots, auto_reboot_stop_event
-    print("[Safe Reboot] 🚀 Khởi động luồng tự động reboot cải tiến", flush=True)
-
+    """Vòng lặp reboot cải tiến"""
+    print("[Safe Reboot] 🚀 Khởi động luồng tự động reboot", flush=True)
     last_reboot_time = 0
-    loop_iteration = 0
-
     while not auto_reboot_stop_event.is_set():
         try:
-            loop_iteration += 1
             now = time.time()
-
-            # Rate limiting: Chỉ cho phép reboot mỗi 5 phút
-            if now - last_reboot_time < 300:
+            if now - last_reboot_time < 300: # Rate limit: 5 phút
                 auto_reboot_stop_event.wait(timeout=30)
                 continue
 
-            # Find bots that need rebooting với error handling
-            bots_to_reboot = []
-            try:
-                for bot_id, settings in list(bot_reboot_settings.items()):
-                    if (settings.get('enabled', False) and
-                        now >= settings.get('next_reboot_time', 0)):
-                        bots_to_reboot.append(bot_id)
-            except Exception as find_error:
-                print(f"[Safe Reboot] ⚠️ Error finding bots to reboot: {find_error}", flush=True)
-                auto_reboot_stop_event.wait(timeout=60)
-                continue
-
+            bots_to_reboot = [bot_id for bot_id, s in bot_reboot_settings.items() if s.get('enabled') and now >= s.get('next_reboot_time', 0)]
+            
             if not bots_to_reboot:
-                # Print status every 10 iterations (roughly every 10 minutes)
-                if loop_iteration % 10 == 0:
-                    enabled_bots = sum(1 for s in bot_reboot_settings.values() if s.get('enabled'))
-                    print(f"[Safe Reboot] 📊 Loop #{loop_iteration}: {enabled_bots} bots enabled, none need reboot", flush=True)
                 auto_reboot_stop_event.wait(timeout=60)
                 continue
 
-            # QUAN TRỌNG: Chỉ reboot 1 bot tại một thời điểm
             bot_to_reboot = bots_to_reboot[0]
-
-            print(f"[Safe Reboot] 🎯 Loop #{loop_iteration}: Chọn reboot bot: {bot_to_reboot}", flush=True)
-
-            # Perform safe reboot với full error isolation
-            reboot_success = False
-            try:
-                reboot_success = safe_reboot_bot(bot_to_reboot)
-            except Exception as reboot_error:
-                print(f"[Safe Reboot] ❌ Critical reboot error: {reboot_error}", flush=True)
-                try:
-                    handle_reboot_failure(bot_to_reboot)
-                except Exception as handle_error:
-                    print(f"[Safe Reboot] ❌ Handle failure error: {handle_error}", flush=True)
-
-            if reboot_success:
+            print(f"[Safe Reboot] 🎯 Chọn reboot bot: {bot_to_reboot}", flush=True)
+            if safe_reboot_bot(bot_to_reboot):
                 last_reboot_time = now
-
-                # Mandatory wait between reboots
-                wait_time = random.uniform(300, 600)  # 5-10 phút
+                wait_time = random.uniform(300, 600) # 5-10 phút
                 print(f"[Safe Reboot] ⏳ Chờ {wait_time:.0f}s trước reboot tiếp theo", flush=True)
                 auto_reboot_stop_event.wait(timeout=wait_time)
             else:
-                # Shorter wait on failure
-                print(f"[Safe Reboot] ⚠️ Reboot failed, waiting 2 minutes before retry", flush=True)
                 auto_reboot_stop_event.wait(timeout=120)
 
         except Exception as e:
-            print(f"[Safe Reboot] ❌ CRITICAL ERROR in auto_reboot_loop: {e}", flush=True)
-            print(f"[Safe Reboot] 📊 Traceback: {traceback.format_exc()}", flush=True)
-            # Longer wait on critical error
+            print(f"[Safe Reboot] ❌ CRITICAL ERROR in auto_reboot_loop: {e}\n{traceback.format_exc()}", flush=True)
             auto_reboot_stop_event.wait(timeout=300)
 
-    print("[Safe Reboot] 🛑 Luồng tự động reboot đã dừng", flush=True)
-
-
-# --- CÁC HÀM LOGIC BOT (CẬP NHẬT VỚI BẢN SỬA LỖI) ---
+# --- CÁC HÀM LOGIC BOT (ĐÃ SỬA LỖI) ---
 
 def create_bot(token, bot_identifier, is_main=False):
-    """Tạo bot với enhanced message detection cho watermelon, đã sửa lỗi AttributeError"""
+    """Tạo bot với trình xử lý sự kiện an toàn, đã sửa lỗi AttributeError"""
     try:
         print(f"[Bot Creation] 🔌 Đang tạo bot {bot_identifier} ({'main' if is_main else 'sub'})...", flush=True)
-
         bot = discum.Client(token=token, log=False)
 
         @bot.gateway.command
@@ -526,51 +343,42 @@ def create_bot(token, bot_identifier, is_main=False):
             if hasattr(resp.event, 'ready') and resp.event.ready:
                 user = resp.raw.get("user", {})
                 if isinstance(user, dict) and (user_id := user.get("id")):
-                    bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else acc_names[bot_identifier] if not is_main and bot_identifier < len(acc_names) else f"Bot {bot_identifier}"
+                    bot_name = BOT_NAMES[bot_identifier-1] if is_main and bot_identifier-1 < len(BOT_NAMES) else f"Bot {bot_identifier}"
                     print(f"[Bot Creation] ✅ Đã đăng nhập: {user_id} ({bot_name})", flush=True)
-
                     if is_main:
                         bot_id = f"main_{bot_identifier}"
                         if bot_id not in bot_health_stats:
-                            bot_health_stats[bot_id] = {
-                                'last_health_check': time.time(),
-                                'consecutive_failures': 0,
-                                'total_checks': 0,
-                                'created_time': time.time()
-                            }
+                            bot_health_stats[bot_id] = {'consecutive_failures': 0}
 
         if is_main:
-            # Gộp các trình xử lý sự kiện để tránh lỗi
             @bot.gateway.command
             def on_gateway_event(resp):
                 # Xử lý tin nhắn mới
                 if hasattr(resp.event, 'message'):
                     msg = resp.parsed.auto()
-                    author_id = msg.get("author", {}).get("id")
-                    content = msg.get("content", "").lower()
+                    author_object = msg.get("author")
                     
-                    if author_id == karuta_id:
-                        if "dropping" in content:
+                    # >>>>> DÒNG SỬA LỖI NẰM Ở ĐÂY <<<<<<<
+                    if isinstance(author_object, dict):
+                        author_id = author_object.get("id")
+                        content = msg.get("content", "").lower()
+                        
+                        if author_id == karuta_id and "dropping" in content:
                             if msg.get("mentions"):
                                 handle_clan_drop(bot, msg, bot_identifier)
                             else:
                                 handle_grab(bot, msg, bot_identifier)
-                    
-                    elif author_id == karibbit_id:
-                        if any(keyword in content for keyword in ["drop", "grab", "pick"]):
+                        
+                        elif author_id == karibbit_id and any(k in content for k in ["drop", "grab", "pick"]):
                             handle_grab(bot, msg, bot_identifier)
 
                 # Xử lý reaction mới
                 if hasattr(resp.event, 'message_reaction_add'):
                     reaction_data = resp.parsed.auto()
-                    
                     emoji = reaction_data.get("emoji", {})
                     emoji_name = emoji.get("name", "")
                     
-                    watermelon_patterns = ['🍉', 'watermelon', 'melon', 'dua', 'duahau']
-                    is_watermelon = any(pattern in emoji_name.lower() for pattern in watermelon_patterns) or emoji_name == '🍉'
-                    
-                    if is_watermelon:
+                    if any(p in emoji_name.lower() for p in ['🍉', 'watermelon', 'dua']):
                         print(f"[WATERMELON REACTION | Bot {bot_identifier}] 🍉 Detected: {emoji_name}", flush=True)
                         if watermelon_grab_states.get(f'main_{bot_identifier}', False):
                             channel_id = reaction_data.get("channel_id")
@@ -580,431 +388,253 @@ def create_bot(token, bot_identifier, is_main=False):
         threading.Thread(target=bot.gateway.run, daemon=True).start()
         time.sleep(2)
         return bot
-
     except Exception as e:
-        print(f"[Bot Creation] ❌ Lỗi tạo bot {bot_identifier}: {e}", flush=True)
-        print(f"[Bot Creation] 📊 Traceback: {traceback.format_exc()}", flush=True)
+        print(f"[Bot Creation] ❌ Lỗi tạo bot {bot_identifier}: {e}\n{traceback.format_exc()}", flush=True)
         return None
 
 def quick_watermelon_grab(bot, channel_id, message_id, bot_num):
     """Quick watermelon grab khi detect được reaction"""
     try:
-        print(f"[QUICK WATERMELON | Bot {bot_num}] 🚀 Attempting quick grab on message {message_id}", flush=True)
-        
-        # Thử nhiều định dạng emoji
-        emoji_attempts = ['🍉', '\U0001f349']
-        
-        for emoji in emoji_attempts:
+        print(f"[QUICK WATERMELON | Bot {bot_num}] 🚀 Attempting quick grab...", flush=True)
+        for emoji in ['🍉', '\U0001f349']:
             try:
                 bot.addReaction(channel_id, message_id, emoji)
-                print(f"[QUICK WATERMELON | Bot {bot_num}] ✅ Quick grab SUCCESS with {emoji}!", flush=True)
+                print(f"[QUICK WATERMELON | Bot {bot_num}] ✅ Success!", flush=True)
                 return True
-            except:
-                continue
-        
-        print(f"[QUICK WATERMELON | Bot {bot_num}] 💔 All quick grab attempts failed", flush=True)
+            except: continue
         return False
-        
-    except Exception as e:
-        print(f"[QUICK WATERMELON | Bot {bot_num}] ❌ Quick grab error: {e}", flush=True)
-        return False
+    except: return False
 
 def handle_clan_drop(bot, msg, bot_num):
-    """Cải tiến hàm handle_clan_drop tương tự"""
-    if not (auto_clan_drop_settings.get("enabled") and auto_clan_drop_settings.get("ktb_channel_id")):
-        return
-
-    channel_id = msg.get("channel_id")
-    if channel_id != auto_clan_drop_settings.get("channel_id"):
-        return
-
+    """Xử lý clan drop"""
+    if not (auto_clan_drop_settings.get("enabled") and auto_clan_drop_settings.get("ktb_channel_id")): return
+    if msg.get("channel_id") != auto_clan_drop_settings.get("channel_id"): return
+    
     last_drop_msg_id = msg["id"]
-
+    ktb_channel_id = auto_clan_drop_settings["ktb_channel_id"]
+    channel_id = msg.get("channel_id")
+    
     def grab_handler():
-        card_picked = False
-        ktb_channel_id = auto_clan_drop_settings["ktb_channel_id"]
-
-        for attempt in range(8):
+        for _ in range(8):
             time.sleep(0.5)
             try:
                 messages = bot.getMessages(channel_id, num=5).json()
-                if not isinstance(messages, list):
-                    continue
-
+                if not isinstance(messages, list): continue
                 for msg_item in messages:
-                    author_id = msg_item.get("author", {}).get("id")
-                    msg_id = msg_item.get("id")
-
-                    if author_id == karibbit_id and msg_id and int(msg_id) > int(last_drop_msg_id):
+                    if msg_item.get("author", {}).get("id") == karibbit_id and int(msg_item.get("id")) > int(last_drop_msg_id):
                         embeds = msg_item.get("embeds", [])
-                        if not embeds:
-                            continue
-
-                        desc = embeds[0].get("description", "")
-                        if '♡' not in desc:
-                            continue
-
-                        lines = desc.split('\n')
-                        if len(lines) < 3:
-                            continue
-
-                        heart_numbers = []
-                        for line in lines[:3]:
-                            match = re.search(r'♡(\d+)', line)
-                            heart_numbers.append(int(match.group(1)) if match else 0)
-
-                        if not any(heart_numbers):
-                            break
+                        if not embeds or '♡' not in embeds[0].get("description", ""): continue
+                        
+                        lines = embeds[0]['description'].split('\n')[:3]
+                        heart_numbers = [int(m.group(1)) if (m := re.search(r'♡(\d+)', l)) else 0 for l in lines]
+                        if not any(heart_numbers): break
 
                         max_num = max(heart_numbers)
-                        bot_id_str = f'main_{bot_num}'
-                        heart_threshold = auto_clan_drop_settings.get("heart_thresholds", {}).get(bot_id_str, 50)
-
-                        if max_num >= heart_threshold:
+                        threshold = auto_clan_drop_settings.get("heart_thresholds", {}).get(f'main_{bot_num}', 50)
+                        
+                        if max_num >= threshold:
                             max_index = heart_numbers.index(max_num)
-                            delays = { 1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5] }
-                            bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
-                            emojis = ["1️⃣", "2️⃣", "3️⃣"]
-                            emoji = emojis[max_index]
-                            delay = bot_delays[max_index]
+                            delays = {1:[0.4,1.4,2.1], 2:[0.7,1.8,2.4], 3:[0.7,1.8,2.4], 4:[0.8,1.9,2.5]}
+                            delay = delays.get(bot_num, [0.9,2.0,2.6])[max_index]
+                            emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
 
-                            print(f"[CLAN DROP | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
-
+                            print(f"[CLAN DROP | Bot {bot_num}] Chọn {max_num}♡ -> {emoji} sau {delay}s", flush=True)
+                            
                             def grab_action():
                                 try:
                                     bot.addReaction(channel_id, last_drop_msg_id, emoji)
                                     time.sleep(1.2)
                                     bot.sendMessage(ktb_channel_id, "kt b")
-                                    print(f"[CLAN DROP | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
-                                except Exception as e:
-                                    print(f"[CLAN DROP | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
-
+                                except Exception as e: print(f"[CLAN DROP | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
+                            
                             threading.Timer(delay, grab_action).start()
-                            card_picked = True
-                            break
-
-                if card_picked:
-                    break
-
-            except Exception as e:
-                print(f"[CLAN DROP | Bot {bot_num}] ❌ Lỗi (attempt {attempt+1}): {e}", flush=True)
-                continue
-
-            if card_picked:
-                break
-
+                            return
+            except: continue
     threading.Thread(target=grab_handler, daemon=True).start()
 
 def handle_grab(bot, msg, bot_num):
-    """Enhanced handle_grab với better message detection và dual-strategy watermelon grab"""
+    """Xử lý card drop và watermelon grab"""
     channel_id = msg.get("channel_id")
     target_server = next((s for s in servers if s.get('main_channel_id') == channel_id), None)
-    if not target_server:
-        return
+    if not target_server: return
 
     auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
     watermelon_grab_enabled = watermelon_grab_states.get(f'main_{bot_num}', False)
-
-    if not auto_grab_enabled and not watermelon_grab_enabled:
-        return
+    if not auto_grab_enabled and not watermelon_grab_enabled: return
 
     last_drop_msg_id = msg["id"]
     
     def grab_handler():
-        # Card Grab Logic
         if auto_grab_enabled:
-            ktb_channel_id = target_server.get('ktb_channel_id')
-            heart_threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
-            card_grab_logic(bot, channel_id, last_drop_msg_id, ktb_channel_id, heart_threshold, bot_num)
-        
-        # Watermelon Grab Logic
+            card_grab_logic(bot, channel_id, last_drop_msg_id, target_server, bot_num)
         if watermelon_grab_enabled:
-            print(f"[WATERMELON | Bot {bot_num}] 🍉 Starting ENHANCED watermelon hunt...", flush=True)
-            immediate_success = attempt_immediate_watermelon_grab(bot, channel_id, last_drop_msg_id, bot_num)
-            if not immediate_success:
-                polling_watermelon_grab(bot, channel_id, last_drop_msg_id, bot_num)
+            polling_watermelon_grab(bot, channel_id, last_drop_msg_id, bot_num)
 
     threading.Thread(target=grab_handler, daemon=True).start()
 
-def card_grab_logic(bot, channel_id, last_drop_msg_id, ktb_channel_id, heart_threshold, bot_num):
-    card_picked = False
-    for attempt in range(6):
+def card_grab_logic(bot, channel_id, last_drop_msg_id, server, bot_num):
+    ktb_channel_id = server.get('ktb_channel_id')
+    heart_threshold = server.get(f'heart_threshold_{bot_num}', 50)
+    
+    for _ in range(6):
         time.sleep(0.5)
         try:
             messages = bot.getMessages(channel_id, num=5).json()
             if not isinstance(messages, list): continue
-
             for msg_item in messages:
-                if card_picked: break
-                author_id = msg_item.get("author", {}).get("id")
-                msg_id = msg_item.get("id")
-
-                if author_id in [karibbit_id, karuta_id] and msg_id and int(msg_id) >= int(last_drop_msg_id):
+                if msg_item.get("author", {}).get("id") == karibbit_id and int(msg_item.get("id")) > int(last_drop_msg_id):
                     embeds = msg_item.get("embeds", [])
                     if not embeds or '♡' not in embeds[0].get("description", ""): continue
                     
-                    lines = embeds[0]["description"].split('\n')
-                    if len(lines) < 3: continue
-
-                    heart_numbers = [int(m.group(1)) if (m := re.search(r'♡(\d+)', line)) else 0 for line in lines[:3]]
+                    lines = embeds[0]['description'].split('\n')[:3]
+                    heart_numbers = [int(m.group(1)) if (m := re.search(r'♡(\d+)', l)) else 0 for l in lines]
                     if not any(heart_numbers): break
 
                     max_num = max(heart_numbers)
                     if max_num >= heart_threshold:
                         max_index = heart_numbers.index(max_num)
-                        delays = {1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]}
-                        bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
-                        emojis = ["1️⃣", "2️⃣", "3️⃣"]
-                        emoji = emojis[max_index]
-                        delay = bot_delays[max_index]
+                        delays = {1:[0.4,1.4,2.1], 2:[0.7,1.8,2.4], 3:[0.7,1.8,2.4], 4:[0.8,1.9,2.5]}
+                        delay = delays.get(bot_num, [0.9,2.0,2.6])[max_index]
+                        emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
 
                         print(f"[CARD GRAB | Bot {bot_num}] ✅ Found: {max_num}♡ -> {emoji} after {delay}s", flush=True)
-
+                        
                         def grab_action():
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
                                 if ktb_channel_id:
                                     time.sleep(1.2)
                                     bot.sendMessage(ktb_channel_id, "kt b")
-                            except Exception as e:
-                                print(f"[CARD GRAB | Bot {bot_num}] ❌ Grab error: {e}", flush=True)
-
+                            except Exception as e: print(f"[CARD GRAB | Bot {bot_num}] ❌ Grab error: {e}", flush=True)
+                        
                         threading.Timer(delay, grab_action).start()
-                        card_picked = True
-            if card_picked: break
-        except Exception as e:
-            print(f"[CARD GRAB | Bot {bot_num}] ❌ Error (attempt {attempt+1}): {e}", flush=True)
-
-def attempt_immediate_watermelon_grab(bot, channel_id, message_id, bot_num):
-    """Attempt immediate watermelon grab"""
-    try:
-        emoji_attempts = ['🍉', '\U0001f349']
-        for emoji in emoji_attempts:
-            try:
-                bot.addReaction(channel_id, message_id, emoji)
-                print(f"[IMMEDIATE WATERMELON | Bot {bot_num}] ✅ IMMEDIATE SUCCESS with {emoji}!", flush=True)
-                return True
-            except:
-                continue
-        return False
-    except Exception as e:
-        print(f"[IMMEDIATE WATERMELON | Bot {bot_num}] ❌ Immediate grab error: {e}", flush=True)
-        return False
+                        return
+        except: continue
 
 def polling_watermelon_grab(bot, channel_id, message_id, bot_num):
-    """Enhanced polling strategy for watermelon grab"""
-    check_start_time = time.time()
-    max_check_duration = 20
-    
-    while time.time() - check_start_time < max_check_duration:
+    """Rà quét tìm dưa hấu"""
+    start_time = time.time()
+    while time.time() - start_time < 20:
         try:
-            target_message = None
-            try:
-                single_msg = bot.getMessage(channel_id, message_id).json()
-                if isinstance(single_msg, list) and len(single_msg) > 0: target_message = single_msg[0]
-                elif isinstance(single_msg, dict): target_message = single_msg
-            except: pass
-
-            if not target_message:
-                time.sleep(0.3)
-                continue
-
-            reactions = target_message.get('reactions', [])
-            if reactions:
-                for reaction in reactions:
-                    emoji_data = reaction.get('emoji', {})
-                    emoji_name = emoji_data.get('name', '')
-                    if '🍉' in emoji_name or 'watermelon' in emoji_name.lower() or 'dua' in emoji_name.lower():
-                        print(f"[POLLING WATERMELON | Bot {bot_num}] 🎯 WATERMELON FOUND!", flush=True)
+            msg_data = bot.getMessage(channel_id, message_id).json()
+            target_message = msg_data[0] if isinstance(msg_data, list) else msg_data
+            
+            if target_message and 'reactions' in target_message:
+                for reaction in target_message['reactions']:
+                    emoji_name = reaction.get('emoji', {}).get('name', '')
+                    if any(p in emoji_name.lower() for p in ['🍉', 'watermelon', 'dua']):
+                        print(f"[POLLING WATERMELON | Bot {bot_num}] 🎯 FOUND!", flush=True)
                         quick_watermelon_grab(bot, channel_id, message_id, bot_num)
                         return
-            time.sleep(0.2)
-        except Exception as e:
-            print(f"[POLLING WATERMELON | Bot {bot_num}] ❌ Polling error: {e}", flush=True)
-            time.sleep(0.3)
+            time.sleep(0.25)
+        except: time.sleep(0.3)
 
-def test_message_visibility(bot, channel_id, bot_num):
-    """Test if bot can see recent messages"""
-    try:
-        print(f"[MESSAGE TEST | Bot {bot_num}] Testing visibility in {channel_id}...", flush=True)
-        messages = bot.getMessages(channel_id, num=10).json()
-        if isinstance(messages, list):
-            print(f"[MESSAGE TEST | Bot {bot_num}] ✅ Can see {len(messages)} recent messages.", flush=True)
-        else:
-            print(f"[MESSAGE TEST | Bot {bot_num}] ❌ Invalid message format: {type(messages)}", flush=True)
-    except Exception as e:
-        print(f"[MESSAGE TEST | Bot {bot_num}] ❌ Test failed: {e}", flush=True)
-
-# --- CÁC VÒNG LẶP NỀN (Cải tiến) ---
+# --- CÁC VÒNG LẶP NỀN ---
 def run_clan_drop_cycle():
-    """Clan drop cycle với better error handling"""
+    """Chạy một chu kỳ clan drop"""
     print("[Clan Drop] 🚀 Bắt đầu chu kỳ drop clan.", flush=True)
-    settings = auto_clan_drop_settings.copy()
-    channel_id = settings.get("channel_id")
-
+    channel_id = auto_clan_drop_settings.get("channel_id")
     with bots_lock:
-        active_main_bots = [(bot, i + 1) for i, bot in enumerate(main_bots)
-                           if bot and bot_active_states.get(f'main_{i+1}', False)]
-
-    if not active_main_bots:
-        print("[Clan Drop] ⚠️ Không có bot chính nào hoạt động để thực hiện drop.", flush=True)
+        active_bots = [(b, i + 1) for i, b in enumerate(main_bots) if b and bot_active_states.get(f'main_{i+1}', False)]
+    
+    if not active_bots:
+        print("[Clan Drop] ⚠️ Không có bot chính nào hoạt động.", flush=True)
         return
 
-    for bot, bot_num in active_main_bots:
-        if auto_clan_drop_stop_event.is_set():
-            break
-
+    for bot, bot_num in active_bots:
+        if auto_clan_drop_stop_event.is_set(): break
         try:
-            bot_name = BOT_NAMES[bot_num-1] if bot_num-1 < len(BOT_NAMES) else f"MAIN_{bot_num}"
-            print(f"[Clan Drop] 📤 Bot {bot_name} đang gửi 'kd'...", flush=True)
-
             bot.sendMessage(channel_id, "kd")
-
-            base_delay = settings.get("bot_delay", 140)
-            random_delay = random.uniform(base_delay * 0.8, base_delay * 1.2)
-            time.sleep(random_delay)
-
+            delay = auto_clan_drop_settings.get("bot_delay", 140)
+            time.sleep(random.uniform(delay * 0.8, delay * 1.2))
         except Exception as e:
-            print(f"[Clan Drop] ❌ Lỗi khi gửi 'kd' từ bot {bot_num}: {e}", flush=True)
-
+            print(f"[Clan Drop] ❌ Lỗi gửi 'kd' từ bot {bot_num}: {e}", flush=True)
+    
     auto_clan_drop_settings["last_cycle_start_time"] = time.time()
     save_settings()
 
 def auto_clan_drop_loop():
-    """Clan drop loop với improved timing"""
+    """Vòng lặp tự động clan drop"""
     while not auto_clan_drop_stop_event.is_set():
         try:
-            if auto_clan_drop_stop_event.wait(timeout=60):
-                break
-
             settings = auto_clan_drop_settings
-            is_enabled = settings.get("enabled")
-            channel_id = settings.get("channel_id")
-            interval = settings.get("cycle_interval", 1800)
-            last_run = settings.get("last_cycle_start_time", 0)
-
-            if is_enabled and channel_id and (time.time() - last_run) >= interval:
+            if settings.get("enabled") and (time.time() - settings.get("last_cycle_start_time", 0)) >= settings.get("cycle_interval", 1800):
                 run_clan_drop_cycle()
-
+            auto_clan_drop_stop_event.wait(60)
         except Exception as e:
             print(f"[Clan Drop] ❌ ERROR in auto_clan_drop_loop: {e}", flush=True)
             time.sleep(60)
 
-    print("[Clan Drop] 🛑 Luồng tự động drop clan đã dừng.", flush=True)
-
 def spam_loop():
-    """Spam loop với better management"""
-    active_server_threads = {}
-
+    """Quản lý các luồng spam"""
+    active_threads = {}
     while True:
         try:
-            current_server_ids = {s['id'] for s in servers}
-
-            # Clean up threads for deleted servers
-            for server_id in list(active_server_threads.keys()):
-                if server_id not in current_server_ids:
-                    print(f"[Spam Control] 🛑 Dừng luồng spam cho server đã bị xóa: {server_id}", flush=True)
-                    _, stop_event = active_server_threads.pop(server_id)
-                    stop_event.set()
-
-            # Start/stop threads based on server settings
+            current_ids = {s['id'] for s in servers}
+            for server_id in list(active_threads.keys()):
+                if server_id not in current_ids:
+                    print(f"[Spam Control] 🛑 Dừng luồng spam cho server đã xóa: {server_id}", flush=True)
+                    active_threads.pop(server_id)[1].set()
+            
             for server in servers:
                 server_id = server.get('id')
-                spam_is_on = (server.get('spam_enabled') and
-                             server.get('spam_message') and
-                             server.get('spam_channel_id'))
-
-                if spam_is_on and server_id not in active_server_threads:
+                is_on = server.get('spam_enabled') and server.get('spam_message') and server.get('spam_channel_id')
+                if is_on and server_id not in active_threads:
                     print(f"[Spam Control] 🚀 Bắt đầu luồng spam cho server: {server.get('name')}", flush=True)
                     stop_event = threading.Event()
                     thread = threading.Thread(target=spam_for_server, args=(server, stop_event), daemon=True)
                     thread.start()
-                    active_server_threads[server_id] = (thread, stop_event)
-
-                elif not spam_is_on and server_id in active_server_threads:
+                    active_threads[server_id] = (thread, stop_event)
+                elif not is_on and server_id in active_threads:
                     print(f"[Spam Control] 🛑 Dừng luồng spam cho server: {server.get('name')}", flush=True)
-                    _, stop_event = active_server_threads.pop(server_id)
-                    stop_event.set()
-
+                    active_threads.pop(server_id)[1].set()
             time.sleep(5)
-
         except Exception as e:
             print(f"[Spam Control] ❌ ERROR in spam_loop_manager: {e}", flush=True)
-            time.sleep(5)
 
 def spam_for_server(server_config, stop_event):
-    """Spam cho server cụ thể với error handling"""
+    """Luồng spam cho một server cụ thể"""
     server_name = server_config.get('name')
     channel_id = server_config.get('spam_channel_id')
     message = server_config.get('spam_message')
+    delay = server_config.get('spam_delay', 10)
     
-    last_spam_time_key = f"last_spam_time_{server_name.replace(' ', '_')}"
-
     while not stop_event.is_set():
         try:
             with bots_lock:
-                active_bots = [bot for i, bot in enumerate(main_bots) if bot and bot_active_states.get(f'main_{i+1}', False)]
-                active_bots.extend([bot for i, bot in enumerate(bots) if bot and bot_active_states.get(f'sub_{i}', False)])
-
-            delay = server_config.get('spam_delay', 10)
-
+                active_bots = [b for i, b in enumerate(main_bots) if b and bot_active_states.get(f'main_{i+1}', False)]
+                active_bots.extend([b for i, b in enumerate(bots) if b and bot_active_states.get(f'sub_{i}', False)])
+            
             for bot in active_bots:
                 if stop_event.is_set(): break
-                try:
-                    bot.sendMessage(channel_id, message)
-                    time.sleep(random.uniform(1.5, 2.5))
-                except Exception as e:
-                    print(f"[Spam] ❌ Lỗi gửi spam từ bot tới server {server_name}: {e}", flush=True)
+                try: bot.sendMessage(channel_id, message); time.sleep(random.uniform(1.5, 2.5))
+                except: pass
             
-            server_config[last_spam_time_key] = time.time()
-
-            if not stop_event.is_set():
-                random_delay = random.uniform(delay * 0.9, delay * 1.1)
-                stop_event.wait(timeout=random_delay)
-
+            server_config[f"last_spam_time_{server_name.replace(' ', '_')}"] = time.time()
+            stop_event.wait(random.uniform(delay * 0.9, delay * 1.1))
         except Exception as e:
             print(f"[Spam] ❌ ERROR in spam_for_server {server_name}: {e}", flush=True)
-            stop_event.wait(timeout=10)
+            stop_event.wait(10)
 
 def periodic_save_loop():
-    """Periodic save với better timing"""
+    """Lưu cài đặt định kỳ"""
     while True:
-        time.sleep(1800)  # Save every 30 minutes
-        try:
-            print("[Settings] 💾 Bắt đầu lưu định kỳ...", flush=True)
-            save_settings()
-        except Exception as e:
-            print(f"[Settings] ❌ Lỗi trong periodic save: {e}", flush=True)
+        time.sleep(1800)
+        save_settings()
 
 def health_monitoring_loop():
-    """Health monitoring loop cho tất cả bots"""
+    """Theo dõi sức khỏe bot"""
     print("[Health Monitor] 🏥 Khởi động health monitoring", flush=True)
-
     while True:
         try:
             with bots_lock:
-                # Check main bots
                 for i, bot in enumerate(main_bots):
-                    if bot:
-                        bot_id = f"main_{i+1}"
-                        check_bot_health(bot, bot_id)
-
-                # Check sub bots
-                for i, bot in enumerate(bots):
-                    if bot:
-                        bot_id = f"sub_{i}"
-                        check_bot_health(bot, bot_id)
-
+                    if bot: check_bot_health(bot, f"main_{i+1}")
             time.sleep(300)
-
-        except Exception as e:
-            print(f"[Health Monitor] ❌ ERROR: {e}", flush=True)
-            time.sleep(60)
+        except: time.sleep(60)
 
 # --- FLASK APP ---
 app = Flask(__name__)
-
-# --- IMPROVED HTML TEMPLATE ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -1411,7 +1041,7 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- FLASK ROUTES (Enhanced) ---
+# --- FLASK ROUTES ---
 @app.route("/")
 def index():
     sorted_servers = sorted(servers, key=lambda s: s.get('name', ''))
@@ -1443,11 +1073,10 @@ def api_clan_drop_update():
     data = request.get_json()
     auto_clan_drop_settings['channel_id'] = data.get('channel_id', '').strip()
     auto_clan_drop_settings['ktb_channel_id'] = data.get('ktb_channel_id', '').strip()
-    if 'heart_thresholds' in data:
-        for key, value in data['heart_thresholds'].items():
-            if isinstance(value, int):
-                auto_clan_drop_settings.setdefault('heart_thresholds', {})[key] = value
-    return jsonify({'status': 'success', 'message': '💾 Clan Drop settings updated successfully.'})
+    thresholds = data.get('heart_thresholds', {})
+    if isinstance(thresholds, dict):
+        auto_clan_drop_settings['heart_thresholds'] = {k: int(v) for k, v in thresholds.items()}
+    return jsonify({'status': 'success', 'message': '💾 Clan Drop settings updated.'})
 
 @app.route("/api/add_server", methods=['POST'])
 def api_add_server():
@@ -1460,7 +1089,7 @@ def api_add_server():
         new_server[f'auto_grab_enabled_{bot_num}'] = False
         new_server[f'heart_threshold_{bot_num}'] = 50
     servers.append(new_server)
-    return jsonify({'status': 'success', 'message': f'✅ Server "{name}" added successfully.', 'reload': True})
+    return jsonify({'status': 'success', 'message': f'✅ Server "{name}" added.', 'reload': True})
 
 @app.route("/api/delete_server", methods=['POST'])
 def api_delete_server():
@@ -1469,7 +1098,7 @@ def api_delete_server():
     server_to_delete = next((s for s in servers if s.get('id') == server_id), None)
     if server_to_delete:
         servers = [s for s in servers if s.get('id') != server_id]
-        return jsonify({'status': 'success', 'message': f'🗑️ Server "{server_to_delete.get("name")}" deleted successfully.', 'reload': True})
+        return jsonify({'status': 'success', 'message': f'🗑️ Server "{server_to_delete.get("name")}" deleted.', 'reload': True})
     return jsonify({'status': 'error', 'message': 'Server not found.'}), 404
 
 @app.route("/api/update_server_channels", methods=['POST'])
@@ -1477,12 +1106,9 @@ def api_update_server_channels():
     data = request.get_json()
     server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
     if not server: return jsonify({'status': 'error', 'message': 'Server not found.'}), 404
-    updated_fields = []
     for field in ['main_channel_id', 'ktb_channel_id', 'spam_channel_id']:
-        if field in data:
-            server[field] = data[field]
-            updated_fields.append(field.replace('_', ' ').title())
-    return jsonify({'status': 'success', 'message': f'🔧 {", ".join(updated_fields)} updated for {server["name"]}.'})
+        if field in data: server[field] = data[field]
+    return jsonify({'status': 'success', 'message': f'🔧 Channels updated for {server["name"]}.'})
 
 @app.route("/api/harvest_toggle", methods=['POST'])
 def api_harvest_toggle():
@@ -1491,32 +1117,22 @@ def api_harvest_toggle():
     node = data.get('node')
     if not server or not node: return jsonify({'status': 'error', 'message': 'Invalid request.'}), 400
     grab_key = f'auto_grab_enabled_{node}'
-    threshold_key = f'heart_threshold_{node}'
     server[grab_key] = not server.get(grab_key, False)
-    server[threshold_key] = int(data.get('threshold', 50))
-    try:
-        bot_name = BOT_NAMES[int(node)-1]
-    except (ValueError, IndexError):
-        bot_name = f"MAIN_{node}"
-    status_icon = "🎯" if server[grab_key] else "🛑"
-    msg = f"{status_icon} Card Grab for {bot_name} was {'ENABLED' if server[grab_key] else 'DISABLED'} on server {server['name']}."
-    return jsonify({'status': 'success', 'message': msg})
+    server[f'heart_threshold_{node}'] = int(data.get('threshold', 50))
+    bot_name = BOT_NAMES[int(node)-1] if int(node)-1 < len(BOT_NAMES) else f"MAIN_{node}"
+    status = 'ENABLED' if server[grab_key] else 'DISABLED'
+    return jsonify({'status': 'success', 'message': f"🎯 Card Grab for {bot_name} {status} on {server['name']}."})
 
 @app.route("/api/watermelon_toggle", methods=['POST'])
 def api_watermelon_toggle():
     data = request.get_json()
     node = data.get('node')
-    if not node or node not in watermelon_grab_states:
-        return jsonify({'status': 'error', 'message': 'Invalid bot node.'}), 404
+    if not node or node not in watermelon_grab_states: return jsonify({'status': 'error', 'message': 'Invalid bot node.'}), 404
     watermelon_grab_states[node] = not watermelon_grab_states.get(node, False)
-    try:
-        bot_name_index = int(node.split('_')[1]) - 1
-        bot_name = BOT_NAMES[bot_name_index] if bot_name_index < len(BOT_NAMES) else f"MAIN_{node}"
-    except (IndexError, ValueError):
-        bot_name = node.upper()
-    status_icon = "🍉" if watermelon_grab_states[node] else "🛑"
-    msg = f"{status_icon} Global Watermelon Grab was {'ENABLED' if watermelon_grab_states[node] else 'DISABLED'} for {bot_name}."
-    return jsonify({'status': 'success', 'message': msg})
+    bot_name_index = int(node.split('_')[1]) - 1
+    bot_name = BOT_NAMES[bot_name_index] if bot_name_index < len(BOT_NAMES) else node.upper()
+    status = 'ENABLED' if watermelon_grab_states[node] else 'DISABLED'
+    return jsonify({'status': 'success', 'message': f"🍉 Global Watermelon Grab {status} for {bot_name}."})
 
 @app.route("/api/broadcast_toggle", methods=['POST'])
 def api_broadcast_toggle():
@@ -1529,9 +1145,8 @@ def api_broadcast_toggle():
     if server['spam_enabled'] and (not server['spam_message'] or not server['spam_channel_id']):
         server['spam_enabled'] = False
         return jsonify({'status': 'error', 'message': f'❌ Spam message/channel required for {server["name"]}.'})
-    status_icon = "📢" if server['spam_enabled'] else "🛑"
-    msg = f"{status_icon} Auto Broadcast {'ENABLED' if server['spam_enabled'] else 'DISABLED'} for {server['name']}."
-    return jsonify({'status': 'success', 'message': msg})
+    status = 'ENABLED' if server['spam_enabled'] else 'DISABLED'
+    return jsonify({'status': 'success', 'message': f"📢 Auto Broadcast {status} for {server['name']}."})
 
 @app.route("/api/bot_reboot_toggle", methods=['POST'])
 def api_bot_reboot_toggle():
@@ -1539,33 +1154,26 @@ def api_bot_reboot_toggle():
     data = request.get_json()
     bot_id = data.get('bot_id')
     delay = int(data.get("delay", 3600))
-
-    if not bot_id or bot_id not in bot_reboot_settings:
-        return jsonify({'status': 'error', 'message': '❌ Invalid Bot ID.'}), 400
+    if not bot_id or bot_id not in bot_reboot_settings: return jsonify({'status': 'error', 'message': 'Invalid Bot ID.'}), 400
 
     settings = bot_reboot_settings[bot_id]
     settings['enabled'] = not settings.get('enabled', False)
     settings['delay'] = delay
-    settings['failure_count'] = 0  # Reset failure count when toggling
+    settings['failure_count'] = 0
 
-    try:
-        bot_name_index = int(bot_id.split('_')[1]) - 1
-        bot_name = BOT_NAMES[bot_name_index] if bot_name_index < len(BOT_NAMES) else bot_id
-    except (IndexError, ValueError):
-        bot_name = bot_id
-
+    bot_name_index = int(bot_id.split('_')[1]) - 1
+    bot_name = BOT_NAMES[bot_name_index] if bot_name_index < len(BOT_NAMES) else bot_id
+    
     if settings['enabled']:
         settings['next_reboot_time'] = time.time() + delay
         if auto_reboot_thread is None or not auto_reboot_thread.is_alive():
-            print("[Enhanced Reboot] 🚀 Kích hoạt luồng Safe Reboot System", flush=True)
             auto_reboot_stop_event.clear()
             auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
             auto_reboot_thread.start()
-        msg = f"🔄 Safe Auto-Reboot ENABLED for {bot_name} (every {delay}s with health checks)"
+        msg = f"🔄 Safe Auto-Reboot ENABLED for {bot_name} (every {delay}s)."
     else:
         settings['next_reboot_time'] = 0
-        msg = f"🛑 Auto-Reboot DISABLED for {bot_name}"
-
+        msg = f"🛑 Auto-Reboot DISABLED for {bot_name}."
     return jsonify({'status': 'success', 'message': msg})
 
 @app.route("/api/toggle_bot_state", methods=['POST'])
@@ -1580,136 +1188,75 @@ def api_toggle_bot_state():
 @app.route("/api/save_settings", methods=['POST'])
 def api_save_settings():
     save_settings()
-    return jsonify({'status': 'success', 'message': '💾 Settings saved successfully.'})
+    return jsonify({'status': 'success', 'message': '💾 Settings saved.'})
 
 @app.route("/status")
 def status():
     now = time.time()
-    # Create a deep copy of servers to avoid modifying the original list during iteration
     servers_copy = json.loads(json.dumps(servers))
-    
     for server in servers_copy:
-        last_spam_time_key = f"last_spam_time_{server.get('name', '').replace(' ', '_')}"
+        last_spam_key = f"last_spam_time_{server.get('name', '').replace(' ', '_')}"
         if server.get('spam_enabled'):
-            countdown = (server.get(last_spam_time_key, 0) + server.get('spam_delay', 10)) - now
+            countdown = (server.get(last_spam_key, 0) + server.get('spam_delay', 10)) - now
             server['spam_countdown'] = max(0, countdown)
-        else:
-            server['spam_countdown'] = 0
+        else: server['spam_countdown'] = 0
 
     with bots_lock:
         main_bot_statuses = []
         for i, bot in enumerate(main_bots):
             bot_id = f"main_{i+1}"
             bot_name = BOT_NAMES[i] if i < len(BOT_NAMES) else f"MAIN_{i+1}"
-
             health_status = 'good'
             if bot_id in bot_health_stats:
                 failures = bot_health_stats[bot_id].get('consecutive_failures', 0)
                 if failures >= 3: health_status = 'bad'
                 elif failures > 0: health_status = 'warning'
+            main_bot_statuses.append({"name": bot_name, "reboot_id": bot_id, "is_active": bot_active_states.get(bot_id, False), "type": "main", "health_status": health_status})
+        
+        sub_bot_statuses = [{"name": acc_names[i] if i < len(acc_names) else f"Sub {i+1}", "reboot_id": f"sub_{i}", "is_active": bot_active_states.get(f"sub_{i}", False), "type": "sub", "health_status": "good"} for i, bot in enumerate(bots)]
 
-            main_bot_statuses.append({
-                "name": bot_name, "status": bot is not None, "reboot_id": bot_id,
-                "is_active": bot_active_states.get(bot_id, False), "type": "main", "health_status": health_status
-            })
+    clan_drop_status = {"enabled": auto_clan_drop_settings.get("enabled", False), "countdown": (auto_clan_drop_settings.get("last_cycle_start_time", 0) + auto_clan_drop_settings.get("cycle_interval", 1800) - now) if auto_clan_drop_settings.get("enabled") else 0}
+    reboot_settings_with_countdown = {bot_id: {**s, 'countdown': max(0, s.get('next_reboot_time', 0) - now) if s.get('enabled') else 0} for bot_id, s in bot_reboot_settings.items()}
 
-        sub_bot_statuses = []
-        for i, bot in enumerate(bots):
-            bot_id = f"sub_{i}"
-            bot_name = acc_names[i] if i < len(acc_names) else f"Sub {i+1}"
-            sub_bot_statuses.append({
-                "name": bot_name, "status": bot is not None, "reboot_id": bot_id,
-                "is_active": bot_active_states.get(bot_id, False), "type": "sub", "health_status": "good"
-            })
+    return jsonify({'bot_reboot_settings': reboot_settings_with_countdown, 'bot_statuses': {"main_bots": main_bot_statuses, "sub_accounts": sub_bot_statuses}, 'server_start_time': server_start_time, 'servers': servers_copy, 'watermelon_grab_states': watermelon_grab_states, 'auto_clan_drop_status': clan_drop_status})
 
-    clan_drop_status = {
-        "enabled": auto_clan_drop_settings.get("enabled", False),
-        "countdown": (auto_clan_drop_settings.get("last_cycle_start_time", 0) +
-                     auto_clan_drop_settings.get("cycle_interval", 1800) - now)
-                    if auto_clan_drop_settings.get("enabled", False) else 0
-    }
-
-    reboot_settings_with_countdown = {}
-    for bot_id, settings in bot_reboot_settings.items():
-        new_settings = settings.copy()
-        if new_settings.get('enabled'):
-            new_settings['countdown'] = max(0, new_settings.get('next_reboot_time', 0) - now)
-        else:
-            new_settings['countdown'] = 0
-        reboot_settings_with_countdown[bot_id] = new_settings
-
-    return jsonify({
-        'bot_reboot_settings': reboot_settings_with_countdown,
-        'bot_statuses': {"main_bots": main_bot_statuses, "sub_accounts": sub_bot_statuses},
-        'server_start_time': server_start_time,
-        'servers': servers_copy,
-        'watermelon_grab_states': watermelon_grab_states,
-        'auto_clan_drop_status': clan_drop_status,
-        'bot_health_stats': bot_health_stats
-    })
-
-# --- MAIN EXECUTION (Enhanced) ---
+# --- MAIN EXECUTION ---
 if __name__ == "__main__":
     print("🚀 Shadow Network Control - Enhanced Version Starting...", flush=True)
-
     load_settings()
-
-    print("🔌 Initializing bots with enhanced safety features...", flush=True)
+    print("🔌 Initializing bots...", flush=True)
+    
     with bots_lock:
-        # Initialize main bots
         for i, token in enumerate(main_tokens):
             if token.strip():
-                bot_num = i + 1
-                bot_id = f"main_{bot_num}"
-                print(f"[Init] 🤖 Creating main bot {bot_num}...", flush=True)
-                bot = create_bot(token.strip(), bot_identifier=bot_num, is_main=True)
-                main_bots.append(bot)
-
+                bot_num, bot_id = i + 1, f"main_{i+1}"
+                main_bots.append(create_bot(token.strip(), bot_identifier=bot_num, is_main=True))
                 if bot_id not in bot_active_states: bot_active_states[bot_id] = True
                 if bot_id not in watermelon_grab_states: watermelon_grab_states[bot_id] = False
-                if bot_id not in auto_clan_drop_settings.get('heart_thresholds', {}):
-                    auto_clan_drop_settings.setdefault('heart_thresholds', {})[bot_id] = 50
-                if bot_id not in bot_reboot_settings:
-                    bot_reboot_settings[bot_id] = {
-                        'enabled': False, 'delay': 3600, 'next_reboot_time': 0,
-                        'failure_count': 0, 'last_reboot_time': 0
-                    }
-                if bot_id not in bot_health_stats:
-                    bot_health_stats[bot_id] = {
-                        'last_health_check': time.time(), 'consecutive_failures': 0,
-                        'total_checks': 0, 'created_time': time.time()
-                    }
+                if bot_id not in auto_clan_drop_settings.get('heart_thresholds', {}): auto_clan_drop_settings.setdefault('heart_thresholds', {})[bot_id] = 50
+                if bot_id not in bot_reboot_settings: bot_reboot_settings[bot_id] = {'enabled': False, 'delay': 3600, 'next_reboot_time': 0, 'failure_count': 0, 'last_reboot_time': 0}
 
-        # Initialize sub bots
         for i, token in enumerate(tokens):
             if token.strip():
                 bot_id = f'sub_{i}'
-                print(f"[Init] 🤖 Creating sub bot {i}...", flush=True)
-                bot = create_bot(token.strip(), bot_identifier=i, is_main=False)
-                bots.append(bot)
+                bots.append(create_bot(token.strip(), bot_identifier=i, is_main=False))
                 if bot_id not in bot_active_states: bot_active_states[bot_id] = True
 
-    print("🔧 Starting enhanced background threads...", flush=True)
-
+    print("🔧 Starting background threads...", flush=True)
     threading.Thread(target=periodic_save_loop, daemon=True).start()
     threading.Thread(target=health_monitoring_loop, daemon=True).start()
-
-    spam_thread = threading.Thread(target=spam_loop, daemon=True)
-    spam_thread.start()
+    threading.Thread(target=spam_loop, daemon=True).start()
 
     if any(s.get('enabled') for s in bot_reboot_settings.values()):
-        print("[Enhanced Reboot] 🔄 Starting Safe Reboot System...", flush=True)
         auto_reboot_stop_event.clear()
         auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
         auto_reboot_thread.start()
 
     if auto_clan_drop_settings.get("enabled"):
-        print("[Clan Drop] 🚀 Starting Auto Clan Drop...", flush=True)
         auto_clan_drop_stop_event.clear()
         auto_clan_drop_thread = threading.Thread(target=auto_clan_drop_loop, daemon=True)
         auto_clan_drop_thread.start()
 
     port = int(os.environ.get("PORT", 10000))
-    print(f"🌐 Starting Enhanced Web Server at http://0.0.0.0:{port}", flush=True)
-    print("✅ Shadow Network Control - Enhanced Version Ready!", flush=True)
+    print(f"🌐 Starting Web Server at http://0.0.0.0:{port}", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
