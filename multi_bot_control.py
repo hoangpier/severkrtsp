@@ -179,9 +179,13 @@ def initialize_default_settings():
 
 # --- CONNECTION HEALTH CHECK & AUTO RECOVERY SYSTEM ---
 def check_bot_health(bot, bot_id):
-    """Kiểm tra sức khỏe bot với connection validation chi tiết (Enhanced)"""
+    """Kiểm tra sức khỏe bot với connection validation chi tiết (Enhanced & Fixed)"""
     try:
         if not bot:
+            # Ghi nhận lỗi cho bot không tồn tại
+            if bot_id not in bot_health_stats:
+                bot_health_stats[bot_id] = {'consecutive_failures': 0}
+            bot_health_stats[bot_id]['consecutive_failures'] += 1
             print(f"[Health Check] 🔴 Bot {bot_id} is None", flush=True)
             return False
 
@@ -193,22 +197,10 @@ def check_bot_health(bot, bot_id):
 
         try:
             if hasattr(bot, 'gateway') and bot.gateway:
-                # Check gateway connection status
                 if hasattr(bot.gateway, 'connected'):
                     gateway_connected = bool(bot.gateway.connected)
                 elif hasattr(bot.gateway, 'session_id'):
                     gateway_connected = bot.gateway.session_id is not None
-                else:
-                    # Fallback: try to check if gateway thread is alive
-                    gateway_connected = True  # Assume connected if we can't check
-
-                # Additional check: Try to access gateway attributes
-                if gateway_connected:
-                    try:
-                        _ = bot.gateway.session_id
-                    except Exception as e:
-                        gateway_connected = False
-                        gateway_error = f"Gateway access error: {e}"
             else:
                 gateway_error = "No gateway attribute"
 
@@ -216,17 +208,19 @@ def check_bot_health(bot, bot_id):
             gateway_connected = False
             gateway_error = f"Gateway check failed: {e}"
 
-        # Test 2: Try a simple API call to test actual connectivity
+        # Test 2: Try a simple API call to test actual connectivity (FIXED)
         api_working = False
         api_error = None
 
         try:
-            # Try to get user info - lightweight API call
-            response = bot.getMe()
-            if response and hasattr(response, 'status_code'):
-                api_working = response.status_code == 200
-            elif response:  # Some versions might not have status_code
+            # SỬA LỖI: Dùng bot.getGuilds(limit=1) thay vì bot.getMe()
+            # Đây là một lệnh API nhẹ và ổn định để kiểm tra token và kết nối.
+            response = bot.getGuilds(limit=1)
+            # Nếu lệnh thành công, nó sẽ trả về một list.
+            if isinstance(response.json(), list):
                 api_working = True
+            else:
+                api_error = f"API test failed: Unexpected response type {type(response.json())}"
         except Exception as e:
             api_error = f"API test failed: {e}"
 
@@ -238,56 +232,22 @@ def check_bot_health(bot, bot_id):
 
         if time_since_activity > 300:  # 5 minutes without activity
             activity_healthy = False
-            print(f"[Health Check] ⚠️ Bot {bot_id}: {time_since_activity:.0f}s since last activity", flush=True)
 
         # Overall health assessment
-        is_healthy = gateway_connected and (api_working or api_error is None) and activity_healthy
-
+        is_healthy = gateway_connected and api_working and activity_healthy
         response_time = time.time() - start_time
 
         # Update health stats
         if bot_id not in bot_health_stats:
-            bot_health_stats[bot_id] = {
-                'last_health_check': time.time(),
-                'consecutive_failures': 0,
-                'total_checks': 0,
-                'avg_response_time': 0
-            }
-
+            bot_health_stats[bot_id] = {'consecutive_failures': 0}
         stats = bot_health_stats[bot_id]
         stats['last_health_check'] = time.time()
-        stats['total_checks'] += 1
-
-        # Update connection health tracking
-        if bot_id not in bot_connection_health:
-            bot_connection_health[bot_id] = {
-                'gateway_status': 'unknown',
-                'api_status': 'unknown',
-                'last_successful_check': 0,
-                'consecutive_failures': 0
-            }
-
-        health_record = bot_connection_health[bot_id]
 
         if is_healthy:
             stats['consecutive_failures'] = 0
-            health_record['consecutive_failures'] = 0
-            health_record['last_successful_check'] = now
-            health_record['gateway_status'] = 'connected'
-            health_record['api_status'] = 'working'
-
-            # Update average response time
-            if stats['avg_response_time'] == 0:
-                stats['avg_response_time'] = response_time
-            else:
-                stats['avg_response_time'] = (stats['avg_response_time'] + response_time) / 2
             return True
         else:
             stats['consecutive_failures'] += 1
-            health_record['consecutive_failures'] += 1
-            health_record['gateway_status'] = 'disconnected' if not gateway_connected else 'connected'
-            health_record['api_status'] = 'failed' if not api_working else 'working'
-
             # Detailed error logging
             error_details = []
             if not gateway_connected:
@@ -296,10 +256,16 @@ def check_bot_health(bot, bot_id):
                 error_details.append(f"API: {api_error or 'failed'}")
             if not activity_healthy:
                 error_details.append(f"Activity: {time_since_activity:.0f}s ago")
-
+            
             print(f"[Health Check] ❌ Bot {bot_id} unhealthy - {'; '.join(error_details)}", flush=True)
             return False
 
+    except Exception as e:
+        print(f"[Health Check] ❌ Bot {bot_id} health check exception: {e}", flush=True)
+        if bot_id not in bot_health_stats:
+            bot_health_stats[bot_id] = {'consecutive_failures': 0}
+        bot_health_stats[bot_id]['consecutive_failures'] += 1
+        return False
     except Exception as e:
         print(f"[Health Check] ❌ Bot {bot_id} health check exception: {e}", flush=True)
 
