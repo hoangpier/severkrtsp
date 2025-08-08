@@ -201,7 +201,7 @@ def handle_grab(bot, msg, bot_num):
                 if card_picked: break
         if watermelon_grab_enabled:
             try:
-                time.sleep(0.25)
+                time.sleep(3.5)
                 full_msg_obj = bot.getMessage(channel_id, last_drop_msg_id).json()
                 if isinstance(full_msg_obj, list) and len(full_msg_obj) > 0:
                     full_msg_obj = full_msg_obj[0]
