@@ -1,4 +1,4 @@
-# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - TÍCH HỢP BOT MANAGER & CẢI TIẾN AN TOÀN
+# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - TÍCH HỢP BOT MANAGER & CẢI TIẾN AN TOÀN VÀ ĐỘ ỔN ĐỊNH
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -22,7 +22,7 @@ bot_states = {
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
 
-# --- QUẢN LÝ BOT THREAD-SAFE ---
+# --- QUẢN LÝ BOT THREAD-SAFE (IMPROVED) ---
 class ThreadSafeBotManager:
     def __init__(self):
         self._bots = {}
@@ -32,11 +32,20 @@ class ThreadSafeBotManager:
     def add_bot(self, bot_id, bot_instance):
         with self._lock:
             self._bots[bot_id] = bot_instance
+            print(f"[Bot Manager] ✅ Added bot {bot_id}", flush=True)
 
     def remove_bot(self, bot_id):
         with self._lock:
-            if bot_id in self._bots:
-                del self._bots[bot_id]
+            bot = self._bots.pop(bot_id, None)
+            if bot:
+                # Đảm bảo cleanup gateway một cách an toàn
+                try:
+                    if hasattr(bot, 'gateway') and hasattr(bot.gateway, 'close'):
+                        bot.gateway.close()
+                except Exception as e:
+                    print(f"[Bot Manager] ⚠️ Error closing gateway for {bot_id}: {e}", flush=True)
+                print(f"[Bot Manager] 🗑️ Removed bot {bot_id}", flush=True)
+
 
     def get_bot(self, bot_id):
         with self._lock:
@@ -141,6 +150,15 @@ def get_bot_name(bot_id_str):
     except (IndexError, ValueError):
         return bot_id_str.upper()
 
+def safe_message_handler_wrapper(handler_func, bot, msg, *args):
+    """Wrapper để handle exceptions trong message processing, tránh crash gateway."""
+    try:
+        return handler_func(bot, msg, *args)
+    except Exception as e:
+        print(f"[Message Handler] ❌ Error in {handler_func.__name__}: {e}", flush=True)
+        print(f"[Message Handler] 🐛 Traceback: {traceback.format_exc()}", flush=True)
+        return None
+
 # --- LOGIC GRAB CARD ---
 def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id):
     """Hàm chung để tìm và chọn card dựa trên số heart."""
@@ -237,16 +255,49 @@ def handle_grab(bot, msg, bot_num):
 
     threading.Thread(target=grab_logic_thread, daemon=True).start()
 
-# --- HỆ THỐNG REBOOT & HEALTH CHECK ---
+# --- HỆ THỐNG REBOOT & HEALTH CHECK (IMPROVED) ---
 def check_bot_health(bot_instance, bot_id):
-    stats = bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
-    if not bot_instance or not hasattr(bot_instance, 'gateway'):
-        stats['consecutive_failures'] += 1
+    """Improved health check with better error handling."""
+    try:
+        stats = bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0, 'last_check': 0})
+        stats['last_check'] = time.time()
+        
+        if not bot_instance or not hasattr(bot_instance, 'gateway'):
+            stats['consecutive_failures'] += 1
+            return False
+
+        is_connected = hasattr(bot_instance.gateway, 'connected') and bot_instance.gateway.connected
+        
+        if is_connected:
+            stats['consecutive_failures'] = 0
+        else:
+            stats['consecutive_failures'] += 1
+            print(f"[Health Check] ⚠️ Bot {bot_id} not connected - failures: {stats['consecutive_failures']}", flush=True)
+            
+        return is_connected
+    except Exception as e:
+        print(f"[Health Check] ❌ Exception in health check for {bot_id}: {e}", flush=True)
+        bot_states["health_stats"].setdefault(bot_id, {})['consecutive_failures'] = \
+            bot_states["health_stats"][bot_id].get('consecutive_failures', 0) + 1
         return False
-    is_connected = hasattr(bot_instance.gateway, 'connected') and bot_instance.gateway.connected
-    stats['consecutive_failures'] = 0 if is_connected else stats.get('consecutive_failures', 0) + 1
-    if not is_connected: print(f"[Health Check] ⚠️ Bot {bot_id} gateway not connected", flush=True)
-    return is_connected
+
+def handle_reboot_failure(bot_id):
+    settings = bot_states["reboot_settings"].setdefault(bot_id, {'delay': 3600, 'enabled': True})
+    failure_count = settings.get('failure_count', 0) + 1
+    settings['failure_count'] = failure_count
+    
+    # Exponential Backoff
+    backoff_multiplier = min(2 ** failure_count, 8)
+    # Ensure delay is not excessively long for the first few failures
+    base_delay = settings.get('delay', 3600)
+    next_try_delay = max(600, base_delay / backoff_multiplier) * backoff_multiplier
+
+    settings['next_reboot_time'] = time.time() + next_try_delay
+    
+    print(f"[Safe Reboot] 🔴 Failure #{failure_count} for {bot_id}. Thử lại sau {next_try_delay/60:.1f} phút.", flush=True)
+    if failure_count >= 5:
+        settings['enabled'] = False
+        print(f"[Safe Reboot] ❌ Tắt auto-reboot cho {bot_id} sau 5 lần thất bại.", flush=True)
 
 def safe_reboot_bot(bot_id):
     if not bot_manager.start_reboot(bot_id):
@@ -255,7 +306,6 @@ def safe_reboot_bot(bot_id):
 
     print(f"[Safe Reboot] 🔄 Bắt đầu reboot bot {bot_id}...", flush=True)
     try:
-        # **Enhanced Validation**
         match = re.match(r"main_(\d+)", bot_id)
         if not match:
             raise ValueError("Định dạng bot_id không hợp lệ cho reboot.")
@@ -267,29 +317,30 @@ def safe_reboot_bot(bot_id):
         token = main_tokens[bot_index].strip()
         bot_name = get_bot_name(bot_id)
 
-        current_bot = bot_manager.get_bot(bot_id)
-        if current_bot and check_bot_health(current_bot, bot_id):
-            print(f"[Safe Reboot] ✅ Bot {bot_name} khỏe mạnh, hoãn reboot", flush=True)
-            return True # Trả về True vì bot vẫn ổn
+        # Cleanup bot cũ
+        print(f"[Safe Reboot] 🧹 Cleaning up old bot instance for {bot_name}", flush=True)
+        bot_manager.remove_bot(bot_id) # remove_bot đã bao gồm gateway.close()
 
-        # **Improved Memory Management**
-        if current_bot and hasattr(current_bot, 'gateway'):
-            current_bot.gateway.close()
-        bot_manager.remove_bot(bot_id) # Xóa instance cũ khỏi manager
-
+        # Exponential backoff delay
         settings = bot_states["reboot_settings"].get(bot_id, {})
         failure_count = settings.get('failure_count', 0)
         wait_time = random.uniform(20, 40) + min(failure_count * 30, 300)
-        print(f"[Safe Reboot] ⏳ Chờ {wait_time:.1f}s để cleanup...", flush=True)
+        print(f"[Safe Reboot] ⏳ Chờ {wait_time:.1f}s để cleanup và tránh rate limit...", flush=True)
         time.sleep(wait_time)
 
+        # Tạo bot mới với logic kết nối đáng tin cậy hơn
+        print(f"[Safe Reboot] 🏗️ Creating new bot instance for {bot_name}", flush=True)
         new_bot = create_bot(token, bot_identifier=(bot_index + 1), is_main=True)
         if not new_bot:
-            raise Exception("Không thể tạo instance bot mới.")
+            raise Exception("Không thể tạo instance bot mới hoặc kết nối gateway thất bại.")
 
-        bot_manager.add_bot(bot_id, new_bot) # Thêm instance mới vào manager
+        bot_manager.add_bot(bot_id, new_bot)
         
-        settings.update({'next_reboot_time': time.time() + settings.get('delay', 3600), 'failure_count': 0, 'last_reboot_time': time.time()})
+        settings.update({
+            'next_reboot_time': time.time() + settings.get('delay', 3600),
+            'failure_count': 0,
+            'last_reboot_time': time.time()
+        })
         bot_states["health_stats"][bot_id]['consecutive_failures'] = 0
         print(f"[Safe Reboot] ✅ Reboot thành công {bot_name}", flush=True)
         return True
@@ -299,62 +350,76 @@ def safe_reboot_bot(bot_id):
         handle_reboot_failure(bot_id)
         return False
     finally:
-        bot_manager.end_reboot(bot_id) # **Fix Race Condition** Luôn đảm bảo cờ reboot được gỡ
+        bot_manager.end_reboot(bot_id) # Luôn đảm bảo cờ reboot được gỡ
 
-def handle_reboot_failure(bot_id):
-    settings = bot_states["reboot_settings"].setdefault(bot_id, {'delay': 3600, 'enabled': True})
-    failure_count = settings.get('failure_count', 0) + 1
-    settings['failure_count'] = failure_count
-    
-    # **Better Error Handling** (Exponential Backoff)
-    backoff_multiplier = min(2 ** failure_count, 8)
-    backoff_delay = max(settings.get('delay', 3600), 300) * backoff_multiplier
-    settings['next_reboot_time'] = time.time() + backoff_delay
-    
-    print(f"[Safe Reboot] 🔴 Failure #{failure_count} cho {bot_id}. Thử lại sau {backoff_delay/60:.1f} phút.", flush=True)
-    if failure_count >= 5:
-        settings['enabled'] = False
-        print(f"[Safe Reboot] ❌ Tắt auto-reboot cho {bot_id} sau 5 lần thất bại.", flush=True)
-
-# --- VÒNG LẶP NỀN ---
+# --- VÒNG LẶP NỀN (IMPROVED) ---
 def auto_reboot_loop():
-    print("[Safe Reboot] 🚀 Khởi động luồng tự động reboot.", flush=True)
+    print("[Safe Reboot] 🚀 Khởi động luồng tự động reboot với cải tiến.", flush=True)
     last_global_reboot_time = 0
+    consecutive_system_failures = 0
+    
     while not stop_events["reboot"].is_set():
-        now = time.time()
-        # Rate limiting toàn cục
-        if now - last_global_reboot_time < 300: 
-            stop_events["reboot"].wait(30)
-            continue
+        try:
+            now = time.time()
+            
+            # Global rate limiting
+            min_global_interval = 600 # Tối thiểu 10 phút giữa các lần reboot
+            if now - last_global_reboot_time < min_global_interval:
+                stop_events["reboot"].wait(60)
+                continue
 
-        bot_to_reboot = None
-        reboot_settings_copy = list(bot_states["reboot_settings"].items())
-        
-        for bot_id, settings in reboot_settings_copy:
-            if settings.get('enabled', False) and now >= settings.get('next_reboot_time', 0):
-                if not bot_manager.is_rebooting(bot_id):
+            bot_to_reboot = None
+            highest_priority_score = -1
+            
+            reboot_settings_copy = dict(bot_states["reboot_settings"].items())
+            
+            for bot_id, settings in reboot_settings_copy.items():
+                if not settings.get('enabled', False) or bot_manager.is_rebooting(bot_id):
+                    continue
+                
+                next_reboot_time = settings.get('next_reboot_time', 0)
+                if now < next_reboot_time:
+                    continue
+                    
+                # Tính điểm ưu tiên
+                health_stats = bot_states["health_stats"].get(bot_id, {})
+                failure_count = health_stats.get('consecutive_failures', 0)
+                time_overdue = now - next_reboot_time
+                
+                priority_score = (failure_count * 1000) + time_overdue
+                
+                if priority_score > highest_priority_score:
+                    highest_priority_score = priority_score
                     bot_to_reboot = bot_id
-                    break
-        
-        if bot_to_reboot:
-            print(f"[Safe Reboot] 🎯 Chọn reboot bot: {bot_to_reboot}", flush=True)
-            if safe_reboot_bot(bot_to_reboot):
-                last_global_reboot_time = now
-                wait_time = random.uniform(300, 600)
-                print(f"[Safe Reboot] ⏳ Chờ {wait_time:.0f}s trước khi tìm bot reboot tiếp theo.", flush=True)
-                stop_events["reboot"].wait(wait_time)
+            
+            if bot_to_reboot:
+                print(f"[Safe Reboot] 🎯 Chọn reboot bot: {bot_to_reboot} (priority: {highest_priority_score:.1f})", flush=True)
+                
+                if safe_reboot_bot(bot_to_reboot):
+                    last_global_reboot_time = now
+                    consecutive_system_failures = 0
+                    # Chờ lâu hơn nếu không có bot nào khác cần reboot gấp
+                    wait_time = random.uniform(300, 600)
+                    print(f"[Safe Reboot] ⏳ Chờ {wait_time:.0f}s trước khi tìm bot reboot tiếp theo.", flush=True)
+                    stop_events["reboot"].wait(wait_time)
+                else:
+                    # Nếu reboot thất bại, backoff để tránh spam
+                    consecutive_system_failures += 1
+                    backoff_time = min(120 * (2 ** consecutive_system_failures), 1800) # Max 30 phút
+                    print(f"[Safe Reboot] ❌ Reboot thất bại. Hệ thống backoff: {backoff_time}s", flush=True)
+                    stop_events["reboot"].wait(backoff_time)
             else:
-                stop_events["reboot"].wait(120)
-        else:
-            stop_events["reboot"].wait(60)
-    print("[Safe Reboot] 🛑 Luồng tự động reboot đã dừng.", flush=True)
+                stop_events["reboot"].wait(60)
+        except Exception as e:
+            print(f"[Safe Reboot] ❌ Lỗi nghiêm trọng trong reboot loop: {e}", flush=True)
+            traceback.print_exc()
+            stop_events["reboot"].wait(120)
 
 def run_clan_drop_cycle():
     print("[Clan Drop] 🚀 Bắt đầu chu kỳ drop clan.", flush=True)
     settings = bot_states["auto_clan_drop"]
     channel_id = settings.get("channel_id")
     
-    # Lấy bot từ manager
     active_main_bots = [
         (bot, int(bot_id.split('_')[1])) 
         for bot_id, bot in bot_manager.get_main_bots_info() 
@@ -393,7 +458,6 @@ def spam_for_server(server_config, stop_event):
     
     while not stop_event.is_set():
         try:
-            # Lấy bot từ manager
             all_bots = bot_manager.get_all_bots()
             bots_to_spam = [
                 bot for bot_id, bot in all_bots if bot and bot_states["active"].get(bot_id)
@@ -452,7 +516,7 @@ def health_monitoring_check():
     for bot_id, bot in all_bots:
         check_bot_health(bot, bot_id)
 
-# --- KHỞI TẠO BOT ---
+# --- KHỞI TẠO BOT (IMPROVED) ---
 def create_bot(token, bot_identifier, is_main=False):
     try:
         bot = discum.Client(token=token, log=False)
@@ -460,29 +524,61 @@ def create_bot(token, bot_identifier, is_main=False):
         
         @bot.gateway.command
         def on_ready(resp):
-            if resp.event.ready:
-                user = resp.raw.get("user", {})
-                print(f"[Bot] ✅ Đăng nhập: {user.get('id')} ({get_bot_name(bot_id_str)})", flush=True)
-                bot_states["health_stats"].setdefault(bot_id_str, {})['created_time'] = time.time()
+            try:
+                if resp.event.ready:
+                    user = resp.raw.get("user", {})
+                    user_id = user.get('id', 'Unknown')
+                    username = user.get('username', 'Unknown')
+                    print(f"[Bot] ✅ Đăng nhập: {user_id} ({get_bot_name(bot_id_str)}) - {username}", flush=True)
+                    
+                    bot_states["health_stats"].setdefault(bot_id_str, {})
+                    bot_states["health_stats"][bot_id_str].update({
+                        'created_time': time.time(),
+                        'consecutive_failures': 0,
+                    })
+            except Exception as e:
+                print(f"[Bot] ❌ Error in on_ready for {bot_id_str}: {e}", flush=True)
         
         if is_main:
             @bot.gateway.command
             def on_message(resp):
-                if resp.event.message:
-                    msg = resp.parsed.auto()
-                    if msg.get("author", {}).get("id") == karuta_id and "dropping" in msg.get("content", "").lower():
-                        handler = handle_clan_drop if msg.get("mentions") else handle_grab
-                        handler(bot, msg, bot_identifier)
+                try:
+                    if resp.event.message:
+                        msg = resp.parsed.auto()
+                        author_id = msg.get("author", {}).get("id")
+                        content = msg.get("content", "").lower()
+                        
+                        if author_id == karuta_id and "dropping" in content:
+                            handler = handle_clan_drop if msg.get("mentions") else handle_grab
+                            # Sử dụng wrapper để tăng độ an toàn
+                            safe_message_handler_wrapper(handler, bot, msg, bot_identifier)
+                except Exception as e:
+                    print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}", flush=True)
 
-        threading.Thread(target=bot.gateway.run, daemon=True).start()
-        time.sleep(2) # Chờ gateway kết nối
-        if not (hasattr(bot.gateway, 'connected') and bot.gateway.connected):
-            print(f"[Bot] ⚠️ Gateway của bot {bot_id_str} không thể kết nối sau khi khởi tạo.", flush=True)
-            # Không trả về bot nếu không kết nối được
-            # return None
-        return bot
+        def start_gateway():
+            try:
+                bot.gateway.run(auto_reconnect=True)
+            except Exception as e:
+                print(f"[Bot] ❌ Gateway error for {bot_id_str}: {e}", flush=True)
+        
+        threading.Thread(target=start_gateway, daemon=True).start()
+        
+        # Chờ kết nối với timeout để xác nhận bot hoạt động
+        connection_timeout = 20
+        start_time = time.time()
+        while time.time() - start_time < connection_timeout:
+            if hasattr(bot.gateway, 'connected') and bot.gateway.connected:
+                print(f"[Bot] ✅ Gateway connected for {bot_id_str}", flush=True)
+                return bot
+            time.sleep(0.5)
+        
+        print(f"[Bot] ⚠️ Gateway connection timeout for {bot_id_str}. Closing gateway.", flush=True)
+        bot.gateway.close()
+        return None
+
     except Exception as e:
-        print(f"[Bot] ❌ Lỗi tạo bot {bot_identifier}: {e}", flush=True)
+        print(f"[Bot] ❌ Lỗi nghiêm trọng khi tạo bot {bot_identifier}: {e}", flush=True)
+        traceback.print_exc()
         return None
 
 # --- FLASK APP & GIAO DIỆN ---
@@ -565,8 +661,8 @@ HTML_TEMPLATE = """
                      <h3><i class="fas fa-robot"></i> Enhanced Bot Control Matrix</h3>
                      <div class="system-stats">
                          <div>🔒 Safety Features: Health Checks, Exponential Backoff, Rate Limiting</div>
-                         <div>⏱️ Min Reboot Interval: 5 minutes | Max Failures: 5 attempts</div>
-                         <div>🎯 Reboot Strategy: One-at-a-time with 20-40s cleanup delay</div>
+                         <div>⏱️ Min Reboot Interval: 10 minutes | Max Failures: 5 attempts</div>
+                         <div>🎯 Reboot Strategy: Priority-based, one-at-a-time with cleanup delay</div>
                      </div>
                      <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));">
                          </div>
@@ -717,7 +813,6 @@ HTML_TEMPLATE = """
                 const botControlGrid = document.getElementById('bot-control-grid');
                 const allBots = [...data.bot_statuses.main_bots, ...data.bot_statuses.sub_accounts];
                 
-                // Thêm một set để theo dõi các bot đã được cập nhật, xóa những bot không còn tồn tại
                 const updatedBotIds = new Set();
 
                 allBots.forEach(bot => {
@@ -765,7 +860,6 @@ HTML_TEMPLATE = """
                     itemContainer.innerHTML = controlHtml;
                 });
                 
-                // Dọn dẹp các bot không còn trong danh sách
                 Array.from(botControlGrid.children).forEach(child => {
                     if (!updatedBotIds.has(child.id)) {
                         child.remove();
@@ -1015,7 +1109,6 @@ def status_endpoint():
         "countdown": (clan_settings.get("last_cycle_start_time", 0) + clan_settings.get("cycle_interval", 1800) - now) if clan_settings.get("enabled") else 0
     }
     
-    # Tạo một bản sao để tránh race condition khi duyệt
     reboot_settings_copy = bot_states["reboot_settings"].copy()
     for bot_id, settings in reboot_settings_copy.items():
         settings['countdown'] = max(0, settings.get('next_reboot_time', 0) - now) if settings.get('enabled') else 0
@@ -1031,7 +1124,7 @@ def status_endpoint():
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V2 Enhanced Version Starting...", flush=True)
+    print("🚀 Shadow Network Control - V3 Stable Version Starting...", flush=True)
     load_settings()
 
     print("🔌 Initializing bots using Bot Manager...", flush=True)
