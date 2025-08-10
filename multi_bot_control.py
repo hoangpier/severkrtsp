@@ -1,4 +1,4 @@
-# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V4.3 - FIX KEYERROR
+# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V4.4 - FIX SUCCESS LOG & REMOVE WATERMELON LOG
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -16,7 +16,7 @@ acc_names = [f"Bot-{i:02d}" for i in range(1, 21)]
 
 # --- BIẾN TRẠNG THÁI & KHÓA ---
 servers = []
-bot_user_ids = {} # << THÊM MỚI: Nơi lưu trữ an toàn ID của các bot
+bot_user_ids = {}
 bot_states = {
     "reboot_settings": {}, "active": {}, "watermelon_grab": {}, "health_stats": {},
     "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}}
@@ -24,7 +24,7 @@ bot_states = {
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
 
-# --- CARD GRAB LOGGING SYSTEM (IMPROVED) ---
+# --- CARD GRAB LOGGING SYSTEM ---
 class CardGrabLogger:
     def __init__(self, max_logs=200):
         self.logs = deque(maxlen=max_logs)
@@ -55,9 +55,6 @@ class CardGrabLogger:
                 if hearts > stats['highest_heart_grabbed']: stats['highest_heart_grabbed'] = hearts
                 print(f"[GRAB LOG] ✅ {bot_name} got {card_name} ({condition}, {hearts}♡)", flush=True)
                 log_entry.update({'card_name': card_name, 'condition': condition, 'hearts': hearts})
-            elif event_type == 'item_success':
-                stats['successful_grabs'] += 1
-                print(f"[GRAB LOG] ✅ {bot_name} got item: {kwargs.get('item_name')}", flush=True)
             elif event_type == 'failed':
                 stats['failed_attempts'] += 1
                 print(f"[GRAB LOG] ⏳ {bot_name} failed: {kwargs.get('reason', 'Unknown')}", flush=True)
@@ -127,7 +124,7 @@ def save_settings():
     except Exception as e: print(f"[Settings] ❌ Save failed: {e}", flush=True)
 
 def load_settings():
-    global servers, bot_states, bot_user_ids
+    global servers, bot_states
     api_key, bin_id = os.getenv("JSONBIN_API_KEY"), os.getenv("JSONBIN_BIN_ID")
     settings = None
     try:
@@ -144,7 +141,6 @@ def load_settings():
     
     if settings:
         servers.extend(settings.get('servers', []))
-        # bot_user_ids = settings.get('bot_user_ids', {}) # Also load saved IDs if you want persistence across restarts
         for key, value in settings.get('bot_states', {}).items():
             if key in bot_states and isinstance(value, dict): bot_states[key].update(value)
         print("[Settings] ✅ Settings loaded.", flush=True)
@@ -216,33 +212,41 @@ def handle_card_drop(bot, msg, bot_num):
             try:
                 target_msg = bot.getMessage(channel_id, msg["id"]).json()[0]
                 if any('🍉' in r.get('emoji', {}).get('name', '') for r in target_msg.get('reactions', [])):
-                    print(f"[{get_bot_name(bot_id_str)}] 🎯 WATERMELON DETECTED!", flush=True)
                     bot.addReaction(channel_id, msg["id"], "🍉")
-                    card_logger.log_event(get_bot_name(bot_id_str), 'item_success', item_name="Dưa Hấu 🍉")
+                    # << SỬA LỖI: Đã xóa log dưa hấu theo yêu cầu
             except Exception:
                 pass
         threading.Thread(target=check_watermelon, daemon=True).start()
 
-def handle_karuta_response(msg, bot_identifier):
+# << SỬA LỖI: Toàn bộ hàm này đã được viết lại để sửa lỗi không ghi log thành công
+def handle_karuta_response(msg):
     """
     Handles responses from Karuta. This is now the ONLY place for logging card grab success.
-    The "must wait" log has been REMOVED as requested.
+    It now checks against all known bots to correctly identify the winner.
     """
-    bot_id_str = f'main_{bot_identifier}'
-    bot_user_id = bot_user_ids.get(bot_id_str) # << SỬA LỖI: Lấy ID đã lưu
-    
-    # If ID isn't ready, we can't reliably check mentions.
-    if not bot_user_id:
-        return
-
     content = msg.get("content", "")
     content_lower = content.lower()
-    bot_name = get_bot_name(bot_id_str)
-    
-    mentioned = f'<@{bot_user_id}>' in content
-    
-    if (bot_name.lower() in content_lower or mentioned) and ("took the" in content_lower or "fought off" in content_lower):
-        card_logger.log_event(bot_name, 'card_success', message=content)
+
+    # Only proceed if it's a potential success message
+    if "took the" not in content_lower and "fought off" not in content_lower:
+        return
+
+    # Check which of our bots got the card by iterating through all known bots
+    for bot_id, user_id in list(bot_user_ids.items()):
+        if not user_id: continue # Skip if user ID for this bot is not loaded yet
+
+        # Check for mention first (most reliable)
+        if f'<@{user_id}>' in content:
+            bot_name = get_bot_name(bot_id)
+            card_logger.log_event(bot_name, 'card_success', message=content)
+            return # Found the winner, no need to check others
+
+        # Fallback: check for plain name at the start of the string (less reliable)
+        bot_name = get_bot_name(bot_id)
+        if re.search(fr'^{re.escape(bot_name.lower())}\b', content_lower):
+            card_logger.log_event(bot_name, 'card_success', message=content)
+            return
+
 
 # --- HỆ THỐNG REBOOT & HEALTH CHECK ---
 def check_bot_health(bot_instance, bot_id):
@@ -383,7 +387,7 @@ def create_bot(token, bot_identifier, is_main=False):
                 print(f"[Bot] ✅ Logged in: {user_id} ({get_bot_name(bot_id_str)})", flush=True)
                 bot_states["health_stats"].setdefault(bot_id_str, {})['consecutive_failures'] = 0
                 if user_id:
-                    bot_user_ids[bot_id_str] = user_id # << SỬA LỖI: Lưu ID tại đây
+                    bot_user_ids[bot_id_str] = user_id
         
         if is_main:
             @bot.gateway.command
@@ -397,7 +401,8 @@ def create_bot(token, bot_identifier, is_main=False):
                         if "dropping" in msg.get("content", "").lower():
                              threading.Thread(target=handle_card_drop, args=(bot, msg, bot_identifier), daemon=True).start()
                         else:
-                             handle_karuta_response(msg, bot_identifier)
+                             # << SỬA LỖI: Gọi hàm xử lý chung, không cần truyền bot_identifier
+                             handle_karuta_response(msg)
                 except Exception as e:
                     print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}\n{traceback.format_exc()}", flush=True)
 
@@ -456,7 +461,7 @@ HTML_TEMPLATE = """
         .log-panel-grid { display: grid; grid-template-columns: 3fr 1fr; gap: 15px; margin-top: 15px; }
         .log-list { max-height: 400px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; padding: 5px; }
         .log-entry { padding: 8px; border-bottom: 1px solid #222; display: flex; gap: 10px; align-items: center; font-size: 0.9em; }
-        .log-entry.card_success { color: #aaffaa; } .log-entry.item_success { color: #aaddff; } .log-entry.failed { color: #ffaa88; }
+        .log-entry.card_success { color: #aaffaa; } .log-entry.failed { color: #ffaa88; }
         .log-bot-name { font-weight: bold; min-width: 80px; }
         .card-condition { padding: 2px 6px; border-radius: 3px; font-size: 0.8rem; text-transform: uppercase; color: black; }
         .condition-poor { background: #ff4444; } .condition-good { background: #ffaa00; } .condition-excellent { background: #44ff44; } .condition-mint { background: #00ffff; } .condition-unknown { background: #888888; color: white; }
@@ -613,9 +618,7 @@ document.addEventListener('DOMContentLoaded', function () {
             let content = '';
             if (log.type === 'card_success') {
                 content = `<span class="card-name">${log.card_name}</span> <span class="card-condition condition-${log.condition}">${log.condition}</span> <span style="color:var(--mint-cyan);">${log.hearts}♡</span>`;
-            } else if (log.type === 'item_success') {
-                content = `<span>Got Item: <strong>${log.item_name}</strong></span>`;
-            } else { // Generic fail, though most are now hidden
+            } else if (log.type === 'failed') {
                 content = `<span>Failed: ${log.reason}</span>`;
             }
             newHtml += `<div class="log-entry ${log.type}">
@@ -833,7 +836,7 @@ def api_get_card_stats():
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V4.3 KeyError Fix Starting...", flush=True)
+    print("🚀 Shadow Network Control - V4.4 Stable Log Starting...", flush=True)
     load_settings()
 
     print("🔌 Initializing bots...", flush=True)
