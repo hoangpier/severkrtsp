@@ -1,4 +1,4 @@
-# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V4.7 - FINAL ROBUST LOGGING FIX
+# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V5.0 - DEBUG & ENHANCED UI
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -33,31 +33,78 @@ class CardGrabLogger:
 
     def parse_card_info(self, message_content):
         content_lower = message_content.lower()
-        condition_map = {'poor': ['poor', 'tệ', 'badly damaged'], 'good': ['good', 'tốt'], 'excellent': ['excellent', 'tuyệt vời', 'xuất sắc'], 'mint': ['mint', 'hoàn hảo']}
-        condition = next((cond for cond, patterns in condition_map.items() if any(p in content_lower for p in patterns)), 'unknown')
-        hearts_match = re.search(r'(\d+)\s*♡', message_content)
-        hearts = int(hearts_match.group(1)) if hearts_match else 0
-        name_match = re.search(r'(?:took the|lấy thẻ|fought off.*?and took the)\s+([^.!]+?)(?:\s+card|\.|!)', content_lower, re.IGNORECASE)
-        card_name = name_match.group(1).strip().title() if name_match else "Unknown Card"
+        
+        condition_map = {
+            'poor': ['poor', 'tệ', 'badly damaged', 'damaged'],
+            'good': ['good', 'tốt', 'decent'],
+            'excellent': ['excellent', 'tuyệt vời', 'xuất sắc', 'great'],
+            'mint': ['mint', 'hoàn hảo', 'perfect', 'pristine']
+        }
+        condition = 'unknown'
+        for cond, patterns in condition_map.items():
+            if any(pattern in content_lower for pattern in patterns):
+                condition = cond
+                break
+        
+        hearts = 0
+        hearts_patterns = [
+            r'(\d+)\s*♡', r'(\d+)\s*hearts?', r'♡\s*(\d+)', 
+            r'paid\s+(\d+)', r'trả\s+(\d+)', r'(\d+)\s*tim'
+        ]
+        for pattern in hearts_patterns:
+            hearts_match = re.search(pattern, message_content, re.IGNORECASE)
+            if hearts_match:
+                hearts = int(hearts_match.group(1))
+                break
+        
+        card_name = "Unknown Card"
+        name_patterns = [
+            r'took the\s+([^.!]+?)(?:\s+card|\s+and\s+paid|\.|!)',
+            r'lấy thẻ\s+([^.!]+?)(?:\s+card|\s+và\s+trả|\.|!)',
+            r'fought off.*?and took the\s+([^.!]+?)(?:\s+card|\s+and\s+paid|\.|!)'
+        ]
+        for pattern in name_patterns:
+            name_match = re.search(pattern, content_lower, re.IGNORECASE)
+            if name_match:
+                card_name = name_match.group(1).strip().title()
+                card_name = re.sub(r'\s+(card|thẻ)\s*$', '', card_name, flags=re.IGNORECASE)
+                break
+        
         return card_name, condition, hearts
 
     def log_event(self, bot_name, event_type, **kwargs):
         with self.lock:
-            log_entry = {'timestamp': datetime.now().strftime("%H:%M:%S"), 'bot_name': bot_name, 'type': event_type, **kwargs}
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            log_entry = {'timestamp': timestamp, 'bot_name': bot_name, 'type': event_type, **kwargs}
             self.logs.appendleft(log_entry)
             
             stats = self.stats[bot_name]
+            
             if event_type == 'card_success':
-                card_name, condition, hearts = self.parse_card_info(kwargs.get('message', ''))
+                message_content = kwargs.get('message', '')
+                card_name, condition, hearts = self.parse_card_info(message_content)
+                
                 stats['successful_grabs'] += 1
                 stats['cards_by_condition'][condition] += 1
                 stats['total_hearts_grabbed'] += hearts
-                if hearts > stats['highest_heart_grabbed']: stats['highest_heart_grabbed'] = hearts
-                print(f"[GRAB LOG] ✅ {bot_name} got {card_name} ({condition}, {hearts}♡)", flush=True)
+                if hearts > stats['highest_heart_grabbed']:
+                    stats['highest_heart_grabbed'] = hearts
+                
+                print(f"[GRAB SUCCESS] 🎉 {bot_name} GRABBED CARD!", flush=True)
+                print(f"               🃏 Card Name: {card_name}", flush=True)
+                print(f"               💎 Condition: {condition.upper()}", flush=True)
+                print(f"               ♡♡♡ HEARTS: {hearts} ♡♡♡", flush=True)
+                print("-" * 50, flush=True)
+                
                 log_entry.update({'card_name': card_name, 'condition': condition, 'hearts': hearts})
+                
             elif event_type == 'failed':
                 stats['failed_attempts'] += 1
-                print(f"[GRAB LOG] ⏳ {bot_name} failed: {kwargs.get('reason', 'Unknown')}", flush=True)
+                reason = kwargs.get('reason', 'Unknown')
+                print(f"[GRAB FAILED] ❌ {bot_name}: {reason}", flush=True)
+            
+            elif event_type == 'attempt':
+                print(f"[GRAB ATTEMPT] 🎯 {bot_name} attempting grab (Threshold: {kwargs.get('threshold', 0)}♡)...", flush=True)
 
     def get_logs_for_web(self, limit=50):
         with self.lock: return list(self.logs)[:limit]
@@ -156,40 +203,61 @@ def get_bot_name(bot_id_str):
     except (IndexError, ValueError): return bot_id_str.upper()
 
 def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id):
-    for _ in range(7):
+    bot_name = get_bot_name(f'main_{bot_num}')
+    card_logger.log_event(bot_name, 'attempt', threshold=heart_threshold, channel_id=channel_id)
+    
+    for attempt in range(7):
         time.sleep(0.5)
         try:
             messages = bot.getMessages(channel_id, num=5).json()
             if not isinstance(messages, list): continue
+            
             for msg_item in messages:
-                if msg_item.get("author", {}).get("id") == karibbit_id and int(msg_item.get("id", 0)) > int(last_drop_msg_id):
-                    if not (embeds := msg_item.get("embeds", [])) or '♡' not in (desc := embeds[0].get("description", "")): continue
+                if (msg_item.get("author", {}).get("id") == karibbit_id and 
+                    int(msg_item.get("id", 0)) > int(last_drop_msg_id)):
+                    
+                    embeds = msg_item.get("embeds", [])
+                    if not embeds or '♡' not in (desc := embeds[0].get("description", "")):
+                        continue
                     
                     lines, heart_numbers = desc.split('\n')[:3], []
                     for line in lines:
                         match = re.search(r'♡(\d+)', line)
                         heart_numbers.append(int(match.group(1)) if match else 0)
-                    if not any(heart_numbers): break
+                    
+                    if not any(heart_numbers):
+                        card_logger.log_event(bot_name, 'failed', reason='No hearts found in embed')
+                        break
 
-                    max_num = max(heart_numbers)
-                    if max_num >= heart_threshold:
-                        max_index = heart_numbers.index(max_num)
+                    max_hearts = max(heart_numbers)
+                    if max_hearts >= heart_threshold:
+                        max_index = heart_numbers.index(max_hearts)
                         delays = {1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]}
                         bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
-                        emoji, delay = ["1️⃣", "2️⃣", "3️⃣"][max_index], bot_delays[max_index]
+                        
+                        emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
+                        delay = bot_delays[max_index]
                         
                         def grab_action():
                             try:
-                                print(f"[{get_bot_name(f'main_{bot_num}')}] 🎯 Reacting {emoji} for {max_num}♡ card...", flush=True)
+                                print(f"[{bot_name}] 🎯 Reacting {emoji} for {max_hearts}♡ card...", flush=True)
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
                                 time.sleep(1.2)
-                                if ktb_channel_id: bot.sendMessage(ktb_channel_id, "kt b")
+                                if ktb_channel_id:
+                                    bot.sendMessage(ktb_channel_id, "kt b")
                             except Exception as e:
-                                print(f"[GRAB ACTION] ❌ Error reacting: {e}", flush=True)
+                                card_logger.log_event(bot_name, 'failed', reason=f'Reaction error: {str(e)}')
                         
                         threading.Timer(delay, grab_action).start()
                         return
-        except Exception as e: print(f"[CARD FIND] ❌ Error finding card: {e}", flush=True)
+                    else:
+                        card_logger.log_event(bot_name, 'failed', reason=f'Hearts too low ({max_hearts} < {heart_threshold})')
+                        return
+                        
+        except Exception as e:
+            print(f"[CARD FIND] ❌ Error finding card (attempt {attempt+1}): {e}", flush=True)
+    
+    card_logger.log_event(bot_name, 'failed', reason='No suitable cards found after 7 attempts')
 
 def handle_card_drop(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
@@ -217,34 +285,34 @@ def handle_card_drop(bot, msg, bot_num):
                 pass
         threading.Thread(target=check_watermelon, daemon=True).start()
 
-# << SỬA LỖI DỨT ĐIỂM: Logic nhận diện người thắng cuộc siêu bền vững
 def handle_karuta_response(msg):
     content = msg.get("content", "")
     content_lower = content.lower()
 
-    if "took the" not in content_lower and "fought off" not in content_lower:
+    if not any(keyword in content_lower for keyword in ["took the", "fought off", "lấy thẻ"]):
         return
+    
+    print(f"[DEBUG] Karuta response detected: {content}", flush=True)
 
-    # Duyệt qua tất cả các bot đã biết để tìm người thắng
     for bot_id, user_id in list(bot_user_ids.items()):
         if not user_id: continue
 
-        # Cách kiểm tra TỐI ƯU và DUY NHẤT:
-        # Kiểm tra xem chuỗi số ID của bot có nằm trong tin nhắn hay không.
-        # Cách này đúng cho cả 2 trường hợp Karuta tag: <@USER_ID> và <@!USER_ID> (có nickname)
-        if user_id in content:
-            # Bây giờ, xác nhận bot này thực sự là người thắng cuộc ở đầu tin nhắn
-            # để tránh trường hợp bot được tag ở vị trí khác với mục đích khác.
-            winner_part_check = ""
-            if "fought off" in content_lower:
-                winner_part_check = content.split("fought off")[0]
-            elif "took the" in content_lower:
-                winner_part_check = content.split(" took the")[0]
+        user_tag_normal = f"<@{user_id}>"
+        user_tag_nickname = f"<@!{user_id}>"
+        
+        if user_tag_normal in content or user_tag_nickname in content:
+            winner_part = ""
+            if "fought off" in content_lower: winner_part = content.split("fought off")[0]
+            elif "took the" in content_lower: winner_part = content.split(" took the")[0]
+            elif "lấy thẻ" in content_lower: winner_part = content.split("lấy thẻ")[0]
 
-            if user_id in winner_part_check:
+            if user_tag_normal in winner_part or user_tag_nickname in winner_part:
                 bot_name = get_bot_name(bot_id)
+                print(f"[DEBUG] Card success for {bot_name}", flush=True)
                 card_logger.log_event(bot_name, 'card_success', message=content)
-                return # Đã tìm thấy, thoát khỏi hàm
+                return
+    
+    print(f"[DEBUG] No winning bot found for message: {content[:100]}...", flush=True)
 
 # --- HỆ THỐNG REBOOT & HEALTH CHECK ---
 def check_bot_health(bot_instance, bot_id):
@@ -382,11 +450,13 @@ def create_bot(token, bot_identifier, is_main=False):
             if resp.event.ready:
                 user = resp.raw.get("user", {})
                 user_id = user.get('id')
-                print(f"[Bot] ✅ Logged in: {user_id} ({get_bot_name(bot_id_str)})", flush=True)
+                username = user.get('username', 'Unknown')
+                print(f"[Bot] ✅ Logged in: {user_id} ({username}) -> {get_bot_name(bot_id_str)}", flush=True)
                 bot_states["health_stats"].setdefault(bot_id_str, {})['consecutive_failures'] = 0
                 if user_id:
                     bot_user_ids[bot_id_str] = user_id
-        
+                    print(f"[Bot] 📝 Registered user ID {user_id} for {bot_id_str}", flush=True)
+
         if is_main:
             @bot.gateway.command
             def on_message(resp):
@@ -607,18 +677,34 @@ document.addEventListener('DOMContentLoaded', function () {
     function updateLogs(data) {
         const logContainer = document.getElementById('log-container');
         if (!data.logs || data.logs.length === 0) {
-            logContainer.innerHTML = '<div class="no-logs">No activity yet.</div>'; return;
+            logContainer.innerHTML = '<div class="no-logs">No activity yet.</div>'; 
+            return;
         }
+        
         let newHtml = '';
         data.logs.forEach(log => {
             let content = '';
+            
             if (log.type === 'card_success') {
-                content = `<span class="card-name">${log.card_name}</span> <span class="card-condition condition-${log.condition}">${log.condition}</span> <span style="color:var(--mint-cyan);">${log.hearts}♡</span>`;
+                let heartColor = log.hearts >= 100 ? '#ff69b4' : log.hearts >= 50 ? '#ffd700' : '#32cd32';
+                let heartIcon = log.hearts >= 100 ? '🔥' : log.hearts >= 50 ? '✨' : '♡';
+                
+                content = `<span class="card-name" style="color: #aaffaa; font-weight: bold;">${log.card_name}</span> 
+                           <span class="card-condition condition-${log.condition}">${log.condition}</span> 
+                           <span style="color: ${heartColor}; font-weight: bold; font-size: 1.1em;">
+                               ${heartIcon}${log.hearts}♡
+                           </span>`;
+                           
             } else if (log.type === 'failed') {
-                content = `<span>Failed: ${log.reason}</span>`;
+                content = `<span style="color: #ffaa88;">Failed: ${log.reason}</span>`;
+            } else if (log.type === 'attempt') {
+                content = `<span style="color: #ffdd44;">Attempting grab (threshold: ${log.threshold}♡)</span>`;
             }
+            
             newHtml += `<div class="log-entry ${log.type}">
-                <span>[${log.timestamp}]</span><span class="log-bot-name">${log.bot_name}</span>${content}
+                <span style="color: #888888;">[${log.timestamp}]</span>
+                <span class="log-bot-name" style="min-width: 80px; font-weight: bold; color: #00ffff;">${log.bot_name}</span>
+                <span style="flex-grow: 1;">${content}</span>
             </div>`;
         });
         logContainer.innerHTML = newHtml;
@@ -626,6 +712,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function updateStats(data) {
         const summary = data.summary;
+        
         document.getElementById('total-cards').textContent = summary.total_cards_grabbed;
         document.getElementById('success-rate').textContent = `${summary.success_rate}%`;
         document.getElementById('highest-heart').textContent = `${summary.highest_heart_grabbed}♡`;
@@ -633,12 +720,24 @@ document.addEventListener('DOMContentLoaded', function () {
 
         const statsContainer = document.getElementById('bot-stats-container');
         statsContainer.innerHTML = '';
+        
         for (const [botName, stats] of Object.entries(data.bot_stats)) {
-             statsContainer.innerHTML += `<div class="flex-row" style="font-size:0.9em;">
-                <strong style="color:var(--necro-green);">${botName}</strong>
-                <span>Grabs: ${stats.successful_grabs}</span>
-                <span>Fails: ${stats.failed_attempts}</span>
-                <span>Max ♡: ${stats.highest_heart_grabbed}</span>
+            const avgHearts = stats.successful_grabs > 0 ? 
+                Math.round(stats.total_hearts_grabbed / stats.successful_grabs) : 0;
+                
+            let heartsDisplay = `${stats.total_hearts_grabbed}♡`;
+            if (stats.successful_grabs > 0) {
+                heartsDisplay += ` (avg: ${avgHearts}♡)`;
+            }
+            
+            let botColor = stats.highest_heart_grabbed >= 100 ? '#ff69b4' : stats.highest_heart_grabbed >= 50 ? '#ffd700' : '#32cd32';
+            
+            statsContainer.innerHTML += `<div class="flex-row" style="font-size:0.9em; border-left: 3px solid ${botColor}; padding-left: 8px;">
+                <strong style="color: ${botColor}; min-width: 80px;">${botName}</strong>
+                <span title="Total cards grabbed">📚${stats.successful_grabs}</span>
+                <span title="Failed attempts">❌${stats.failed_attempts}</span>
+                <span title="Highest hearts grabbed">🏆${stats.highest_heart_grabbed}♡</span>
+                <span title="Total hearts earned">${heartsDisplay}</span>
             </div>`;
         }
     }
@@ -857,20 +956,37 @@ def status_endpoint():
         'auto_clan_drop_status': clan_drop_status
     })
 
+@app.route("/api/debug_bots")
+def api_debug_bots():
+    return jsonify({
+        'bot_user_ids': bot_user_ids,
+        'active_bots': {k: v for k, v in bot_states["active"].items() if v},
+        'registered_bots': list(bot_manager._bots.keys()),
+        'recent_logs': card_logger.get_logs_for_web(10)
+    })
+
+@app.route("/api/test_card_log", methods=['POST'])
+def api_test_card_log():
+    data = request.json
+    test_message = data.get('message', '<@123456789> took the Test Card!')
+    
+    fake_msg = {'content': test_message, 'author': {'id': karuta_id}}
+    
+    handle_karuta_response(fake_msg)
+    return jsonify({'status': 'success', 'message': 'Test card log sent'})
+
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V4.7 Final Fix Starting...", flush=True)
+    print("🚀 Shadow Network Control - V5.0 Enhanced Debug Starting...", flush=True)
     load_settings()
 
     print("🔌 Initializing bots using Bot Manager...", flush=True)
     
-    # Khởi tạo bot chính
     for i, token in enumerate(t for t in main_tokens if t.strip()):
         bot_num = i + 1
         bot_id = f"main_{bot_num}"
         bot = create_bot(token.strip(), bot_identifier=bot_num, is_main=True)
-        if bot:
-            bot_manager.add_bot(bot_id, bot)
+        if bot: bot_manager.add_bot(bot_id, bot)
         
         bot_states["active"].setdefault(bot_id, True)
         bot_states["watermelon_grab"].setdefault(bot_id, False)
@@ -878,12 +994,10 @@ if __name__ == "__main__":
         bot_states["reboot_settings"].setdefault(bot_id, {'enabled': False, 'delay': 3600, 'next_reboot_time': 0, 'failure_count': 0})
         bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
 
-    # Khởi tạo bot phụ
     for i, token in enumerate(t for t in tokens if t.strip()):
         bot_id = f"sub_{i}"
         bot = create_bot(token.strip(), bot_identifier=i, is_main=False)
-        if bot:
-            bot_manager.add_bot(bot_id, bot)
+        if bot: bot_manager.add_bot(bot_id, bot)
         bot_states["active"].setdefault(bot_id, True)
         bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
 
