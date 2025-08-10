@@ -121,26 +121,31 @@ def safe_message_handler_wrapper(handler_func, bot, msg, *args):
 # ======================================================================
 def check_grab_result(bot, channel_id, drop_msg_id, bot_name, hearts):
     try:
-        bot_user_id = bot.gateway.user.get('id')
+        # SỬA LỖI TẠI ĐÂY: Thay bot.gateway.user bằng bot.user
+        bot_user_id = bot.user.get('id') 
+        
         if not bot_user_id:
             print(f"[GRAB CHECK | {bot_name}] ⚠️ Không thể lấy User ID của bot.", flush=True)
             return
-        
+
         time.sleep(2.5) # Chờ Karuta phản hồi
         messages = bot.getMessages(channel_id, num=10).json()
         if not isinstance(messages, list): return
 
         for msg in messages:
+            # Chỉ kiểm tra tin nhắn từ Karuta và sau tin nhắn drop
             if msg.get("author", {}).get("id") != karuta_id or int(msg.get("id", 0)) <= int(drop_msg_id):
                 continue
 
             content = msg.get("content", "")
+            # Kiểm tra xem User ID của bot có được tag trong tin nhắn thành công không
             if f"<@{bot_user_id}>" in content and ("took the" in content or "fought off" in content):
+                # Trích xuất tên thẻ bằng regex
                 card_match = re.search(r"\*\*(.+?)\*\*", content)
                 grabbed_card_name = card_match.group(1) if card_match else "Unknown Card"
                 
                 bot_manager.add_grab_success_log(bot_name=bot_name, card_name=grabbed_card_name, hearts=hearts)
-                return True
+                return True # Đã tìm thấy log, thoát khỏi vòng lặp
     except Exception as e:
         print(f"[GRAB CHECK | {bot_name}] ❌ Lỗi: {e}", flush=True)
 
