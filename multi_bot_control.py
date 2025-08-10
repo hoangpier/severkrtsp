@@ -17,7 +17,9 @@ acc_names = [f"Bot-{i:02d}" for i in range(1, 21)]
 servers = []
 bot_states = {
     "reboot_settings": {}, "active": {}, "watermelon_grab": {}, "health_stats": {},
-    "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}}
+    "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}},
+    "card_logs": [],  # Store recent card pickup logs
+    "success_logs": []  # Store successful card wins
 }
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
@@ -79,6 +81,35 @@ class ThreadSafeBotManager:
             self._rebooting.discard(bot_id)
 
 bot_manager = ThreadSafeBotManager()
+
+# --- CARD LOG MANAGER ---
+class CardLogManager:
+    def __init__(self, max_logs=50):
+        self.max_logs = max_logs
+        self._lock = threading.Lock()
+    
+    def add_log(self, log_type, bot_name, hearts, card_name=None, success=False, message=""):
+        with self._lock:
+            log_entry = {
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "bot_name": bot_name,
+                "hearts": hearts,
+                "card_name": card_name,
+                "success": success,
+                "message": message,
+                "type": log_type
+            }
+            
+            if success:
+                bot_states["success_logs"].insert(0, log_entry)
+                if len(bot_states["success_logs"]) > self.max_logs:
+                    bot_states["success_logs"] = bot_states["success_logs"][:self.max_logs]
+            else:
+                bot_states["card_logs"].insert(0, log_entry)
+                if len(bot_states["card_logs"]) > self.max_logs:
+                    bot_states["card_logs"] = bot_states["card_logs"][:self.max_logs]
+
+card_logger = CardLogManager()
 
 # --- LƯU & TẢI CÀI ĐẶT ---
 def save_settings():
@@ -162,6 +193,8 @@ def safe_message_handler_wrapper(handler_func, bot, msg, *args):
 # --- LOGIC GRAB CARD ---
 def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id):
     """Hàm chung để tìm và chọn card dựa trên số heart."""
+    bot_name = get_bot_name(f'main_{bot_num}')
+    
     for _ in range(7):
         time.sleep(0.5)
         try:
@@ -186,15 +219,29 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                         emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
                         delay = bot_delays[max_index]
                         
+                        card_name_match = re.search(r'\*\*(.+?)\*\*', lines[max_index])
+                        card_name = card_name_match.group(1) if card_name_match else "Unknown Card"
+                        
                         print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
                         
                         def grab_action():
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
                                 time.sleep(1.2)
-                                if ktb_channel_id: bot.sendMessage(ktb_channel_id, "kt b")
-                                print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
+
+                                card_logger.add_log("attempt", bot_name, max_num, card_name, message=f"Reacting with {emoji}...")
+                                
+                                if ktb_channel_id: 
+                                    bot.sendMessage(ktb_channel_id, "kt b")
+
+                                threading.Thread(
+                                    target=_monitor_success_message,
+                                    args=(bot, channel_id, bot_name, max_num, card_name, last_drop_msg_id),
+                                    daemon=True
+                                ).start()
+                            
                             except Exception as e:
+                                card_logger.add_log("error", bot_name, max_num, card_name, message=f"Failed to grab: {str(e)}")
                                 print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
 
                         threading.Timer(delay, grab_action).start()
@@ -203,6 +250,59 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
         except Exception as e:
             print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi đọc messages: {e}", flush=True)
     return False
+
+def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, original_msg_id):
+    """Monitor for success messages after attempting to grab a card"""
+    start_time = time.time()
+    bot_lower = bot_name.lower()
+    
+    while time.time() - start_time < 15:  # Monitor for 15 seconds
+        try:
+            messages = bot.getMessages(channel_id, num=15).json()
+            if not isinstance(messages, list):
+                time.sleep(0.5)
+                continue
+
+            for msg in messages:
+                if msg.get("author", {}).get("id") == karuta_id:
+                    content = msg.get("content", "")
+                    
+                    success_indicators = [
+                        "fought off", "took the", "claimed", "won the", "successfully grabbed"
+                    ]
+                    
+                    if any(indicator in content.lower() for indicator in success_indicators):
+                        bot_mention = re.search(r'@([^,\s!]+)', content)
+                        actual_bot_name = bot_mention.group(1) if bot_mention else "Unknown"
+                        
+                        card_match = re.search(r'took the (.+?) card|fought off .* took the (.+?) card|claimed (.+?) card', content, re.IGNORECASE)
+                        won_card_name = ""
+                        if card_match:
+                            won_card_name = next((g for g in card_match.groups() if g), "Unknown Card")
+                        
+                        is_our_bot = (actual_bot_name.lower() in bot_lower or 
+                                      bot_lower in actual_bot_name.lower() or
+                                      "fought off" in content.lower())
+                        
+                        if is_our_bot:
+                            card_logger.add_log(
+                                "win", bot_name, hearts, won_card_name, success=True,
+                                message=f"🎉 {content}"
+                            )
+                            print(f"[CARD WIN] 🏆 {bot_name} won {won_card_name} with {hearts}♡!")
+                            return
+                            
+                    if "gathered a fruit" in content.lower() and bot_lower in content.lower():
+                        card_logger.add_log(
+                            "fruit", bot_name, 0, "Fruit Piece", success=True,
+                            message="🍉 Gathered a fruit piece!"
+                        )
+                        return
+                        
+            time.sleep(0.5)
+        except Exception as e:
+            time.sleep(0.5)
+            continue
 
 # --- LOGIC BOT ---
 def handle_clan_drop(bot, msg, bot_num):
@@ -583,7 +683,6 @@ def create_bot(token, bot_identifier, is_main=False):
 
 # --- FLASK APP & GIAO DIỆN ---
 app = Flask(__name__)
-# Giao diện HTML giữ nguyên như file gốc, không thay đổi
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -637,6 +736,11 @@ HTML_TEMPLATE = """
         .health-warning { background-color: var(--warning-orange); }
         .health-bad { background-color: var(--blood-red); }
         .system-stats { font-size: 0.9em; color: var(--text-secondary); margin-top: 10px; }
+        .log-entry { padding: 4px 6px; margin: 2px 0; border-radius: 3px; font-size: 0.85em; line-height: 1.2; }
+        .win-log { background: rgba(50, 205, 50, 0.15); border-left: 2px solid #32cd32; }
+        .attempt-log { background: rgba(255, 140, 0, 0.15); border-left: 2px solid #ff8c00; }
+        .error-log { background: rgba(220, 20, 60, 0.15); border-left: 2px solid #dc143c; }
+        .fruit-log { background: rgba(255, 105, 180, 0.15); border-left: 2px solid #ff69b4; }
     </style>
 </head>
 <body>
@@ -665,7 +769,22 @@ HTML_TEMPLATE = """
                          <div>🎯 Reboot Strategy: Priority-based, one-at-a-time with cleanup delay</div>
                      </div>
                      <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));">
-                         </div>
+                     </div>
+                </div>
+                <div class="server-sub-panel">
+                    <h3><i class="fas fa-history"></i> Recent Card Activity</h3>
+                    <div id="card-logs-container">
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                            <div>
+                                <h4 style="color: #32cd32; margin: 5px 0; font-size: 0.9em;">🏆 Recent Wins</h4>
+                                <div id="win-logs" style="max-height: 150px; overflow-y: auto;"></div>
+                            </div>
+                            <div>
+                                <h4 style="color: #ff8c00; margin: 5px 0; font-size: 0.9em;">🎯 Activity</h4>
+                                <div id="activity-logs" style="max-height: 150px; overflow-y: auto;"></div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -899,7 +1018,41 @@ HTML_TEMPLATE = """
             } catch (error) { console.error('Error fetching status:', error); }
         }
 
+        function loadCardLogs() {
+            fetch('/api/card_logs')
+                .then(response => response.json())
+                .then(data => {
+                    const winContainer = document.getElementById('win-logs');
+                    const activityContainer = document.getElementById('activity-logs');
+                    
+                    let winHtml = '';
+                    data.recent_wins.forEach(log => {
+                        winHtml += `<div class="log-entry win-log">
+                            <span style="color: #ccc;">${log.timestamp}</span><br>
+                            <strong>${log.bot_name}</strong><br>
+                            <span style="color: #ff69b4;">${log.hearts}♡</span> ${log.card_name}
+                        </div>`;
+                    });
+                    winContainer.innerHTML = winHtml || '<div style="padding: 10px; color: #666;">No wins yet</div>';
+                    
+                    let activityHtml = '';
+                    data.recent_attempts.forEach(log => {
+                        const logClass = log.type === 'fruit' ? 'fruit-log' : 
+                                       log.type === 'error' ? 'error-log' : 'attempt-log';
+                        activityHtml += `<div class="log-entry ${logClass}">
+                            <span style="color: #ccc;">${log.timestamp}</span><br>
+                            <strong>${log.bot_name}</strong><br>
+                            ${log.message}
+                        </div>`;
+                    });
+                    activityContainer.innerHTML = activityHtml || '<div style="padding: 10px; color: #666;">No activity</div>';
+                })
+                .catch(error => console.error('Error loading logs:', error));
+        }
+
         setInterval(fetchStatus, 1000);
+        setInterval(loadCardLogs, 3000);
+        loadCardLogs();
 
         document.querySelector('.container').addEventListener('click', e => {
             const button = e.target.closest('button');
@@ -956,6 +1109,13 @@ def index():
     main_bots_info = [{"id": int(bot_id.split('_')[1]), "name": get_bot_name(bot_id)} for bot_id, _ in bot_manager.get_main_bots_info()]
     main_bots_info.sort(key=lambda x: x['id'])
     return render_template_string(HTML_TEMPLATE, servers=sorted(servers, key=lambda s: s.get('name', '')), main_bots_info=main_bots_info, auto_clan_drop=bot_states["auto_clan_drop"])
+
+@app.route("/api/card_logs", methods=['GET'])
+def api_card_logs():
+    return jsonify({
+        "recent_wins": bot_states["success_logs"][:5],  # Last 5 wins
+        "recent_attempts": bot_states["card_logs"][:10]  # Last 10 activities
+    })
 
 @app.route("/api/clan_drop_toggle", methods=['POST'])
 def api_clan_drop_toggle():
