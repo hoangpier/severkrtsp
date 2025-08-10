@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shadow Network Control - Enhanced with Card Logging</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Creepster&family=Orbitron:wght@400;700;900&family=Courier+Prime:wght@400;700&family=Nosifer&display=swap" rel="stylesheet">
+    <style>
+        :root { 
+            --primary-bg: #0a0a0a; --secondary-bg: #1a1a1a; --panel-bg: #111111; --border-color: #333333; 
+            --blood-red: #8b0000; --dark-red: #550000; --bone-white: #f8f8ff; --necro-green: #228b22; 
+            --text-primary: #f0f0f0; --text-secondary: #cccccc; --warning-orange: #ff8c00; --success-green: #32cd32;
+            --attempt-blue: #4169e1; --success-gold: #ffd700; --fail-red: #dc143c; --watermelon-pink: #ff69b4;
+        }
+        body { font-family: 'Courier Prime', monospace; background: var(--primary-bg); color: var(--text-primary); margin: 0; padding: 0;}
+        .container { max-width: 1800px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; margin-bottom: 30px; padding: 20px; border-bottom: 2px solid var(--blood-red); position: relative; }
+        .title { font-family: 'Nosifer', cursive; font-size: 3rem; color: var(--blood-red); }
+        .subtitle { font-family: 'Orbitron', sans-serif; font-size: 1rem; color: var(--necro-green); margin-top: 10px; }
+        .main-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 20px; }
+        .panel { background: var(--panel-bg); border: 1px solid var(--border-color); border-radius: 10px; padding: 25px; position: relative;}
+        .panel h2 { font-family: 'Orbitron', cursive; font-size: 1.4rem; margin-bottom: 20px; text-transform: uppercase; border-bottom: 2px solid; padding-bottom: 10px; color: var(--bone-white); }
+        .panel h2 i { margin-right: 10px; }
+        .btn { background: var(--secondary-bg); border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 4px; cursor: pointer; font-family: 'Orbitron', monospace; font-weight: 700; text-transform: uppercase; width: 100%; transition: all 0.3s ease; }
+        .btn:hover { background: var(--dark-red); border-color: var(--blood-red); }
+        .btn-small { padding: 5px 10px; font-size: 0.9em;}
+        .input-group { display: flex; align-items: stretch; gap: 10px; margin-bottom: 15px; }
+        .input-group label { background: #000; border: 1px solid var(--border-color); border-right: 0; padding: 10px 15px; border-radius: 4px 0 0 4px; display:flex; align-items:center; min-width: 120px;}
+        .input-group input, .input-group textarea { flex-grow: 1; background: #000; border: 1px solid var(--border-color); color: var(--text-primary); padding: 10px 15px; border-radius: 0 4px 4px 0; font-family: 'Courier Prime', monospace; }
+        .grab-section { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding: 15px; background: rgba(0,0,0,0.2); border-radius: 8px;}
+        .grab-section h3 { margin: 0; display: flex; align-items: center; gap: 10px; width: 80px; flex-shrink: 0; }
+        .grab-section .input-group { margin-bottom: 0; flex-grow: 1; margin-left: 20px;}
+        .msg-status { text-align: center; color: var(--necro-green); padding: 12px; border: 1px dashed var(--border-color); border-radius: 4px; margin-bottom: 20px; display: none; }
+        .msg-status.error { color: var(--blood-red); border-color: var(--blood-red); }
+        .msg-status.warning { color: var(--warning-orange); border-color: var(--warning-orange); }
+        .status-panel, .global-settings-panel, .clan-drop-panel, .card-log-panel { grid-column: 1 / -1; }
+        .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .status-row { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; }
+        .timer-display { font-size: 1.2em; font-weight: 700; }
+        .bot-status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+        .bot-status-item { display: flex; justify-content: space-between; align-items: center; padding: 5px 8px; background: rgba(0,0,0,0.3); border-radius: 4px; }
+        .btn-toggle-state { padding: 3px 5px; font-size: 0.9em; border-radius: 4px; cursor: pointer; text-transform: uppercase; background: transparent; font-weight: 700; border: none; }
+        .btn-rise { color: var(--success-green); }
+        .btn-rest { color: var(--dark-red); }
+        .btn-warning { color: var(--warning-orange); }
+        .add-server-btn { display: flex; align-items: center; justify-content: center; min-height: 200px; border: 2px dashed var(--border-color); cursor: pointer; transition: all 0.3s ease; }
+        .add-server-btn:hover { background: var(--secondary-bg); border-color: var(--blood-red); }
+        .add-server-btn i { font-size: 3rem; color: var(--text-secondary); }
+        .btn-delete-server { position: absolute; top: 15px; right: 15px; background: var(--dark-red); border: 1px solid var(--blood-red); color: var(--bone-white); width: auto; padding: 5px 10px; border-radius: 50%; }
+        .server-sub-panel { border-top: 1px solid var(--border-color); margin-top: 20px; padding-top: 20px;}
+        .flex-row { display:flex; gap: 10px; align-items: center;}
+        .health-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-left: 5px; }
+        .health-good { background-color: var(--success-green); }
+        .health-warning { background-color: var(--warning-orange); }
+        .health-bad { background-color: var(--blood-red); }
+        .system-stats { font-size: 0.9em; color: var(--text-secondary); margin-top: 10px; }
+        .log-container { max-height: 500px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 8px; padding: 15px; background: rgba(0,0,0,0.2); }
+        .log-entry { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; margin-bottom: 5px; border-radius: 6px; font-size: 0.9em; }
+        .log-entry.attempt { background: rgba(65, 105, 225, 0.1); border-left: 4px solid var(--attempt-blue); }
+        .log-entry.success { background: rgba(255, 215, 0, 0.1); border-left: 4px solid var(--success-gold); }
+        .log-entry.failed { background: rgba(220, 20, 60, 0.1); border-left: 4px solid var(--fail-red); }
+        .log-entry.watermelon { background: rgba(255, 105, 180, 0.1); border-left: 4px solid var(--watermelon-pink); }
+        .log-entry .log-time { font-size: 0.8em; color: var(--text-secondary); }
+        .log-entry .log-bot { font-weight: bold; color: var(--necro-green); }
+        .log-entry .log-hearts { color: var(--blood-red); font-weight: bold; }
+        .log-entry .log-action { color: var(--text-primary); }
+        .log-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 20px; }
+        .stat-card { background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; text-align: center; }
+        .stat-number { font-size: 2em; font-weight: bold; color: var(--necro-green); }
+        .stat-label { font-size: 0.9em; color: var(--text-secondary); }
+        .log-controls { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 class="title">Shadow Network Control</h1>
+            <div class="subtitle">Enhanced with Real-time Card Grab Logging</div>
+        </div>
+        <div id="msg-status-container" class="msg-status"> <span id="msg-status-text"></span></div>
+        
+        <div class="main-grid">
+            <div class="panel card-log-panel">
+                <h2><i class="fas fa-scroll"></i> Card Grab Activity Log</h2>
+                <div class="log-stats" id="log-stats"></div>
+                <div class="log-controls">
+                    <button type="button" id="clear-logs-btn" class="btn btn-small">Clear Logs</button>
+                    <button type="button" id="refresh-logs-btn" class="btn btn-small">Refresh</button>
+                    <span class="timer-display">Auto-refresh: <span id="log-refresh-countdown">10</span>s</span>
+                </div>
+                <div class="log-container" id="log-container"></div>
+            </div>
+
+            <div class="panel status-panel">
+                <h2><i class="fas fa-heartbeat"></i> System Status & Enhanced Reboot Control</h2>
+                 <div class="status-row" style="margin-bottom: 20px;">
+                    <span><i class="fas fa-server"></i> System Uptime</span>
+                    <div><span id="uptime-timer" class="timer-display">--:--:--</span></div>
+                </div>
+                <div class="status-row" style="margin-bottom: 20px;">
+                    <span><i class="fas fa-shield-alt"></i> Safe Reboot Status</span>
+                    <div><span id="reboot-status" class="timer-display">ACTIVE</span></div>
+                </div>
+                <div class="server-sub-panel">
+                     <h3><i class="fas fa-robot"></i> Enhanced Bot Control Matrix</h3>
+                     <div class="system-stats">
+                         <div>🔒 Safety Features: Health Checks, Exponential Backoff, Rate Limiting</div>
+                         <div>⏱️ Min Reboot Interval: 10 minutes | Max Failures: 5 attempts</div>
+                         <div>🎯 Reboot Strategy: Priority-based, one-at-a-time with cleanup delay</div>
+                     </div>
+                     <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));"></div>
+                </div>
+            </div>
+
+            <div class="panel clan-drop-panel">
+                <h2><i class="fas fa-users"></i> Clan Auto Drop</h2>
+                <div class="status-grid" style="grid-template-columns: 1fr;">
+                     <div class="status-row">
+                        <span><i class="fas fa-hourglass-half"></i> Next Drop Cycle</span>
+                        <div class="flex-row">
+                            <span id="clan-drop-timer" class="timer-display">--:--:--</span>
+                            <button type="button" id="clan-drop-toggle-btn" class="btn btn-small">{{ 'DISABLE' if auto_clan_drop.enabled else 'ENABLE' }}</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="server-sub-panel">
+                    <h3><i class="fas fa-cogs"></i> Configuration</h3>
+                    <div class="input-group"><label>Drop Channel ID</label><input type="text" id="clan-drop-channel-id" value="{{ auto_clan_drop.channel_id or '' }}"></div>
+                    <div class="input-group"><label>KTB Channel ID</label><input type="text" id="clan-drop-ktb-channel-id" value="{{ auto_clan_drop.ktb_channel_id or '' }}"></div>
+                </div>
+                <div class="server-sub-panel">
+                    <h3><i class="fas fa-crosshairs"></i> Soul Harvest (Clan Drop)</h3>
+                    {% for bot in main_bots_info %}
+                    <div class="grab-section">
+                        <h3>{{ bot.name }}</h3>
+                        <div class="input-group">
+                            <input type="number" class="clan-drop-threshold" data-node="main_{{ bot.id }}" value="{{ auto_clan_drop.heart_thresholds[('main_' + bot.id|string)]|default(50) }}" min="0">
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <button type="button" id="clan-drop-save-btn" class="btn" style="margin-top: 20px;">Save Clan Drop Settings</button>
+            </div>
+
+            <div class="panel global-settings-panel">
+                <h2><i class="fas fa-globe"></i> Global Event Settings</h2>
+                <div class="server-sub-panel">
+                    <h3><i class="fas fa-seedling"></i> Watermelon Grab (All Servers)</h3>
+                    <div id="global-watermelon-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));"></div>
+                </div>
+            </div>
+
+            {% for server in servers %}
+            <div class="panel server-panel" data-server-id="{{ server.id }}">
+                <button class="btn-delete-server" title="Delete Server"><i class="fas fa-times"></i></button>
+                <h2><i class="fas fa-server"></i> {{ server.name }}</h2>
+                <div class="server-sub-panel">
+                    <h3><i class="fas fa-cogs"></i> Channel Config</h3>
+                    <div class="input-group"><label>Main Channel ID</label><input type="text" class="channel-input" data-field="main_channel_id" value="{{ server.main_channel_id or '' }}"></div>
+                    <div class="input-group"><label>KTB Channel ID</label><input type="text" class="channel-input" data-field="ktb_channel_id" value="{{ server.ktb_channel_id or '' }}"></div>
+                    <div class="input-group"><label>Spam Channel ID</label><input type="text" class="channel-input" data-field="spam_channel_id" value="{{ server.spam_channel_id or '' }}"></div>
+                </div>
+                <div class="server-sub-panel">
+                    <h3><i class="fas fa-crosshairs"></i> Soul Harvest (Card Grab)</h3>
+                    {% for bot in main_bots_info %}
+                    <div class="grab-section">
+                        <h3>{{ bot.name }}</h3>
+                        <div class="input-group">
+                            <input type="number" class="harvest-threshold" data-node="{{ bot.id }}" value="{{ server['heart_threshold_' + bot.id|string] or 50 }}" min="0">
+                            <button type="button" class="btn harvest-toggle" data-node="{{ bot.id }}">
+                                {{ 'DISABLE' if server['auto_grab_enabled_' + bot.id|string] else 'ENABLE' }}
+                            </button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div class="server-sub-panel">
+                    <h3><i class="fas fa-paper-plane"></i> Auto Broadcast</h3>
+                    <div class="input-group"><label>Message</label><textarea class="spam-message" rows="2">{{ server.spam_message or '' }}</textarea></div>
+                    <div class="input-group">
+                         <label>Delay (s)</label>
+                         <input type="number" class="spam-delay" value="{{ server.spam_delay or 10 }}">
+                         <span class="timer-display spam-timer">--:--:--</span>
+                    </div>
+                    <button type="button" class="btn broadcast-toggle">{{ 'DISABLE' if server.spam_enabled else 'ENABLE' }}</button>
+                </div>
+            </div>
+            {% endfor %}
+
+            <div class="panel add-server-btn" id="add-server-btn">
+                <i class="fas fa-plus"></i>
+            </div>
+        </div>
+    </div>
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const msgStatusContainer = document.getElementById('msg-status-container');
+        const msgStatusText = document.getElementById('msg-status-text');
+        let logRefreshInterval;
+
+        function showStatusMessage(message, type = 'success') {
+            if (!message) return;
+            msgStatusText.textContent = message;
+            msgStatusContainer.className = `msg-status ${type === 'error' ? 'error' : type === 'warning' ? 'warning' : ''}`;
+            msgStatusContainer.style.display = 'block';
+            setTimeout(() => { msgStatusContainer.style.display = 'none'; }, 4000);
+        }
+
+        async function postData(url = '', data = {}) {
+            try {
+                const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+                const result = await response.json();
+                showStatusMessage(result.message, result.status !== 'success' ? 'error' : 'success');
+                if (result.status === 'success' && url !== '/api/save_settings') {
+                    fetch('/api/save_settings', { method: 'POST' });
+                    if (result.reload) { setTimeout(() => window.location.reload(), 500); }
+                }
+                setTimeout(fetchStatus, 500);
+                return result;
+            } catch (error) {
+                console.error('Error:', error);
+                showStatusMessage('Server communication error.', 'error');
+            }
+        }
+        
+        // Refactored API call function
+        async function updateSettings(payload) {
+            try {
+                const response = await fetch('/api/update_settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                const result = await response.json();
+                showStatusMessage(result.message, result.status !== 'success' ? 'error' : 'success');
+                if (result.status === 'success') {
+                    fetch('/api/save_settings', { method: 'POST' }); // Save on success
+                    if (result.reload) setTimeout(() => window.location.reload(), 500);
+                }
+                fetchStatus(); // Refresh UI
+            } catch (error) {
+                console.error('Error:', error);
+                showStatusMessage('Server communication error.', 'error');
+            }
+        }
+
+        function formatTime(seconds) {
+            if (isNaN(seconds) || seconds < 0) return "--:--:--";
+            seconds = Math.floor(seconds);
+            const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+            const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+            const s = (seconds % 60).toString().padStart(2, '0');
+            return `${h}:${m}:${s}`;
+        }
+
+        function formatTimeShort(date) {
+            return date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        function updateElement(element, { textContent, className, value, innerHTML }) {
+            if (!element) return;
+            if (textContent !== undefined) element.textContent = textContent;
+            if (className !== undefined) element.className = className;
+            if (value !== undefined) element.value = value;
+            if (innerHTML !== undefined) element.innerHTML = innerHTML;
+        }
+
+        function updateLogDisplay(logs, stats) {
+            const statsContainer = document.getElementById('log-stats');
+            statsContainer.innerHTML = `
+                <div class="stat-card"><div class="stat-number">${stats.total_attempts}</div><div class="stat-label">Grab Attempts</div></div>
+                <div class="stat-card"><div class="stat-number" style="color: var(--success-gold)">${stats.successful_grabs}</div><div class="stat-label">Successful Grabs</div></div>
+                <div class="stat-card"><div class="stat-number" style="color: var(--watermelon-pink)">${stats.watermelon_grabs}</div><div class="stat-label">Watermelons</div></div>
+                <div class="stat-card"><div class="stat-number" style="color: var(--warning-orange)">${stats.high_heart_grabs}</div><div class="stat-label">100+ Hearts</div></div>`;
+            const logContainer = document.getElementById('log-container');
+            if (logs.length === 0) { logContainer.innerHTML = '<div style="text-align: center; color: var(--text-secondary); padding: 20px;">No card grab activity...</div>'; return; }
+            logContainer.innerHTML = logs.map(log => {
+                let logClass = 'log-entry', icon = '', actionText = '';
+                switch (log.action) {
+                    case 'grab_attempt': logClass += ' attempt'; icon = '<i class="fas fa-crosshairs"></i>'; actionText = `Attempting Line ${log.card_line} (${log.emoji})`; break;
+                    case 'grab_result': logClass += log.status === 'success' ? ' success' : ' failed'; icon = log.status === 'success' ? '<i class="fas fa-trophy"></i>' : '<i class="fas fa-times-circle"></i>'; actionText = log.status === 'success' ? (log.result_type === 'fought_off' ? 'Fought off!' : 'Took card!') : 'Grab failed'; break;
+                    case 'watermelon_grab': logClass += ' watermelon'; icon = '<i class="fas fa-seedling"></i>'; actionText = log.status === 'success' ? 'Watermelon grabbed!' : 'Watermelon failed'; break;
+                }
+                return `<div class="${logClass}"><div style="display: flex; align-items: center; gap: 10px;">${icon}<span class="log-bot">${log.bot_name}</span><span class="log-action">${actionText}</span>${log.hearts ? `<span class="log-hearts">♡${log.hearts}</span>` : ''}</div><div class="log-time">${formatTimeShort(new Date(log.timestamp))}</div></div>`;
+            }).join('');
+        }
+
+        async function fetchLogs() {
+            try {
+                const response = await fetch('/api/card_logs');
+                const data = await response.json();
+                updateLogDisplay(data.logs, data.stats);
+            } catch (error) { console.error('Error fetching logs:', error); }
+        }
+
+        function startLogRefreshTimer() {
+            if (logRefreshInterval) clearInterval(logRefreshInterval);
+            let timer = 10;
+            const countdownEl = document.getElementById('log-refresh-countdown');
+            logRefreshInterval = setInterval(() => {
+                timer--;
+                countdownEl.textContent = timer;
+                if (timer <= 0) { fetchLogs(); timer = 10; }
+            }, 1000);
+        }
+
+        async function fetchStatus() {
+            try {
+                const response = await fetch('/status');
+                const data = await response.json();
+                updateElement(document.getElementById('uptime-timer'), { textContent: formatTime((Date.now() / 1000) - data.server_start_time) });
+                if (data.auto_clan_drop_status) {
+                    updateElement(document.getElementById('clan-drop-timer'), { textContent: formatTime(data.auto_clan_drop_status.countdown) });
+                    updateElement(document.getElementById('clan-drop-toggle-btn'), { textContent: data.auto_clan_drop_status.enabled ? 'DISABLE' : 'ENABLE' });
+                }
+                const botControlGrid = document.getElementById('bot-control-grid');
+                const allBots = [...data.bot_statuses.main_bots, ...data.bot_statuses.sub_accounts];
+                const updatedBotIds = new Set(allBots.map(b => `bot-container-${b.reboot_id}`));
+                allBots.forEach(bot => {
+                    const botId = bot.reboot_id;
+                    let item = document.getElementById(`bot-container-${botId}`) || document.createElement('div');
+                    item.id = `bot-container-${botId}`;
+                    item.className = 'status-row';
+                    item.style.cssText = 'flex-direction: column; align-items: stretch; padding: 10px;';
+                    let healthClass = `health-${bot.health_status}`;
+                    let rebootingIcon = bot.is_rebooting ? ' <i class="fas fa-sync-alt fa-spin"></i>' : '';
+                    let controlHtml = `<div style="display: flex; justify-content: space-between; align-items: center; width: 100%;"><span style="font-weight: bold; ${bot.type === 'main' ? 'color: #FF4500;' : ''}">${bot.name}<span class="health-indicator ${healthClass}"></span>${rebootingIcon}</span><button type="button" data-action="toggle_bot_active" data-target="${botId}" class="btn-toggle-state ${bot.is_active ? 'btn-rise' : 'btn-rest'}">${bot.is_active ? 'ONLINE' : 'OFFLINE'}</button></div>`;
+                    if (bot.type === 'main') {
+                        const r = data.bot_reboot_settings[botId] || {};
+                        const statusClass = r.failure_count > 0 ? 'btn-warning' : (r.enabled ? 'btn-rise' : 'btn-rest');
+                        const statusText = r.failure_count > 0 ? `FAIL(${r.failure_count})` : (r.enabled ? 'AUTO' : 'MANUAL');
+                        controlHtml += `<div class="input-group" style="margin-top: 10px; margin-bottom: 0;"><input type="number" class="bot-reboot-delay" value="${r.delay || 3600}" data-bot-id="${botId}" style="width: 80px; text-align: right; flex-grow: 0;"><span class="timer-display bot-reboot-timer" style="padding: 0 10px;">${formatTime(r.countdown)}</span><button type="button" data-action="toggle_bot_reboot" class="btn btn-small ${statusClass}" data-bot-id="${botId}">${statusText}</button></div>`;
+                    }
+                    item.innerHTML = controlHtml;
+                    if (!item.parentNode) botControlGrid.appendChild(item);
+                });
+                Array.from(botControlGrid.children).forEach(c => { if (!updatedBotIds.has(c.id)) c.remove(); });
+                const wmGrid = document.getElementById('global-watermelon-grid');
+                wmGrid.innerHTML = data.bot_statuses.main_bots.map(bot => `<div class="bot-status-item"><span>${bot.name}</span><button type="button" class="btn btn-small" data-action="toggle_watermelon" data-node="${bot.reboot_id}"><i class="fas fa-seedling"></i>&nbsp;${data.watermelon_grab_states[bot.reboot_id] ? 'DISABLE' : 'ENABLE'}</button></div>`).join('');
+                data.servers.forEach(s => {
+                    const p = document.querySelector(`.server-panel[data-server-id="${s.id}"]`);
+                    if (!p) return;
+                    p.querySelectorAll('.harvest-toggle').forEach(b => { b.textContent = s[`auto_grab_enabled_${b.dataset.node}`] ? 'DISABLE' : 'ENABLE'; });
+                    p.querySelector('.broadcast-toggle').textContent = s.spam_enabled ? 'DISABLE' : 'ENABLE';
+                    p.querySelector('.spam-timer').textContent = formatTime(s.spam_countdown);
+                });
+            } catch (error) { console.error('Error fetching status:', error); }
+        }
+
+        fetchStatus(); fetchLogs(); startLogRefreshTimer(); setInterval(fetchStatus, 1000);
+
+        document.querySelector('.container').addEventListener('click', e => {
+            const button = e.target.closest('button');
+            if (!button) return;
+            const action = button.dataset.action;
+            if (!action) return;
+            const serverPanel = button.closest('.server-panel');
+            const serverId = serverPanel ? serverPanel.dataset.serverId : null;
+            let payload = { action };
+            if (serverId) payload.server_id = serverId;
+
+            if (action === 'toggle_bot_reboot') {
+                payload.bot_id = button.dataset.botId;
+                payload.delay = document.querySelector(`.bot-reboot-delay[data-bot-id="${button.dataset.botId}"]`).value;
+            } else if (action === 'toggle_bot_active') {
+                payload.target = button.dataset.target;
+            } else if (action === 'toggle_watermelon' || action === 'toggle_harvest') {
+                payload.node = button.dataset.node;
+                if(action === 'toggle_harvest') payload.threshold = serverPanel.querySelector(`.harvest-threshold[data-node="${button.dataset.node}"]`).value;
+            } else if (action === 'toggle_broadcast') {
+                payload.message = serverPanel.querySelector('.spam-message').value;
+                payload.delay = serverPanel.querySelector('.spam-delay').value;
+            }
+            updateSettings(payload);
+        });
+        
+        document.getElementById('clan-drop-toggle-btn').addEventListener('click', () => updateSettings({action: 'toggle_clan_drop'}));
+        document.getElementById('clan-drop-save-btn').addEventListener('click', () => {
+             const thresholds = {};
+             document.querySelectorAll('.clan-drop-threshold').forEach(i => { thresholds[i.dataset.node] = i.value; });
+             updateSettings({ action: 'update_clan_drop', channel_id: document.getElementById('clan-drop-channel-id').value, ktb_channel_id: document.getElementById('clan-drop-ktb-channel-id').value, heart_thresholds: thresholds });
+        });
+        document.getElementById('refresh-logs-btn').addEventListener('click', fetchLogs);
+        document.getElementById('clear-logs-btn').addEventListener('click', () => postData('/api/clear_logs').then(fetchLogs));
+        document.getElementById('add-server-btn').addEventListener('click', () => {
+            const name = prompt("Enter a name for the new server:", "New Server");
+            if (name) updateSettings({ action: 'add_server', name });
+        });
+        document.querySelector('.main-grid').addEventListener('change', e => {
+            const target = e.target;
+            const serverPanel = target.closest('.server-panel');
+            if (serverPanel && target.classList.contains('channel-input')) {
+                let payload = { action: 'update_channels', server_id: serverPanel.dataset.serverId };
+                payload[target.dataset.field] = target.value;
+                updateSettings(payload);
+            }
+        });
+        document.querySelector('.container').addEventListener('click', e => {
+            if (e.target.closest('.btn-delete-server')) {
+                const serverId = e.target.closest('.server-panel').dataset.serverId;
+                if (confirm('Are you sure you want to delete this server?')) {
+                    updateSettings({ action: 'delete_server', server_id: serverId });
+                }
+            }
+        });
+    });
+</script>
+</body>
+</html>
