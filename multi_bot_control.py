@@ -1,4 +1,4 @@
-# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V5.0 - DEBUG & ENHANCED UI
+# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V5.1 - DETAILED WEB LOGS
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -33,7 +33,6 @@ class CardGrabLogger:
 
     def parse_card_info(self, message_content):
         content_lower = message_content.lower()
-        
         condition_map = {
             'poor': ['poor', 'tệ', 'badly damaged', 'damaged'],
             'good': ['good', 'tốt', 'decent'],
@@ -94,7 +93,8 @@ class CardGrabLogger:
                 print(f"               🃏 Card Name: {card_name}", flush=True)
                 print(f"               💎 Condition: {condition.upper()}", flush=True)
                 print(f"               ♡♡♡ HEARTS: {hearts} ♡♡♡", flush=True)
-                print("-" * 50, flush=True)
+                print(f"               💰 Total Hearts: {stats['total_hearts_grabbed']} | 🏆 Highest Heart: {stats['highest_heart_grabbed']}", flush=True)
+                print("-" * 60, flush=True)
                 
                 log_entry.update({'card_name': card_name, 'condition': condition, 'hearts': hearts})
                 
@@ -291,28 +291,20 @@ def handle_karuta_response(msg):
 
     if not any(keyword in content_lower for keyword in ["took the", "fought off", "lấy thẻ"]):
         return
-    
-    print(f"[DEBUG] Karuta response detected: {content}", flush=True)
 
     for bot_id, user_id in list(bot_user_ids.items()):
         if not user_id: continue
 
-        user_tag_normal = f"<@{user_id}>"
-        user_tag_nickname = f"<@!{user_id}>"
-        
-        if user_tag_normal in content or user_tag_nickname in content:
+        if user_id in content:
             winner_part = ""
             if "fought off" in content_lower: winner_part = content.split("fought off")[0]
             elif "took the" in content_lower: winner_part = content.split(" took the")[0]
             elif "lấy thẻ" in content_lower: winner_part = content.split("lấy thẻ")[0]
 
-            if user_tag_normal in winner_part or user_tag_nickname in winner_part:
+            if user_id in winner_part:
                 bot_name = get_bot_name(bot_id)
-                print(f"[DEBUG] Card success for {bot_name}", flush=True)
                 card_logger.log_event(bot_name, 'card_success', message=content)
                 return
-    
-    print(f"[DEBUG] No winning bot found for message: {content[:100]}...", flush=True)
 
 # --- HỆ THỐNG REBOOT & HEALTH CHECK ---
 def check_bot_health(bot_instance, bot_id):
@@ -450,13 +442,11 @@ def create_bot(token, bot_identifier, is_main=False):
             if resp.event.ready:
                 user = resp.raw.get("user", {})
                 user_id = user.get('id')
-                username = user.get('username', 'Unknown')
-                print(f"[Bot] ✅ Logged in: {user_id} ({username}) -> {get_bot_name(bot_id_str)}", flush=True)
+                print(f"[Bot] ✅ Logged in: {user_id} ({get_bot_name(bot_id_str)})", flush=True)
                 bot_states["health_stats"].setdefault(bot_id_str, {})['consecutive_failures'] = 0
                 if user_id:
                     bot_user_ids[bot_id_str] = user_id
-                    print(f"[Bot] 📝 Registered user ID {user_id} for {bot_id_str}", flush=True)
-
+        
         if is_main:
             @bot.gateway.command
             def on_message(resp):
@@ -525,14 +515,17 @@ HTML_TEMPLATE = """
         .server-sub-panel { border-top: 1px solid var(--border-color); margin-top: 15px; padding-top: 15px; }
         .health-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-left: 5px; }
         .health-good { background: var(--success-green); } .health-warning { background: var(--warning-orange); } .health-bad { background: var(--blood-red); }
-        .log-list { max-height: 400px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; padding: 5px; }
-        .log-entry { padding: 8px; border-bottom: 1px solid #222; display: flex; gap: 10px; align-items: center; font-size: 0.9em; }
-        .log-entry.card_success { color: #aaffaa; } .log-entry.failed { color: #ffaa88; }
-        .log-bot-name { font-weight: bold; min-width: 80px; }
+        .log-list { max-height: 500px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; padding: 5px; }
+        .log-entry { padding: 8px; border-bottom: 1px solid #222; display: flex; gap: 10px; align-items: flex-start; font-size: 0.9em; }
+        .log-timestamp { color: #888; white-space: nowrap; }
+        .log-bot-name { font-weight: bold; min-width: 80px; color: var(--mint-cyan); white-space: nowrap;}
         .card-condition { padding: 2px 6px; border-radius: 3px; font-size: 0.8rem; text-transform: uppercase; color: black; }
         .condition-poor { background: #ff4444; } .condition-good { background: #ffaa00; } .condition-excellent { background: #44ff44; } .condition-mint { background: #00ffff; } .condition-unknown { background: #888888; color: white; }
         .stat-card { background: rgba(0,0,0,0.3); padding: 10px; border-radius: 6px; text-align: center; border: 1px solid var(--border-color); }
         .stat-number { font-size: 1.5rem; font-weight: bold; color: var(--success-green); }
+        .log-details { font-family: 'Courier New', monospace; line-height: 1.6; white-space: pre-wrap; }
+        .log-details div { padding-left: 5px; }
+        .log-details .hearts-display { font-weight: bold; color: var(--mint-cyan); font-size: 1.1em; }
     </style>
 </head>
 <body>
@@ -674,7 +667,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
     
-    function updateLogs(data) {
+    function updateLogs(data, statsData) {
         const logContainer = document.getElementById('log-container');
         if (!data.logs || data.logs.length === 0) {
             logContainer.innerHTML = '<div class="no-logs">No activity yet.</div>'; 
@@ -686,14 +679,19 @@ document.addEventListener('DOMContentLoaded', function () {
             let content = '';
             
             if (log.type === 'card_success') {
-                let heartColor = log.hearts >= 100 ? '#ff69b4' : log.hearts >= 50 ? '#ffd700' : '#32cd32';
-                let heartIcon = log.hearts >= 100 ? '🔥' : log.hearts >= 50 ? '✨' : '♡';
+                const botStats = statsData && statsData.bot_stats ? statsData.bot_stats[log.bot_name] : null;
                 
-                content = `<span class="card-name" style="color: #aaffaa; font-weight: bold;">${log.card_name}</span> 
-                           <span class="card-condition condition-${log.condition}">${log.condition}</span> 
-                           <span style="color: ${heartColor}; font-weight: bold; font-size: 1.1em;">
-                               ${heartIcon}${log.hearts}♡
-                           </span>`;
+                content = `<div class="log-details">
+                    <div>🎉 <b>${log.bot_name}</b> GRABBED CARD!</div>
+                    <div><span style="display: inline-block; width: 110px;">🃏 Card Name:</span> ${log.card_name}</div>
+                    <div><span style="display: inline-block; width: 110px;">💎 Condition:</span> <span class="card-condition condition-${log.condition}">${log.condition}</span></div>
+                    <div class="hearts-display"><span style="display: inline-block; width: 110px;">♡♡♡ HEARTS:</span> ${log.hearts} ♡♡♡</div>`;
+                
+                if (botStats) {
+                    content += `<div><span style="display: inline-block; width: 110px;">💰 Total Hearts:</span> ${botStats.total_hearts_grabbed}</div>
+                                <div><span style="display: inline-block; width: 110px;">🏆 Highest Heart:</span> ${botStats.highest_heart_grabbed}</div>`;
+                }
+                content += `</div>`;
                            
             } else if (log.type === 'failed') {
                 content = `<span style="color: #ffaa88;">Failed: ${log.reason}</span>`;
@@ -702,9 +700,8 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             
             newHtml += `<div class="log-entry ${log.type}">
-                <span style="color: #888888;">[${log.timestamp}]</span>
-                <span class="log-bot-name" style="min-width: 80px; font-weight: bold; color: #00ffff;">${log.bot_name}</span>
-                <span style="flex-grow: 1;">${content}</span>
+                <span class="log-timestamp">[${log.timestamp}]</span>
+                <div style="flex-grow: 1;">${content}</div>
             </div>`;
         });
         logContainer.innerHTML = newHtml;
@@ -745,9 +742,13 @@ document.addEventListener('DOMContentLoaded', function () {
     async function fetchData() {
         try {
             const [statusRes, logsRes, statsRes] = await Promise.all([fetch('/status'), fetch('/api/card_logs'), fetch('/api/card_stats')]);
-            updateUI(await statusRes.json());
-            updateLogs(await logsRes.json());
-            updateStats(await statsRes.json());
+            const statusData = await statusRes.json();
+            const logsData = await logsRes.json();
+            const statsData = await statsRes.json();
+            
+            updateUI(statusData);
+            updateLogs(logsData, statsData);
+            updateStats(statsData);
         } catch (error) { console.error('Error fetching data:', error); }
     }
 
@@ -977,7 +978,7 @@ def api_test_card_log():
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V5.0 Enhanced Debug Starting...", flush=True)
+    print("🚀 Shadow Network Control - V5.1 Final Debug Starting...", flush=True)
     load_settings()
 
     print("🔌 Initializing bots using Bot Manager...", flush=True)
