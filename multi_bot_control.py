@@ -1,4 +1,4 @@
-# PHIÊN BẢN HOÀN CHỈNH - KẾT HỢP VIP STABLE & LOGGING FEATURE (FIXED)
+# PHIÊN BẢN HOÀN CHỈNH CUỐI CÙNG - ĐÃ SỬA LỖI ATTRIBUTE & TYPE
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -24,7 +24,7 @@ BOT_USER_IDS = {} # FIX: Thêm từ điển toàn cục để lưu ID người d
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
 
-# --- CARD GRAB LOGGING SYSTEM (TÍNH NĂNG MỚI ĐÃ SỬA LỖI) ---
+# --- CARD GRAB LOGGING SYSTEM ---
 class CardGrabLogger:
     def __init__(self, max_logs=200):
         self.logs = deque(maxlen=max_logs)
@@ -56,7 +56,8 @@ class CardGrabLogger:
     def get_stats(self, hours=24):
         with self.lock:
             cutoff_time = datetime.now() - timedelta(hours=hours)
-            recent_logs = [log for log in self.logs if log['timestamp'] > cutoff_time]
+            # FIX: Đảm bảo so sánh an toàn dù timestamp có thể là string (mặc dù không nên xảy ra nữa)
+            recent_logs = [log for log in self.logs if isinstance(log.get('timestamp'), datetime) and log['timestamp'] > cutoff_time]
             stats = {
                 'total_attempts': len([l for l in recent_logs if l['action'] == 'grab_attempt']),
                 'successful_grabs': len([l for l in recent_logs if l['action'] == 'grab_result' and l['status'] == 'success']),
@@ -584,12 +585,19 @@ def index():
 
 @app.route("/api/card_logs")
 def api_card_logs():
-    logs = card_logger.get_recent_logs(limit=50)
-    for log in logs:
-        if isinstance(log['timestamp'], datetime): log['timestamp'] = log['timestamp'].isoformat()
-    return jsonify({'logs': logs, 'stats': card_logger.get_stats(hours=24)})
+    # FIX: Sửa lỗi TypeError bằng cách tạo bản sao của logs trước khi chỉnh sửa
+    raw_logs = card_logger.get_recent_logs(limit=50)
+    stats = card_logger.get_stats(hours=24)
+    
+    json_ready_logs = []
+    for log in raw_logs:
+        log_copy = log.copy()
+        if isinstance(log_copy.get('timestamp'), datetime):
+            log_copy['timestamp'] = log_copy['timestamp'].isoformat()
+        json_ready_logs.append(log_copy)
+        
+    return jsonify({'logs': json_ready_logs, 'stats': stats})
 
-# Các route API khác giữ nguyên như file của bạn
 @app.route("/api/clan_drop_toggle", methods=['POST'])
 def api_clan_drop_toggle():
     s = bot_states["auto_clan_drop"]
