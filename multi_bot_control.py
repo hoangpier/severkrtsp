@@ -1,8 +1,9 @@
-# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - TÍCH HỢP BOT MANAGER & CẢI TIẾN AN TOÀN VÀ ĐỘ ỔN ĐỊNH
+# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - TÍCH HỢP BOT MANAGER & CARD GRAB LOGGING
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+from collections import deque
 
 load_dotenv()
 
@@ -22,6 +23,132 @@ bot_states = {
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
 
+# --- CARD GRAB LOGGING SYSTEM ---
+class CardGrabLogger:
+    def __init__(self, max_logs=200):
+        self.logs = deque(maxlen=max_logs)
+        self.lock = threading.RLock()
+        self.grab_attempts = {}  # Track grab attempts by message_id
+        
+    def log_grab_attempt(self, bot_id, channel_id, message_id, card_line, hearts, emoji):
+        """Log khi bot cố gắng nhặt thẻ"""
+        with self.lock:
+            timestamp = datetime.now()
+            self.grab_attempts[message_id] = {
+                'bot_id': bot_id,
+                'channel_id': channel_id,
+                'timestamp': timestamp,
+                'card_line': card_line,
+                'hearts': hearts,
+                'emoji': emoji,
+                'status': 'attempting'
+            }
+            
+            log_entry = {
+                'id': f"attempt_{message_id}_{bot_id}",
+                'timestamp': timestamp,
+                'bot_name': get_bot_name(bot_id),
+                'bot_id': bot_id,
+                'action': 'grab_attempt',
+                'hearts': hearts,
+                'card_line': card_line,
+                'emoji': emoji,
+                'status': 'attempting',
+                'message_id': message_id,
+                'channel_id': channel_id
+            }
+            self.logs.append(log_entry)
+    
+    def log_grab_result(self, bot_id, channel_id, message_id, success, result_type, hearts=None, card_info=None):
+        """Log kết quả nhặt thẻ (thành công hoặc thất bại)"""
+        with self.lock:
+            timestamp = datetime.now()
+            
+            # Find original attempt
+            attempt = self.grab_attempts.get(message_id, {})
+            if not attempt:
+                # If no attempt logged, create a result-only entry
+                hearts = hearts or 0
+                card_info = card_info or "Unknown Card"
+            else:
+                hearts = hearts or attempt.get('hearts', 0)
+                card_info = card_info or f"Line {attempt.get('card_line', '?')}"
+            
+            log_entry = {
+                'id': f"result_{message_id}_{bot_id}",
+                'timestamp': timestamp,
+                'bot_name': get_bot_name(bot_id),
+                'bot_id': bot_id,
+                'action': 'grab_result',
+                'hearts': hearts,
+                'card_info': card_info,
+                'status': 'success' if success else 'failed',
+                'result_type': result_type,  # 'fought_off', 'took_the', or 'failed'
+                'message_id': message_id,
+                'channel_id': channel_id
+            }
+            self.logs.append(log_entry)
+            
+            # Update attempt status if exists
+            if message_id in self.grab_attempts:
+                self.grab_attempts[message_id]['status'] = 'success' if success else 'failed'
+    
+    def log_watermelon_grab(self, bot_id, channel_id, message_id, success):
+        """Log dưa hấu grab"""
+        with self.lock:
+            timestamp = datetime.now()
+            log_entry = {
+                'id': f"watermelon_{message_id}_{bot_id}",
+                'timestamp': timestamp,
+                'bot_name': get_bot_name(bot_id),
+                'bot_id': bot_id,
+                'action': 'watermelon_grab',
+                'hearts': 0,
+                'card_info': '🍉 Watermelon',
+                'status': 'success' if success else 'failed',
+                'result_type': 'watermelon',
+                'message_id': message_id,
+                'channel_id': channel_id
+            }
+            self.logs.append(log_entry)
+    
+    def get_recent_logs(self, limit=50):
+        """Lấy log gần đây"""
+        with self.lock:
+            return list(reversed(list(self.logs)))[:limit]
+    
+    def get_stats(self, hours=24):
+        """Lấy thống kê trong X giờ qua"""
+        with self.lock:
+            cutoff_time = datetime.now() - timedelta(hours=hours)
+            recent_logs = [log for log in self.logs if log['timestamp'] > cutoff_time]
+            
+            stats = {
+                'total_attempts': len([l for l in recent_logs if l['action'] == 'grab_attempt']),
+                'successful_grabs': len([l for l in recent_logs if l['action'] == 'grab_result' and l['status'] == 'success']),
+                'failed_grabs': len([l for l in recent_logs if l['action'] == 'grab_result' and l['status'] == 'failed']),
+                'watermelon_grabs': len([l for l in recent_logs if l['action'] == 'watermelon_grab' and l['status'] == 'success']),
+                'bot_stats': {},
+                'high_heart_grabs': len([l for l in recent_logs if l['action'] == 'grab_result' and l['status'] == 'success' and l.get('hearts', 0) >= 100])
+            }
+            
+            # Bot-wise stats
+            for log in recent_logs:
+                bot_name = log['bot_name']
+                if bot_name not in stats['bot_stats']:
+                    stats['bot_stats'][bot_name] = {'attempts': 0, 'successes': 0, 'watermelons': 0}
+                
+                if log['action'] == 'grab_attempt':
+                    stats['bot_stats'][bot_name]['attempts'] += 1
+                elif log['action'] == 'grab_result' and log['status'] == 'success':
+                    stats['bot_stats'][bot_name]['successes'] += 1
+                elif log['action'] == 'watermelon_grab' and log['status'] == 'success':
+                    stats['bot_stats'][bot_name]['watermelons'] += 1
+            
+            return stats
+
+card_logger = CardGrabLogger()
+
 # --- QUẢN LÝ BOT THREAD-SAFE (IMPROVED) ---
 class ThreadSafeBotManager:
     def __init__(self):
@@ -38,14 +165,12 @@ class ThreadSafeBotManager:
         with self._lock:
             bot = self._bots.pop(bot_id, None)
             if bot:
-                # Đảm bảo cleanup gateway một cách an toàn
                 try:
                     if hasattr(bot, 'gateway') and hasattr(bot.gateway, 'close'):
                         bot.gateway.close()
                 except Exception as e:
                     print(f"[Bot Manager] ⚠️ Error closing gateway for {bot_id}: {e}", flush=True)
                 print(f"[Bot Manager] 🗑️ Removed bot {bot_id}", flush=True)
-
 
     def get_bot(self, bot_id):
         with self._lock:
@@ -159,9 +284,11 @@ def safe_message_handler_wrapper(handler_func, bot, msg, *args):
         print(f"[Message Handler] 🐛 Traceback: {traceback.format_exc()}", flush=True)
         return None
 
-# --- LOGIC GRAB CARD ---
+# --- LOGIC GRAB CARD (ENHANCED WITH LOGGING) ---
 def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id):
-    """Hàm chung để tìm và chọn card dựa trên số heart."""
+    """Hàm chung để tìm và chọn card dựa trên số heart với logging."""
+    bot_id = f'main_{bot_num}'
+    
     for _ in range(7):
         time.sleep(0.5)
         try:
@@ -188,6 +315,9 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                         
                         print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
                         
+                        # Log grab attempt
+                        card_logger.log_grab_attempt(bot_id, channel_id, last_drop_msg_id, max_index+1, max_num, emoji)
+                        
                         def grab_action():
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
@@ -204,7 +334,7 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
             print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi đọc messages: {e}", flush=True)
     return False
 
-# --- LOGIC BOT ---
+# --- LOGIC BOT (ENHANCED) ---
 def handle_clan_drop(bot, msg, bot_num):
     clan_settings = bot_states["auto_clan_drop"]
     if not (clan_settings.get("enabled") and msg.get("channel_id") == clan_settings.get("channel_id")):
@@ -238,22 +368,80 @@ def handle_grab(bot, msg, bot_num):
                 try:
                     target_message = bot.getMessage(channel_id, last_drop_msg_id).json()[0]
                     reactions = target_message.get('reactions', [])
+                    watermelon_found = False
                     for reaction in reactions:
                         emoji_name = reaction.get('emoji', {}).get('name', '')
                         if '🍉' in emoji_name or 'watermelon' in emoji_name.lower() or 'dua' in emoji_name.lower():
+                            watermelon_found = True
                             print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU!", flush=True)
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, "🍉")
                                 print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DỰA THÀNH CÔNG!", flush=True)
+                                card_logger.log_watermelon_grab(bot_id_str, channel_id, last_drop_msg_id, True)
                             except Exception as e:
                                 print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
+                                card_logger.log_watermelon_grab(bot_id_str, channel_id, last_drop_msg_id, False)
                             return
-                    print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau khi chờ.", flush=True)
+                    
+                    if not watermelon_found:
+                        print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau khi chờ.", flush=True)
                 except Exception as e:
                     print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi lấy tin nhắn để check dưa: {e}", flush=True)
             threading.Thread(target=check_for_watermelon_patiently, daemon=True).start()
 
     threading.Thread(target=grab_logic_thread, daemon=True).start()
+
+def handle_karuta_result(bot, msg, bot_num):
+    """Handle kết quả từ Karuta (fought off hoặc took the)"""
+    try:
+        content = msg.get("content", "").lower()
+        mentions = msg.get("mentions", [])
+        channel_id = msg.get("channel_id")
+        bot_id = f'main_{bot_num}'
+        
+        # Kiểm tra xem bot có được mention không
+        bot_user_id = getattr(bot, 'user_id', None)
+        if not bot_user_id:
+            return
+            
+        mentioned_ids = [mention.get("id") for mention in mentions]
+        if bot_user_id not in mentioned_ids:
+            return
+            
+        # Kiểm tra nội dung tin nhắn
+        success = False
+        result_type = "unknown"
+        hearts = 0
+        card_info = "Unknown Card"
+        
+        if "fought off" in content:
+            success = True
+            result_type = "fought_off"
+            # Trích xuất thông tin tim nếu có
+            heart_match = re.search(r'♡(\d+)', content)
+            if heart_match:
+                hearts = int(heart_match.group(1))
+            card_info = "Fought off challengers"
+        elif "took the" in content:
+            success = True
+            result_type = "took_the"
+            # Trích xuất thông tin tim nếu có
+            heart_match = re.search(r'♡(\d+)', content)
+            if heart_match:
+                hearts = int(heart_match.group(1))
+            card_info = "Took the card"
+        else:
+            # Có thể là thất bại hoặc message khác
+            return
+            
+        print(f"[CARD RESULT | Bot {bot_num}] {result_type.upper()} - {hearts}♡ - {card_info}", flush=True)
+        
+        # Log kết quả (sử dụng timestamp như message_id tạm thời)
+        message_id = str(int(time.time() * 1000))  
+        card_logger.log_grab_result(bot_id, channel_id, message_id, success, result_type, hearts, card_info)
+        
+    except Exception as e:
+        print(f"[CARD RESULT | Bot {bot_num}] ❌ Lỗi xử lý kết quả: {e}", flush=True)
 
 # --- HỆ THỐNG REBOOT & HEALTH CHECK (IMPROVED) ---
 def check_bot_health(bot_instance, bot_id):
@@ -288,7 +476,6 @@ def handle_reboot_failure(bot_id):
     
     # Exponential Backoff
     backoff_multiplier = min(2 ** failure_count, 8)
-    # Ensure delay is not excessively long for the first few failures
     base_delay = settings.get('delay', 3600)
     next_try_delay = max(600, base_delay / backoff_multiplier) * backoff_multiplier
 
@@ -319,7 +506,7 @@ def safe_reboot_bot(bot_id):
 
         # Cleanup bot cũ
         print(f"[Safe Reboot] 🧹 Cleaning up old bot instance for {bot_name}", flush=True)
-        bot_manager.remove_bot(bot_id) # remove_bot đã bao gồm gateway.close()
+        bot_manager.remove_bot(bot_id)
 
         # Exponential backoff delay
         settings = bot_states["reboot_settings"].get(bot_id, {})
@@ -350,7 +537,7 @@ def safe_reboot_bot(bot_id):
         handle_reboot_failure(bot_id)
         return False
     finally:
-        bot_manager.end_reboot(bot_id) # Luôn đảm bảo cờ reboot được gỡ
+        bot_manager.end_reboot(bot_id)
 
 # --- VÒNG LẶP NỀN (IMPROVED) ---
 def auto_reboot_loop():
@@ -516,11 +703,14 @@ def health_monitoring_check():
     for bot_id, bot in all_bots:
         check_bot_health(bot, bot_id)
 
-# --- KHỞI TẠO BOT (IMPROVED) ---
+# --- KHỞI TẠO BOT (IMPROVED WITH LOGGING) ---
 def create_bot(token, bot_identifier, is_main=False):
     try:
         bot = discum.Client(token=token, log=False)
         bot_id_str = f"main_{bot_identifier}" if is_main else f"sub_{bot_identifier}"
+        
+        # Store user_id for mention checking
+        bot.user_id = None
         
         @bot.gateway.command
         def on_ready(resp):
@@ -529,6 +719,7 @@ def create_bot(token, bot_identifier, is_main=False):
                     user = resp.raw.get("user", {})
                     user_id = user.get('id', 'Unknown')
                     username = user.get('username', 'Unknown')
+                    bot.user_id = user_id  # Store for later use
                     print(f"[Bot] ✅ Đăng nhập: {user_id} ({get_bot_name(bot_id_str)}) - {username}", flush=True)
                     
                     bot_states["health_stats"].setdefault(bot_id_str, {})
@@ -548,10 +739,15 @@ def create_bot(token, bot_identifier, is_main=False):
                         author_id = msg.get("author", {}).get("id")
                         content = msg.get("content", "").lower()
                         
-                        if author_id == karuta_id and "dropping" in content:
-                            handler = handle_clan_drop if msg.get("mentions") else handle_grab
-                            # Sử dụng wrapper để tăng độ an toàn
-                            safe_message_handler_wrapper(handler, bot, msg, bot_identifier)
+                        if author_id == karuta_id:
+                            if "dropping" in content:
+                                handler = handle_clan_drop if msg.get("mentions") else handle_grab
+                                # Sử dụng wrapper để tăng độ an toàn
+                                safe_message_handler_wrapper(handler, bot, msg, bot_identifier)
+                            elif ("fought off" in content or "took the" in content) and msg.get("mentions"):
+                                # Handle grab results
+                                safe_message_handler_wrapper(handle_karuta_result, bot, msg, bot_identifier)
+                        
                 except Exception as e:
                     print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}", flush=True)
 
@@ -581,22 +777,27 @@ def create_bot(token, bot_identifier, is_main=False):
         traceback.print_exc()
         return None
 
-# --- FLASK APP & GIAO DIỆN ---
+# --- FLASK APP & GIAO DIỆN (ENHANCED WITH LOGGING) ---
 app = Flask(__name__)
-# Giao diện HTML giữ nguyên như file gốc, không thay đổi
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Shadow Network Control - Enhanced</title>
+    <title>Shadow Network Control - Enhanced with Card Logging</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Creepster&family=Orbitron:wght@400;700;900&family=Courier+Prime:wght@400;700&family=Nosifer&display=swap" rel="stylesheet">
     <style>
-        :root { --primary-bg: #0a0a0a; --secondary-bg: #1a1a1a; --panel-bg: #111111; --border-color: #333333; --blood-red: #8b0000; --dark-red: #550000; --bone-white: #f8f8ff; --necro-green: #228b22; --text-primary: #f0f0f0; --text-secondary: #cccccc; --warning-orange: #ff8c00; --success-green: #32cd32; }
+        :root { 
+            --primary-bg: #0a0a0a; --secondary-bg: #1a1a1a; --panel-bg: #111111; --border-color: #333333; 
+            --blood-red: #8b0000; --dark-red: #550000; --bone-white: #f8f8ff; --necro-green: #228b22; 
+            --text-primary: #f0f0f0; --text-secondary: #cccccc; --warning-orange: #ff8c00; --success-green: #32cd32;
+            --attempt-blue: #4169e1; --success-gold: #ffd700; --fail-red: #dc143c; --watermelon-pink: #ff69b4;
+        }
         body { font-family: 'Courier Prime', monospace; background: var(--primary-bg); color: var(--text-primary); margin: 0; padding: 0;}
-        .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+        .container { max-width: 1800px; margin: 0 auto; padding: 20px; }
         .header { text-align: center; margin-bottom: 30px; padding: 20px; border-bottom: 2px solid var(--blood-red); position: relative; }
         .title { font-family: 'Nosifer', cursive; font-size: 3rem; color: var(--blood-red); }
         .subtitle { font-family: 'Orbitron', sans-serif; font-size: 1rem; color: var(--necro-green); margin-top: 10px; }
@@ -616,7 +817,7 @@ HTML_TEMPLATE = """
         .msg-status { text-align: center; color: var(--necro-green); padding: 12px; border: 1px dashed var(--border-color); border-radius: 4px; margin-bottom: 20px; display: none; }
         .msg-status.error { color: var(--blood-red); border-color: var(--blood-red); }
         .msg-status.warning { color: var(--warning-orange); border-color: var(--warning-orange); }
-        .status-panel, .global-settings-panel, .clan-drop-panel { grid-column: 1 / -1; }
+        .status-panel, .global-settings-panel, .clan-drop-panel, .card-log-panel { grid-column: 1 / -1; }
         .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
         .status-row { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; }
         .timer-display { font-size: 1.2em; font-weight: 700; }
@@ -637,16 +838,50 @@ HTML_TEMPLATE = """
         .health-warning { background-color: var(--warning-orange); }
         .health-bad { background-color: var(--blood-red); }
         .system-stats { font-size: 0.9em; color: var(--text-secondary); margin-top: 10px; }
+        
+        /* Card Logging Styles */
+        .log-container { max-height: 500px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 8px; padding: 15px; background: rgba(0,0,0,0.2); }
+        .log-entry { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; margin-bottom: 5px; border-radius: 6px; font-size: 0.9em; }
+        .log-entry.attempt { background: rgba(65, 105, 225, 0.1); border-left: 4px solid var(--attempt-blue); }
+        .log-entry.success { background: rgba(255, 215, 0, 0.1); border-left: 4px solid var(--success-gold); }
+        .log-entry.failed { background: rgba(220, 20, 60, 0.1); border-left: 4px solid var(--fail-red); }
+        .log-entry.watermelon { background: rgba(255, 105, 180, 0.1); border-left: 4px solid var(--watermelon-pink); }
+        .log-entry .log-time { font-size: 0.8em; color: var(--text-secondary); }
+        .log-entry .log-bot { font-weight: bold; color: var(--necro-green); }
+        .log-entry .log-hearts { color: var(--blood-red); font-weight: bold; }
+        .log-entry .log-action { color: var(--text-primary); }
+        .log-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 20px; }
+        .stat-card { background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; text-align: center; }
+        .stat-number { font-size: 2em; font-weight: bold; color: var(--necro-green); }
+        .stat-label { font-size: 0.9em; color: var(--text-secondary); }
+        .log-controls { display: flex; gap: 10px; margin-bottom: 20px; align-items: center; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1 class="title">Shadow Network Control</h1>
-            <div class="subtitle">Enhanced Safe Reboot System</div>
+            <div class="subtitle">Enhanced with Real-time Card Grab Logging</div>
         </div>
         <div id="msg-status-container" class="msg-status"> <span id="msg-status-text"></span></div>
+        
         <div class="main-grid">
+            <!-- Card Grab Logging Panel -->
+            <div class="panel card-log-panel">
+                <h2><i class="fas fa-scroll"></i> Card Grab Activity Log</h2>
+                <div class="log-stats" id="log-stats">
+                    <!-- Stats will be populated by JavaScript -->
+                </div>
+                <div class="log-controls">
+                    <button type="button" id="clear-logs-btn" class="btn btn-small">Clear Logs</button>
+                    <button type="button" id="refresh-logs-btn" class="btn btn-small">Refresh</button>
+                    <span class="timer-display">Auto-refresh: <span id="log-refresh-countdown">10</span>s</span>
+                </div>
+                <div class="log-container" id="log-container">
+                    <!-- Logs will be populated by JavaScript -->
+                </div>
+            </div>
+
             <div class="panel status-panel">
                 <h2><i class="fas fa-heartbeat"></i> System Status & Enhanced Reboot Control</h2>
                  <div class="status-row" style="margin-bottom: 20px;">
@@ -754,6 +989,8 @@ HTML_TEMPLATE = """
     document.addEventListener('DOMContentLoaded', function () {
         const msgStatusContainer = document.getElementById('msg-status-container');
         const msgStatusText = document.getElementById('msg-status-text');
+        let logRefreshTimer = 10;
+        let logRefreshInterval;
 
         function showStatusMessage(message, type = 'success') {
             if (!message) return;
@@ -789,12 +1026,115 @@ HTML_TEMPLATE = """
             return `${h}:${m}:${s}`;
         }
 
+        function formatTimeShort(date) {
+            return date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
         function updateElement(element, { textContent, className, value, innerHTML }) {
             if (!element) return;
             if (textContent !== undefined) element.textContent = textContent;
             if (className !== undefined) element.className = className;
             if (value !== undefined) element.value = value;
             if (innerHTML !== undefined) element.innerHTML = innerHTML;
+        }
+
+        function updateLogDisplay(logs, stats) {
+            // Update stats
+            const statsContainer = document.getElementById('log-stats');
+            statsContainer.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-number">${stats.total_attempts}</div>
+                    <div class="stat-label">Grab Attempts</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" style="color: var(--success-gold)">${stats.successful_grabs}</div>
+                    <div class="stat-label">Successful Grabs</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" style="color: var(--watermelon-pink)">${stats.watermelon_grabs}</div>
+                    <div class="stat-label">Watermelons</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" style="color: var(--warning-orange)">${stats.high_heart_grabs}</div>
+                    <div class="stat-label">100+ Hearts</div>
+                </div>
+            `;
+
+            // Update logs
+            const logContainer = document.getElementById('log-container');
+            if (logs.length === 0) {
+                logContainer.innerHTML = '<div style="text-align: center; color: var(--text-secondary); padding: 20px;">No card grab activity yet...</div>';
+                return;
+            }
+
+            logContainer.innerHTML = logs.map(log => {
+                const time = new Date(log.timestamp);
+                const timeStr = formatTimeShort(time);
+                let logClass = 'log-entry';
+                let icon = '';
+                let actionText = '';
+
+                switch (log.action) {
+                    case 'grab_attempt':
+                        logClass += ' attempt';
+                        icon = '<i class="fas fa-crosshairs"></i>';
+                        actionText = `Attempting Line ${log.card_line} (${log.emoji})`;
+                        break;
+                    case 'grab_result':
+                        if (log.status === 'success') {
+                            logClass += ' success';
+                            icon = '<i class="fas fa-trophy"></i>';
+                            actionText = log.result_type === 'fought_off' ? 'Fought off challengers!' : 'Took the card!';
+                        } else {
+                            logClass += ' failed';
+                            icon = '<i class="fas fa-times-circle"></i>';
+                            actionText = 'Grab failed';
+                        }
+                        break;
+                    case 'watermelon_grab':
+                        logClass += ' watermelon';
+                        icon = '<i class="fas fa-seedling"></i>';
+                        actionText = log.status === 'success' ? 'Watermelon grabbed!' : 'Watermelon attempt failed';
+                        break;
+                }
+
+                return `
+                    <div class="${logClass}">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            ${icon}
+                            <span class="log-bot">${log.bot_name}</span>
+                            <span class="log-action">${actionText}</span>
+                            ${log.hearts ? `<span class="log-hearts">♡${log.hearts}</span>` : ''}
+                        </div>
+                        <div class="log-time">${timeStr}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function fetchLogs() {
+            try {
+                const response = await fetch('/api/card_logs');
+                const data = await response.json();
+                updateLogDisplay(data.logs, data.stats);
+            } catch (error) {
+                console.error('Error fetching logs:', error);
+            }
+        }
+
+        function startLogRefreshTimer() {
+            if (logRefreshInterval) clearInterval(logRefreshInterval);
+            logRefreshTimer = 10;
+            
+            logRefreshInterval = setInterval(() => {
+                logRefreshTimer--;
+                document.getElementById('log-refresh-countdown').textContent = logRefreshTimer;
+                
+                if (logRefreshTimer <= 0) {
+                    fetchLogs();
+                    logRefreshTimer = 10;
+                }
+            }, 1000);
         }
 
         async function fetchStatus() {
@@ -866,7 +1206,6 @@ HTML_TEMPLATE = """
                     }
                 });
 
-
                 const wmGrid = document.getElementById('global-watermelon-grid');
                 wmGrid.innerHTML = '';
                 if (data.watermelon_grab_states && data.bot_statuses) {
@@ -899,8 +1238,13 @@ HTML_TEMPLATE = """
             } catch (error) { console.error('Error fetching status:', error); }
         }
 
+        // Initialize
+        fetchStatus();
+        fetchLogs();
+        startLogRefreshTimer();
         setInterval(fetchStatus, 1000);
 
+        // Event listeners
         document.querySelector('.container').addEventListener('click', e => {
             const button = e.target.closest('button');
             if (!button) return;
@@ -919,7 +1263,9 @@ HTML_TEMPLATE = """
                 'watermelon-toggle': () => postData('/api/watermelon_toggle', { node: button.dataset.node }),
                 'harvest-toggle': () => serverId && postData('/api/harvest_toggle', { server_id: serverId, node: button.dataset.node, threshold: serverPanel.querySelector(`.harvest-threshold[data-node="${button.dataset.node}"]`).value }),
                 'broadcast-toggle': () => serverId && postData('/api/broadcast_toggle', { server_id: serverId, message: serverPanel.querySelector('.spam-message').value, delay: serverPanel.querySelector('.spam-delay').value }),
-                'btn-delete-server': () => serverId && confirm('Are you sure?') && postData('/api/delete_server', { server_id: serverId })
+                'btn-delete-server': () => serverId && confirm('Are you sure?') && postData('/api/delete_server', { server_id: serverId }),
+                'clear-logs-btn': () => postData('/api/clear_logs').then(() => fetchLogs()),
+                'refresh-logs-btn': () => fetchLogs()
             };
 
             for (const cls in actions) {
@@ -950,12 +1296,32 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- FLASK ROUTES ---
+# --- FLASK ROUTES (ENHANCED WITH LOGGING ENDPOINTS) ---
 @app.route("/")
 def index():
     main_bots_info = [{"id": int(bot_id.split('_')[1]), "name": get_bot_name(bot_id)} for bot_id, _ in bot_manager.get_main_bots_info()]
     main_bots_info.sort(key=lambda x: x['id'])
     return render_template_string(HTML_TEMPLATE, servers=sorted(servers, key=lambda s: s.get('name', '')), main_bots_info=main_bots_info, auto_clan_drop=bot_states["auto_clan_drop"])
+
+@app.route("/api/card_logs")
+def api_card_logs():
+    """API endpoint để lấy card grab logs"""
+    logs = card_logger.get_recent_logs(limit=50)
+    stats = card_logger.get_stats(hours=24)
+    
+    # Convert datetime objects to ISO strings for JSON serialization
+    for log in logs:
+        if isinstance(log['timestamp'], datetime):
+            log['timestamp'] = log['timestamp'].isoformat()
+    
+    return jsonify({'logs': logs, 'stats': stats})
+
+@app.route("/api/clear_logs", methods=['POST'])
+def api_clear_logs():
+    """Clear all card grab logs"""
+    card_logger.logs.clear()
+    card_logger.grab_attempts.clear()
+    return jsonify({'status': 'success', 'message': '🗑️ Logs cleared successfully'})
 
 @app.route("/api/clan_drop_toggle", methods=['POST'])
 def api_clan_drop_toggle():
@@ -1124,7 +1490,7 @@ def status_endpoint():
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V3 Stable Version Starting...", flush=True)
+    print("🚀 Shadow Network Control - V4 Enhanced with Card Logging Starting...", flush=True)
     load_settings()
 
     print("🔌 Initializing bots using Bot Manager...", flush=True)
@@ -1165,4 +1531,6 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"🌐 Web Server running at http://0.0.0.0:{port}", flush=True)
+    print("📊 Real-time Card Grab Logging System Activated!", flush=True)
+    print("🎯 Features: Attempt Tracking, Success/Fail Detection, Watermelon Monitoring", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
