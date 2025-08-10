@@ -1,9 +1,8 @@
-# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - TÍCH HỢP BOT MANAGER & CẢI TIẾN AN TOÀN VÀ ĐỘ ỔN ĐỊNH + CARD GRAB LOGGING
+# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - TÍCH HỢP BOT MANAGER & CẢI TIẾN AN TOÀN VÀ ĐỘ ỔN ĐỊNH
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-from collections import deque, defaultdict
 
 load_dotenv()
 
@@ -18,127 +17,19 @@ acc_names = [f"Bot-{i:02d}" for i in range(1, 21)]
 servers = []
 bot_states = {
     "reboot_settings": {}, "active": {}, "watermelon_grab": {}, "health_stats": {},
-    "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}},
-    "card_grab_stats": {}  # Thống kê grab card mới
+    "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}}
 }
+# --- ADDED FOR LOGGING & STATS ---
+grab_logs = []
+grab_log_lock = threading.Lock()
+MAX_LOG_ENTRIES = 50
+bot_stats = {}
+bot_stats_lock = threading.Lock()
+pending_grabs = {}
+pending_grabs_lock = threading.Lock()
+# ------------------------------------
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
-
-# --- HỆ THỐNG LOGGING GRAB CARD (MỚI) ---
-class CardGrabLogger:
-    def __init__(self, max_logs=1000):
-        self.max_logs = max_logs
-        self.grab_logs = deque(maxlen=max_logs)
-        self.bot_stats = defaultdict(lambda: {
-            'total_grabs': 0,
-            'total_hearts': 0,
-            'successful_grabs': 0,
-            'failed_grabs': 0,
-            'best_grab': 0,
-            'last_grab_time': 0,
-            'daily_stats': defaultdict(lambda: {'grabs': 0, 'hearts': 0})
-        })
-        self._lock = threading.RLock()
-    
-    def log_grab_attempt(self, bot_name, bot_id, hearts, grab_type, server_name="Unknown", success=None):
-        """Log một lần thử grab card"""
-        with self._lock:
-            timestamp = time.time()
-            log_entry = {
-                'timestamp': timestamp,
-                'datetime_str': datetime.fromtimestamp(timestamp).strftime('%H:%M:%S %d/%m'),
-                'bot_name': bot_name,
-                'bot_id': bot_id,
-                'hearts': hearts,
-                'grab_type': grab_type,  # 'normal', 'clan', 'watermelon'
-                'server_name': server_name,
-                'success': success,  # True/False/None (chưa biết)
-                'id': f"{timestamp}_{bot_id}_{random.randint(1000,9999)}"
-            }
-            
-            self.grab_logs.appendleft(log_entry)
-            
-            # Cập nhật thống kê bot
-            stats = self.bot_stats[bot_id]
-            stats['total_grabs'] += 1
-            stats['total_hearts'] += hearts
-            stats['last_grab_time'] = timestamp
-            
-            if hearts > stats['best_grab']:
-                stats['best_grab'] = hearts
-            
-            if success is True:
-                stats['successful_grabs'] += 1
-            elif success is False:
-                stats['failed_grabs'] += 1
-            
-            # Thống kê theo ngày
-            today = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d')
-            stats['daily_stats'][today]['grabs'] += 1
-            stats['daily_stats'][today]['hearts'] += hearts
-            
-            return log_entry['id']
-    
-    def update_grab_result(self, log_id, success):
-        """Cập nhật kết quả grab sau khi biết thành công hay thất bại"""
-        with self._lock:
-            for log_entry in self.grab_logs:
-                if log_entry.get('id') == log_id:
-                    old_success = log_entry.get('success')
-                    log_entry['success'] = success
-                    
-                    # Cập nhật lại stats nếu trạng thái thay đổi
-                    bot_id = log_entry['bot_id']
-                    stats = self.bot_stats[bot_id]
-                    
-                    if old_success is None:
-                        if success:
-                            stats['successful_grabs'] += 1
-                        else:
-                            stats['failed_grabs'] += 1
-                    elif old_success != success:
-                        if success:
-                            stats['successful_grabs'] += 1
-                            stats['failed_grabs'] -= 1
-                        else:
-                            stats['successful_grabs'] -= 1
-                            stats['failed_grabs'] += 1
-                    break
-    
-    def get_recent_logs(self, limit=50):
-        """Lấy logs gần đây nhất"""
-        with self._lock:
-            return list(self.grab_logs)[:limit]
-    
-    def get_bot_stats(self, bot_id=None):
-        """Lấy thống kê bot"""
-        with self._lock:
-            if bot_id:
-                return dict(self.bot_stats.get(bot_id, {}))
-            return {k: dict(v) for k, v in self.bot_stats.items()}
-    
-    def get_summary_stats(self):
-        """Lấy thống kê tổng quan"""
-        with self._lock:
-            total_grabs = sum(stats['total_grabs'] for stats in self.bot_stats.values())
-            total_hearts = sum(stats['total_hearts'] for stats in self.bot_stats.values())
-            total_success = sum(stats['successful_grabs'] for stats in self.bot_stats.values())
-            total_failed = sum(stats['failed_grabs'] for stats in self.bot_stats.values())
-            best_grab = max((stats['best_grab'] for stats in self.bot_stats.values()), default=0)
-            
-            return {
-                'total_grabs': total_grabs,
-                'total_hearts': total_hearts,
-                'successful_grabs': total_success,
-                'failed_grabs': total_failed,
-                'success_rate': (total_success / max(total_grabs, 1)) * 100,
-                'average_hearts': total_hearts / max(total_grabs, 1),
-                'best_grab': best_grab,
-                'active_bots': len(self.bot_stats)
-            }
-
-# Khởi tạo logger toàn cục
-card_logger = CardGrabLogger()
 
 # --- QUẢN LÝ BOT THREAD-SAFE (IMPROVED) ---
 class ThreadSafeBotManager:
@@ -156,13 +47,13 @@ class ThreadSafeBotManager:
         with self._lock:
             bot = self._bots.pop(bot_id, None)
             if bot:
-                # Đảm bảo cleanup gateway một cách an toàn
                 try:
                     if hasattr(bot, 'gateway') and hasattr(bot.gateway, 'close'):
                         bot.gateway.close()
                 except Exception as e:
                     print(f"[Bot Manager] ⚠️ Error closing gateway for {bot_id}: {e}", flush=True)
                 print(f"[Bot Manager] 🗑️ Removed bot {bot_id}", flush=True)
+
 
     def get_bot(self, bot_id):
         with self._lock:
@@ -276,14 +167,10 @@ def safe_message_handler_wrapper(handler_func, bot, msg, *args):
         print(f"[Message Handler] 🐛 Traceback: {traceback.format_exc()}", flush=True)
         return None
 
-# --- LOGIC GRAB CARD (ENHANCED WITH LOGGING) ---
-def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id, grab_type="normal", server_name="Unknown"):
-    """Hàm chung để tìm và chọn card dựa trên số heart với logging."""
-    bot_id_str = f'main_{bot_num}'
-    bot_name = get_bot_name(bot_id_str)
-    log_id = None
-    
-    for attempt in range(7):
+# --- LOGIC GRAB CARD ---
+def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id):
+    """Hàm chung để tìm và chọn card dựa trên số heart. Đã sửa lỗi và thêm logging."""
+    for _ in range(7):
         time.sleep(0.5)
         try:
             messages = bot.getMessages(channel_id, num=5).json()
@@ -307,42 +194,29 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                         emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
                         delay = bot_delays[max_index]
                         
-                        # Log grab attempt
-                        log_id = card_logger.log_grab_attempt(
-                            bot_name=bot_name,
-                            bot_id=bot_id_str,
-                            hearts=max_num,
-                            grab_type=grab_type,
-                            server_name=server_name
-                        )
+                        card_message_id = msg_item.get("id")
                         
-                        print(f"[CARD GRAB | {bot_name}] 🎯 Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s [LOG:{log_id[-8:]}]", flush=True)
+                        with pending_grabs_lock:
+                            pending_grabs[card_message_id] = {'hearts': max_num}
+                            print(f"[Heart Logger] Stored attempt for msg {card_message_id} with {max_num}♡", flush=True)
+
+                        print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
                         
                         def grab_action():
                             try:
-                                bot.addReaction(channel_id, last_drop_msg_id, emoji)
+                                # BUG FIX: React to the card message ID, not the "dropping" message ID
+                                bot.addReaction(channel_id, card_message_id, emoji)
                                 time.sleep(1.2)
                                 if ktb_channel_id: bot.sendMessage(ktb_channel_id, "kt b")
-                                
-                                # Cập nhật thành công
-                                if log_id:
-                                    card_logger.update_grab_result(log_id, True)
-                                print(f"[CARD GRAB | {bot_name}] ✅ Grab thành công {max_num}♡ và gửi kt b", flush=True)
+                                print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
                             except Exception as e:
-                                # Cập nhật thất bại
-                                if log_id:
-                                    card_logger.update_grab_result(log_id, False)
-                                print(f"[CARD GRAB | {bot_name}] ❌ Lỗi grab: {e}", flush=True)
+                                print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
 
                         threading.Timer(delay, grab_action).start()
                         return True
-            
-            # Nếu không tìm thấy card phù hợp và đã log attempt, đánh dấu thất bại
-            if log_id and attempt == 6:
-                card_logger.update_grab_result(log_id, False)
             return False
         except Exception as e:
-            print(f"[CARD GRAB | {bot_name}] ❌ Lỗi đọc messages (attempt {attempt+1}): {e}", flush=True)
+            print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi đọc messages: {e}", flush=True)
     return False
 
 # --- LOGIC BOT ---
@@ -352,10 +226,7 @@ def handle_clan_drop(bot, msg, bot_num):
         return
     bot_id_str = f'main_{bot_num}'
     threshold = clan_settings.get("heart_thresholds", {}).get(bot_id_str, 50)
-    threading.Thread(target=_find_and_select_card, args=(
-        bot, clan_settings["channel_id"], msg["id"], threshold, bot_num, 
-        clan_settings["ktb_channel_id"], "clan", "Clan Drop"
-    ), daemon=True).start()
+    threading.Thread(target=_find_and_select_card, args=(bot, clan_settings["channel_id"], msg["id"], threshold, bot_num, clan_settings["ktb_channel_id"]), daemon=True).start()
 
 def handle_grab(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
@@ -369,20 +240,15 @@ def handle_grab(bot, msg, bot_num):
     if not auto_grab_enabled and not watermelon_grab_enabled: return
     
     last_drop_msg_id = msg["id"]
-    server_name = target_server.get('name', 'Unknown Server')
     
     def grab_logic_thread():
         if auto_grab_enabled and target_server.get('ktb_channel_id'):
             threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
-            threading.Thread(target=_find_and_select_card, args=(
-                bot, channel_id, last_drop_msg_id, threshold, bot_num, 
-                target_server.get('ktb_channel_id'), "normal", server_name
-            ), daemon=True).start()
+            threading.Thread(target=_find_and_select_card, args=(bot, channel_id, last_drop_msg_id, threshold, bot_num, target_server.get('ktb_channel_id')), daemon=True).start()
 
         if watermelon_grab_enabled:
             def check_for_watermelon_patiently():
-                bot_name = get_bot_name(bot_id_str)
-                print(f"[WATERMELON | {bot_name}] 🍉 Bắt đầu canh dưa (chờ 5 giây)...", flush=True)
+                print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu canh dưa (chờ 5 giây)...", flush=True)
                 time.sleep(5) 
                 try:
                     target_message = bot.getMessage(channel_id, last_drop_msg_id).json()[0]
@@ -390,28 +256,16 @@ def handle_grab(bot, msg, bot_num):
                     for reaction in reactions:
                         emoji_name = reaction.get('emoji', {}).get('name', '')
                         if '🍉' in emoji_name or 'watermelon' in emoji_name.lower() or 'dua' in emoji_name.lower():
-                            print(f"[WATERMELON | {bot_name}] 🎯 PHÁT HIỆN DƯA HẤU!", flush=True)
-                            
-                            # Log watermelon grab attempt
-                            log_id = card_logger.log_grab_attempt(
-                                bot_name=bot_name,
-                                bot_id=bot_id_str,
-                                hearts=999,  # Special value for watermelon
-                                grab_type="watermelon",
-                                server_name=server_name
-                            )
-                            
+                            print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU!", flush=True)
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, "🍉")
-                                card_logger.update_grab_result(log_id, True)
-                                print(f"[WATERMELON | {bot_name}] ✅ NHẶT DƯA THÀNH CÔNG!", flush=True)
+                                print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DỰA THÀNH CÔNG!", flush=True)
                             except Exception as e:
-                                card_logger.update_grab_result(log_id, False)
-                                print(f"[WATERMELON | {bot_name}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
+                                print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
                             return
-                    print(f"[WATERMELON | {bot_name}] 😞 Không tìm thấy dưa hấu sau khi chờ.", flush=True)
+                    print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau khi chờ.", flush=True)
                 except Exception as e:
-                    print(f"[WATERMELON | {bot_name}] ❌ Lỗi khi lấy tin nhắn để check dưa: {e}", flush=True)
+                    print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi lấy tin nhắn để check dưa: {e}", flush=True)
             threading.Thread(target=check_for_watermelon_patiently, daemon=True).start()
 
     threading.Thread(target=grab_logic_thread, daemon=True).start()
@@ -447,7 +301,6 @@ def handle_reboot_failure(bot_id):
     failure_count = settings.get('failure_count', 0) + 1
     settings['failure_count'] = failure_count
     
-    # Exponential Backoff
     backoff_multiplier = min(2 ** failure_count, 8)
     base_delay = settings.get('delay', 3600)
     next_try_delay = max(600, base_delay / backoff_multiplier) * backoff_multiplier
@@ -477,18 +330,15 @@ def safe_reboot_bot(bot_id):
         token = main_tokens[bot_index].strip()
         bot_name = get_bot_name(bot_id)
 
-        # Cleanup bot cũ
         print(f"[Safe Reboot] 🧹 Cleaning up old bot instance for {bot_name}", flush=True)
         bot_manager.remove_bot(bot_id)
 
-        # Exponential backoff delay
         settings = bot_states["reboot_settings"].get(bot_id, {})
         failure_count = settings.get('failure_count', 0)
         wait_time = random.uniform(20, 40) + min(failure_count * 30, 300)
         print(f"[Safe Reboot] ⏳ Chờ {wait_time:.1f}s để cleanup và tránh rate limit...", flush=True)
         time.sleep(wait_time)
 
-        # Tạo bot mới với logic kết nối đáng tin cậy hơn
         print(f"[Safe Reboot] 🏗️ Creating new bot instance for {bot_name}", flush=True)
         new_bot = create_bot(token, bot_identifier=(bot_index + 1), is_main=True)
         if not new_bot:
@@ -522,7 +372,6 @@ def auto_reboot_loop():
         try:
             now = time.time()
             
-            # Global rate limiting
             min_global_interval = 600
             if now - last_global_reboot_time < min_global_interval:
                 stop_events["reboot"].wait(60)
@@ -703,11 +552,61 @@ def create_bot(token, bot_identifier, is_main=False):
                     if resp.event.message:
                         msg = resp.parsed.auto()
                         author_id = msg.get("author", {}).get("id")
-                        content = msg.get("content", "").lower()
+                        content = msg.get("content", "")
                         
-                        if author_id == karuta_id and "dropping" in content:
+                        if author_id == karuta_id and "dropping" in content.lower():
                             handler = handle_clan_drop if msg.get("mentions") else handle_grab
                             safe_message_handler_wrapper(handler, bot, msg, bot_identifier)
+
+                        elif author_id == karuta_id and ("took the" in content.lower() or "fought off" in content.lower()):
+                            content_lower = content.lower()
+                            mentioned_bot_name = None
+                            for b_name in BOT_NAMES:
+                                if b_name.lower() in content_lower:
+                                    mentioned_bot_name = b_name
+                                    break
+                            
+                            if mentioned_bot_name:
+                                lines = content.split('\n')
+                                log_text = ""
+                                for line in lines:
+                                    line_lower = line.lower()
+                                    if "took the" in line_lower or "fought off" in line_lower:
+                                        log_text = line.strip().replace('<', '&lt;').replace('>', '&gt;')
+                                        break
+                                
+                                if log_text:
+                                    hearts = None
+                                    replied_to_id = msg.get('message_reference', {}).get('message_id')
+                                    if replied_to_id:
+                                        with pending_grabs_lock:
+                                            if replied_to_id in pending_grabs:
+                                                hearts = pending_grabs.pop(replied_to_id).get('hearts')
+                                                print(f"[Heart Logger] Matched success for msg {replied_to_id} with {hearts}♡", flush=True)
+
+                                    condition = "unknown"
+                                    log_lower = log_text.lower()
+                                    if "mint" in log_lower: condition = "mint"
+                                    elif "excellent" in log_lower: condition = "excellent"
+                                    elif "good" in log_lower: condition = "good"
+                                    elif "poor" in log_lower: condition = "poor"
+                                    
+                                    with grab_log_lock:
+                                        new_log = {
+                                            "timestamp": datetime.now().isoformat(),
+                                            "message": log_text,
+                                            "condition": condition,
+                                            "hearts": hearts
+                                        }
+                                        grab_logs.insert(0, new_log)
+                                        grab_logs[:] = grab_logs[:MAX_LOG_ENTRIES]
+                                    
+                                    with bot_stats_lock:
+                                        bot_stats.setdefault(mentioned_bot_name.lower(), {"successful_grabs": 0})
+                                        bot_stats[mentioned_bot_name.lower()]["successful_grabs"] += 1
+
+                                    print(f"[Harvest Log] 📝 Logged success: {log_text}", flush=True)
+
                 except Exception as e:
                     print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}", flush=True)
 
@@ -738,21 +637,19 @@ def create_bot(token, bot_identifier, is_main=False):
 
 # --- FLASK APP & GIAO DIỆN ---
 app = Flask(__name__)
-
-# Enhanced HTML Template with Card Grab Logging
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Shadow Network Control - Enhanced with Logging</title>
+    <title>Shadow Network Control - Enhanced</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Creepster&family=Orbitron:wght@400;700;900&family=Courier+Prime:wght@400;700&family=Nosifer&display=swap" rel="stylesheet">
     <style>
-        :root { --primary-bg: #0a0a0a; --secondary-bg: #1a1a1a; --panel-bg: #111111; --border-color: #333333; --blood-red: #8b0000; --dark-red: #550000; --bone-white: #f8f8ff; --necro-green: #228b22; --text-primary: #f0f0f0; --text-secondary: #cccccc; --warning-orange: #ff8c00; --success-green: #32cd32; }
+        :root { --primary-bg: #0a0a0a; --secondary-bg: #1a1a1a; --panel-bg: #111111; --border-color: #333333; --blood-red: #8b0000; --dark-red: #550000; --bone-white: #f8f8ff; --necro-green: #228b22; --text-primary: #f0f0f0; --text-secondary: #cccccc; --warning-orange: #ff8c00; --success-green: #32cd32; --heart-pink: #ff69b4; }
         body { font-family: 'Courier Prime', monospace; background: var(--primary-bg); color: var(--text-primary); margin: 0; padding: 0;}
-        .container { max-width: 1800px; margin: 0 auto; padding: 20px; }
+        .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
         .header { text-align: center; margin-bottom: 30px; padding: 20px; border-bottom: 2px solid var(--blood-red); position: relative; }
         .title { font-family: 'Nosifer', cursive; font-size: 3rem; color: var(--blood-red); }
         .subtitle { font-family: 'Orbitron', sans-serif; font-size: 1rem; color: var(--necro-green); margin-top: 10px; }
@@ -772,7 +669,7 @@ HTML_TEMPLATE = """
         .msg-status { text-align: center; color: var(--necro-green); padding: 12px; border: 1px dashed var(--border-color); border-radius: 4px; margin-bottom: 20px; display: none; }
         .msg-status.error { color: var(--blood-red); border-color: var(--blood-red); }
         .msg-status.warning { color: var(--warning-orange); border-color: var(--warning-orange); }
-        .status-panel, .global-settings-panel, .clan-drop-panel, .logging-panel { grid-column: 1 / -1; }
+        .status-panel, .global-settings-panel, .clan-drop-panel { grid-column: 1 / -1; }
         .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
         .status-row { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; }
         .timer-display { font-size: 1.2em; font-weight: 700; }
@@ -793,81 +690,16 @@ HTML_TEMPLATE = """
         .health-warning { background-color: var(--warning-orange); }
         .health-bad { background-color: var(--blood-red); }
         .system-stats { font-size: 0.9em; color: var(--text-secondary); margin-top: 10px; }
-        
-        /* Card Grab Logging Styles */
-        .logging-stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
-        .stat-card { background: rgba(0,0,0,0.4); padding: 15px; border-radius: 8px; text-align: center; }
-        .stat-card .stat-value { font-size: 2em; font-weight: 700; color: var(--necro-green); }
-        .stat-card .stat-label { font-size: 0.9em; color: var(--text-secondary); margin-top: 5px; }
-        
-        .log-container { background: #000; border: 1px solid var(--border-color); border-radius: 8px; max-height: 400px; overflow-y: auto; }
-        .log-entry { padding: 8px 12px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; font-size: 0.9em; }
-        .log-entry:last-child { border-bottom: none; }
-        .log-entry.success { border-left: 3px solid var(--success-green); }
-        .log-entry.failed { border-left: 3px solid var(--blood-red); }
-        .log-entry.pending { border-left: 3px solid var(--warning-orange); }
-        .log-entry.watermelon { border-left: 3px solid #32CD32; background: rgba(50, 205, 50, 0.1); }
-        
-        .log-time { color: var(--text-secondary); font-size: 0.8em; }
-        .log-bot { font-weight: 700; }
-        .log-hearts { color: var(--blood-red); font-weight: 700; }
-        .log-type { padding: 2px 6px; border-radius: 3px; font-size: 0.8em; text-transform: uppercase; }
-        .log-type.normal { background: var(--secondary-bg); }
-        .log-type.clan { background: var(--warning-orange); color: #000; }
-        .log-type.watermelon { background: #32CD32; color: #000; }
-        
-        .bot-stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; margin-top: 15px; }
-        .bot-stat-item { background: rgba(0,0,0,0.3); padding: 10px; border-radius: 6px; }
-        .bot-stat-name { font-weight: 700; margin-bottom: 5px; }
-        .bot-stat-details { font-size: 0.9em; color: var(--text-secondary); }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1 class="title">Shadow Network Control</h1>
-            <div class="subtitle">Enhanced Safe Reboot System + Card Grab Logging</div>
+            <div class="subtitle">Enhanced Safe Reboot System</div>
         </div>
         <div id="msg-status-container" class="msg-status"> <span id="msg-status-text"></span></div>
         <div class="main-grid">
-            
-            <!-- Card Grab Logging Panel -->
-            <div class="panel logging-panel">
-                <h2><i class="fas fa-chart-line"></i> Card Grab Statistics & Logs</h2>
-                <div class="logging-stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-value" id="total-grabs">0</div>
-                        <div class="stat-label">Total Grabs</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="total-hearts">0</div>
-                        <div class="stat-label">Total Hearts</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="success-rate">0%</div>
-                        <div class="stat-label">Success Rate</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="avg-hearts">0</div>
-                        <div class="stat-label">Avg Hearts</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-value" id="best-grab">0</div>
-                        <div class="stat-label">Best Grab</div>
-                    </div>
-                </div>
-                
-                <div class="server-sub-panel">
-                    <h3><i class="fas fa-robot"></i> Bot Performance</h3>
-                    <div id="bot-stats-container" class="bot-stats-grid"></div>
-                </div>
-                
-                <div class="server-sub-panel">
-                    <h3><i class="fas fa-history"></i> Recent Grab Logs (Last 50)</h3>
-                    <div id="grab-logs-container" class="log-container"></div>
-                </div>
-            </div>
-
             <div class="panel status-panel">
                 <h2><i class="fas fa-heartbeat"></i> System Status & Enhanced Reboot Control</h2>
                  <div class="status-row" style="margin-bottom: 20px;">
@@ -885,8 +717,14 @@ HTML_TEMPLATE = """
                          <div>⏱️ Min Reboot Interval: 10 minutes | Max Failures: 5 attempts</div>
                          <div>🎯 Reboot Strategy: Priority-based, one-at-a-time with cleanup delay</div>
                      </div>
-                     <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));">
-                         </div>
+                     <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));"></div>
+                </div>
+            </div>
+
+            <div class="panel global-settings-panel">
+                <h2><i class="fas fa-chart-bar"></i> Bot Performance Stats</h2>
+                <div id="bot-stats-content" style="display: flex; flex-direction: column; gap: 8px;">
+                    <div class="status-row"><span>Stats are loading...</span></div>
                 </div>
             </div>
 
@@ -924,8 +762,14 @@ HTML_TEMPLATE = """
                 <h2><i class="fas fa-globe"></i> Global Event Settings</h2>
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-seedling"></i> Watermelon Grab (All Servers)</h3>
-                    <div id="global-watermelon-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));">
-                    </div>
+                    <div id="global-watermelon-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));"></div>
+                </div>
+            </div>
+            
+            <div class="panel global-settings-panel" style="grid-column: 1 / -1;">
+                <h2><i class="fas fa-trophy"></i> Successful Harvest Log</h2>
+                <div id="harvest-log-content" style="max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 10px;">
+                    <div class="status-row"><span>Log is loading...</span></div>
                 </div>
             </div>
 
@@ -1018,70 +862,6 @@ HTML_TEMPLATE = """
             if (innerHTML !== undefined) element.innerHTML = innerHTML;
         }
 
-        function updateGrabLogs(logs) {
-            const container = document.getElementById('grab-logs-container');
-            if (!container || !logs) return;
-            
-            container.innerHTML = '';
-            logs.forEach(log => {
-                const logEntry = document.createElement('div');
-                let statusClass = 'pending';
-                let statusIcon = '⏳';
-                
-                if (log.success === true) {
-                    statusClass = 'success';
-                    statusIcon = '✅';
-                } else if (log.success === false) {
-                    statusClass = 'failed';
-                    statusIcon = '❌';
-                }
-                
-                if (log.grab_type === 'watermelon') {
-                    statusClass += ' watermelon';
-                    statusIcon = '🍉';
-                }
-                
-                logEntry.className = `log-entry ${statusClass}`;
-                logEntry.innerHTML = `
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <span>${statusIcon}</span>
-                        <span class="log-time">${log.datetime_str}</span>
-                        <span class="log-bot">${log.bot_name}</span>
-                        <span class="log-type ${log.grab_type}">${log.grab_type}</span>
-                        <span class="log-hearts">${log.hearts === 999 ? '🍉' : log.hearts + '♡'}</span>
-                    </div>
-                    <div style="font-size: 0.8em; color: var(--text-secondary);">
-                        ${log.server_name}
-                    </div>
-                `;
-                container.appendChild(logEntry);
-            });
-        }
-
-        function updateBotStats(botStats) {
-            const container = document.getElementById('bot-stats-container');
-            if (!container || !botStats) return;
-            
-            container.innerHTML = '';
-            Object.entries(botStats).forEach(([botId, stats]) => {
-                const botName = stats.bot_name || botId;
-                const successRate = stats.total_grabs > 0 ? ((stats.successful_grabs / stats.total_grabs) * 100).toFixed(1) : 0;
-                const avgHearts = stats.total_grabs > 0 ? (stats.total_hearts / stats.total_grabs).toFixed(1) : 0;
-                
-                const botStatItem = document.createElement('div');
-                botStatItem.className = 'bot-stat-item';
-                botStatItem.innerHTML = `
-                    <div class="bot-stat-name">${botName}</div>
-                    <div class="bot-stat-details">
-                        Grabs: ${stats.total_grabs} | Hearts: ${stats.total_hearts}<br>
-                        Success: ${stats.successful_grabs}/${stats.total_grabs} (${successRate}%)<br>
-                        Avg: ${avgHearts}♡ | Best: ${stats.best_grab}♡
-                    </div>
-                `;
-                container.appendChild(botStatItem);
-            });
-        }
-
         async function fetchStatus() {
             try {
                 const response = await fetch('/status');
@@ -1093,18 +873,6 @@ HTML_TEMPLATE = """
                 if (data.auto_clan_drop_status) {
                     updateElement(document.getElementById('clan-drop-timer'), { textContent: formatTime(data.auto_clan_drop_status.countdown) });
                     updateElement(document.getElementById('clan-drop-toggle-btn'), { textContent: data.auto_clan_drop_status.enabled ? 'DISABLE' : 'ENABLE' });
-                }
-
-                // Update grab logging stats
-                if (data.grab_stats) {
-                    updateElement(document.getElementById('total-grabs'), { textContent: data.grab_stats.total_grabs });
-                    updateElement(document.getElementById('total-hearts'), { textContent: data.grab_stats.total_hearts });
-                    updateElement(document.getElementById('success-rate'), { textContent: data.grab_stats.success_rate.toFixed(1) + '%' });
-                    updateElement(document.getElementById('avg-hearts'), { textContent: data.grab_stats.average_hearts.toFixed(1) });
-                    updateElement(document.getElementById('best-grab'), { textContent: data.grab_stats.best_grab });
-                    
-                    updateGrabLogs(data.grab_logs);
-                    updateBotStats(data.bot_grab_stats);
                 }
 
                 const botControlGrid = document.getElementById('bot-control-grid');
@@ -1195,7 +963,101 @@ HTML_TEMPLATE = """
             } catch (error) { console.error('Error fetching status:', error); }
         }
 
+        async function fetchLogs() {
+            try {
+                const response = await fetch('/api/grab_logs');
+                if (!response.ok) return;
+                const logs = await response.json();
+                const logContainer = document.getElementById('harvest-log-content');
+                
+                if (logs.length > 0) logContainer.innerHTML = ''; 
+                else {
+                    logContainer.innerHTML = '<div class="status-row"><span>No harvest activity recorded yet.</span></div>';
+                    return;
+                }
+
+                logs.forEach(log => {
+                    const logEntry = document.createElement('div');
+                    logEntry.className = 'status-row';
+                    logEntry.style.alignItems = 'flex-start';
+                    
+                    const timestampSpan = document.createElement('span');
+                    timestampSpan.style.cssText = 'color: var(--text-secondary); flex-shrink: 0; margin-right: 15px;';
+                    timestampSpan.textContent = `[${new Date(log.timestamp).toLocaleTimeString('en-GB')}]`;
+                    logEntry.appendChild(timestampSpan);
+                    
+                    if (log.hearts) {
+                        const heartSpan = document.createElement('span');
+                        heartSpan.style.cssText = 'color: var(--heart-pink); font-weight: bold; margin-right: 8px;';
+                        heartSpan.textContent = `♡${log.hearts}`;
+                        logEntry.appendChild(heartSpan);
+                    }
+                    
+                    const messageSpan = document.createElement('span');
+                    let conditionColor = 'var(--success-green)';
+                    switch (log.condition) {
+                        case 'mint': conditionColor = '#00ff7f'; break;
+                        case 'excellent': conditionColor = '#32cd32'; break;
+                        case 'good': conditionColor = '#ffd700'; break;
+                        case 'poor': conditionColor = '#ff6347'; break;
+                    }
+                    messageSpan.style.color = conditionColor;
+                    messageSpan.style.wordBreak = 'break-all';
+                    messageSpan.textContent = log.message;
+                    logEntry.appendChild(messageSpan);
+
+                    logContainer.appendChild(logEntry);
+                });
+            } catch (error) {
+                console.error('Error fetching harvest log:', error);
+                if(document.getElementById('harvest-log-content')) document.getElementById('harvest-log-content').innerHTML = '<div class="status-row"><span>Error loading log data.</span></div>';
+            }
+        }
+        
+        async function fetchStats() {
+            try {
+                const response = await fetch('/api/bot_stats');
+                if (!response.ok) return;
+                const stats = await response.json();
+                const statsContainer = document.getElementById('bot-stats-content');
+                statsContainer.innerHTML = '';
+
+                let totalGrabs = 0;
+                const sortedBots = Object.entries(stats).sort((a, b) => b[1].successful_grabs - a[1].successful_grabs);
+
+                for (const [botName, botData] of sortedBots) {
+                    const grabs = botData.successful_grabs || 0;
+                    totalGrabs += grabs;
+
+                    const statEntry = document.createElement('div');
+                    statEntry.className = 'status-row';
+                    statEntry.innerHTML = `
+                        <span style="font-weight: bold; text-transform: capitalize;">${botName}</span>
+                        <span><i class="fas fa-trophy" style="color: var(--necro-green);"></i> ${grabs} Grabs</span>
+                    `;
+                    statsContainer.appendChild(statEntry);
+                }
+                
+                const totalEntry = document.createElement('div');
+                totalEntry.className = 'status-row';
+                totalEntry.style.cssText = 'border-top: 1px solid var(--border-color); margin-top: 10px; padding-top: 10px;';
+                totalEntry.innerHTML = `
+                    <span style="font-weight: bold; color: var(--bone-white);">TOTAL</span>
+                    <span style="font-weight: bold; color: var(--bone-white);">${totalGrabs} Grabs</span>
+                `;
+                statsContainer.appendChild(totalEntry);
+
+            } catch (error) {
+                console.error('Error fetching bot stats:', error);
+                 if(document.getElementById('bot-stats-content')) document.getElementById('bot-stats-content').innerHTML = '<div class="status-row"><span>Error loading stats.</span></div>';
+            }
+        }
+
         setInterval(fetchStatus, 1000);
+        setInterval(fetchLogs, 5000);
+        setInterval(fetchStats, 10000);
+        fetchLogs();
+        fetchStats();
 
         document.querySelector('.container').addEventListener('click', e => {
             const button = e.target.closest('button');
@@ -1252,6 +1114,16 @@ def index():
     main_bots_info = [{"id": int(bot_id.split('_')[1]), "name": get_bot_name(bot_id)} for bot_id, _ in bot_manager.get_main_bots_info()]
     main_bots_info.sort(key=lambda x: x['id'])
     return render_template_string(HTML_TEMPLATE, servers=sorted(servers, key=lambda s: s.get('name', '')), main_bots_info=main_bots_info, auto_clan_drop=bot_states["auto_clan_drop"])
+
+@app.route("/api/grab_logs")
+def get_grab_logs():
+    with grab_log_lock:
+        return jsonify(grab_logs)
+
+@app.route("/api/bot_stats")
+def get_bot_stats():
+    with bot_stats_lock:
+        return jsonify(bot_stats)
 
 @app.route("/api/clan_drop_toggle", methods=['POST'])
 def api_clan_drop_toggle():
@@ -1409,35 +1281,26 @@ def status_endpoint():
     for bot_id, settings in reboot_settings_copy.items():
         settings['countdown'] = max(0, settings.get('next_reboot_time', 0) - now) if settings.get('enabled') else 0
 
-    # Get card grab logging data
-    grab_stats = card_logger.get_summary_stats()
-    grab_logs = card_logger.get_recent_logs(50)
-    bot_grab_stats = card_logger.get_bot_stats()
-    
-    # Add bot names to bot grab stats
-    for bot_id in bot_grab_stats:
-        bot_grab_stats[bot_id]['bot_name'] = get_bot_name(bot_id)
-
     return jsonify({
         'bot_reboot_settings': reboot_settings_copy,
         'bot_statuses': bot_statuses,
         'server_start_time': server_start_time,
         'servers': servers,
         'watermelon_grab_states': bot_states["watermelon_grab"],
-        'auto_clan_drop_status': clan_drop_status,
-        'grab_stats': grab_stats,
-        'grab_logs': grab_logs,
-        'bot_grab_stats': bot_grab_stats
+        'auto_clan_drop_status': clan_drop_status
     })
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V3 Enhanced with Card Grab Logging Starting...", flush=True)
+    print("🚀 Shadow Network Control - V3 Stable Version Starting...", flush=True)
     load_settings()
 
     print("🔌 Initializing bots using Bot Manager...", flush=True)
     
-    # Khởi tạo bot chính
+    with bot_stats_lock:
+        for name in BOT_NAMES:
+            bot_stats[name.lower()] = {"successful_grabs": 0}
+
     for i, token in enumerate(t for t in main_tokens if t.strip()):
         bot_num = i + 1
         bot_id = f"main_{bot_num}"
@@ -1451,7 +1314,6 @@ if __name__ == "__main__":
         bot_states["reboot_settings"].setdefault(bot_id, {'enabled': False, 'delay': 3600, 'next_reboot_time': 0, 'failure_count': 0})
         bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
 
-    # Khởi tạo bot phụ
     for i, token in enumerate(t for t in tokens if t.strip()):
         bot_id = f"sub_{i}"
         bot = create_bot(token.strip(), bot_identifier=i, is_main=False)
@@ -1473,5 +1335,4 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"🌐 Web Server running at http://0.0.0.0:{port}", flush=True)
-    print("📊 Card Grab Logging System: ACTIVE", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
