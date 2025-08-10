@@ -1,4 +1,4 @@
-# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - TÍCH HỢP BOT MANAGER & CẢI TIẾN AN TOÀN VÀ ĐỘ ỔN ĐỊNH
+# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - KẾT HỢP TỪ 3 ĐOẠN MÃ
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -22,12 +22,14 @@ bot_states = {
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
 
-# --- QUẢN LÝ BOT THREAD-SAFE (IMPROVED) ---
+# --- QUẢN LÝ BOT THREAD-SAFE (IMPROVED WITH LOGGING) ---
 class ThreadSafeBotManager:
     def __init__(self):
         self._bots = {}
         self._rebooting = set()
         self._lock = threading.RLock()
+        self._grab_logs = []  # Log nhặt thẻ thành công
+        self._max_logs = 50
 
     def add_bot(self, bot_id, bot_instance):
         with self._lock:
@@ -45,7 +47,6 @@ class ThreadSafeBotManager:
                 except Exception as e:
                     print(f"[Bot Manager] ⚠️ Error closing gateway for {bot_id}: {e}", flush=True)
                 print(f"[Bot Manager] 🗑️ Removed bot {bot_id}", flush=True)
-
 
     def get_bot(self, bot_id):
         with self._lock:
@@ -77,6 +78,33 @@ class ThreadSafeBotManager:
     def end_reboot(self, bot_id):
         with self._lock:
             self._rebooting.discard(bot_id)
+
+    def add_grab_success_log(self, bot_name, card_name, hearts, timestamp=None):
+        """Thêm log khi nhặt thẻ thành công"""
+        with self._lock:
+            if timestamp is None:
+                timestamp = time.time()
+            
+            log_entry = {
+                'timestamp': timestamp,
+                'bot_name': bot_name,
+                'card_name': card_name,
+                'hearts': hearts,
+                'formatted_time': datetime.fromtimestamp(timestamp).strftime('%H:%M:%S')
+            }
+            
+            self._grab_logs.insert(0, log_entry)  # Thêm vào đầu list
+            
+            # Giới hạn số lượng log
+            if len(self._grab_logs) > self._max_logs:
+                self._grab_logs = self._grab_logs[:self._max_logs]
+            
+            print(f"[GRAB SUCCESS] 🎯 {bot_name} đã nhặt {card_name} với {hearts}♡", flush=True)
+
+    def get_grab_logs(self):
+        """Lấy danh sách log nhặt thẻ"""
+        with self._lock:
+            return self._grab_logs.copy()
 
 bot_manager = ThreadSafeBotManager()
 
@@ -146,7 +174,7 @@ def get_bot_name(bot_id_str):
         b_type, b_index = parts[0], int(parts[1])
         if b_type == 'main':
             return BOT_NAMES[b_index - 1] if 0 < b_index <= len(BOT_NAMES) else f"MAIN_{b_index}"
-        return acc_names[b_index] if b_index < len(acc_names) else f"SUB_{b_index+1}"
+        return acc_names[b_index - 1] if 0 < b_index <= len(acc_names) else f"SUB_{b_index}"
     except (IndexError, ValueError):
         return bot_id_str.upper()
 
@@ -159,10 +187,69 @@ def safe_message_handler_wrapper(handler_func, bot, msg, *args):
         print(f"[Message Handler] 🐛 Traceback: {traceback.format_exc()}", flush=True)
         return None
 
-# --- LOGIC GRAB CARD ---
+def check_grab_result(bot, channel_id, drop_msg_id, bot_name, selected_card):
+    """Kiểm tra kết quả nhặt thẻ và log nếu thành công"""
+    try:
+        # Đợi Karuta phản hồi
+        time.sleep(2)
+        messages = bot.getMessages(channel_id, num=10).json()
+        
+        if not isinstance(messages, list):
+            return False
+            
+        # Tìm tin nhắn từ Karuta sau khi drop
+        for msg in messages:
+            if msg.get("author", {}).get("id") != karuta_id:
+                continue
+                
+            msg_timestamp = int(msg.get("id", 0))
+            drop_timestamp = int(drop_msg_id)
+            
+            # Chỉ check tin nhắn sau khi drop
+            if msg_timestamp <= drop_timestamp:
+                continue
+                
+            content = msg.get("content", "").lower()
+            
+            # Kiểm tra các từ khóa thành công: "fought off", "took the"
+            success_keywords = ["fought off", "took the"]
+            
+            if any(keyword in content for keyword in success_keywords):
+                # Tìm tên thẻ trong tin nhắn
+                grabbed_card_name = selected_card['name']
+                
+                # Thử extract tên thẻ từ tin nhắn Karuta nếu có
+                if "took the" in content:
+                    # Pattern: "took the [CardName] card"
+                    card_match = re.search(r"took the (.+?) card", content)
+                    if card_match:
+                        grabbed_card_name = card_match.group(1).strip()
+                elif "fought off" in content:
+                    # Thử extract từ "fought off" message
+                    card_match = re.search(r"and took the (.+?) card", content)
+                    if card_match:
+                        grabbed_card_name = card_match.group(1).strip()
+                
+                # Log thành công
+                bot_manager.add_grab_success_log(
+                    bot_name=bot_name,
+                    card_name=grabbed_card_name,
+                    hearts=selected_card['hearts']
+                )
+                return True
+                
+        return False
+        
+    except Exception as e:
+        print(f"[GRAB CHECK | {bot_name}] ❌ Lỗi kiểm tra kết quả: {e}", flush=True)
+        return False
+
+# --- LOGIC GRAB CARD (UPDATED WITH LOGGING) ---
 def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id):
-    """Hàm chung để tìm và chọn card dựa trên số heart."""
-    for _ in range(7):
+    """Hàm chung để tìm và chọn card dựa trên số heart với enhanced logging."""
+    bot_name = get_bot_name(f'main_{bot_num}')
+    
+    for attempt in range(7):
         time.sleep(0.5)
         try:
             messages = bot.getMessages(channel_id, num=5).json()
@@ -174,34 +261,62 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                     desc = embeds[0].get("description", "") if embeds else ""
                     if '♡' not in desc: continue
 
+                    # Parse card info và hearts
                     lines = desc.split('\n')[:3]
-                    heart_numbers = [int(re.search(r'♡(\d+)', line).group(1)) if re.search(r'♡(\d+)', line) else 0 for line in lines]
+                    card_info = []
+                    heart_numbers = []
+                    
+                    for i, line in enumerate(lines):
+                        heart_match = re.search(r'♡(\d+)', line)
+                        if heart_match:
+                            hearts = int(heart_match.group(1))
+                            heart_numbers.append(hearts)
+                            # Extract card name (phần trước dấu ♡)
+                            card_name_part = line.split('♡')[0].strip()
+                            # Loại bỏ số thứ tự ở đầu (1️⃣, 2️⃣, 3️⃣)
+                            card_name_part = re.sub(r'^[123]️⃣\s*', '', card_name_part)
+                            card_info.append({
+                                'name': card_name_part,
+                                'hearts': hearts,
+                                'position': i + 1
+                            })
+                        else:
+                            heart_numbers.append(0)
+                            card_info.append({'name': 'Unknown', 'hearts': 0, 'position': i + 1})
+
                     if not any(heart_numbers): break
 
-                    max_num = max(heart_numbers)
-                    if max_num >= heart_threshold:
-                        max_index = heart_numbers.index(max_num)
+                    max_hearts = max(heart_numbers)
+                    if max_hearts >= heart_threshold:
+                        max_index = heart_numbers.index(max_hearts)
+                        selected_card = card_info[max_index]
+                        
                         delays = {1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]}
                         bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
                         emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
                         delay = bot_delays[max_index]
                         
-                        print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
+                        print(f"[CARD GRAB | {bot_name}] 🎯 Chọn {selected_card['name']} ({selected_card['hearts']}♡) -> {emoji} sau {delay}s", flush=True)
                         
                         def grab_action():
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
                                 time.sleep(1.2)
-                                if ktb_channel_id: bot.sendMessage(ktb_channel_id, "kt b")
-                                print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
+                                if ktb_channel_id: 
+                                    bot.sendMessage(ktb_channel_id, "kt b")
+                                
+                                # Chờ một chút rồi check kết quả
+                                time.sleep(3)
+                                check_grab_result(bot, channel_id, last_drop_msg_id, bot_name, selected_card)
+                                
                             except Exception as e:
-                                print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
+                                print(f"[CARD GRAB | {bot_name}] ❌ Lỗi grab: {e}", flush=True)
 
                         threading.Timer(delay, grab_action).start()
                         return True
             return False
         except Exception as e:
-            print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi đọc messages: {e}", flush=True)
+            print(f"[CARD GRAB | {bot_name}] ❌ Lỗi đọc messages (attempt {attempt+1}): {e}", flush=True)
     return False
 
 # --- LOGIC BOT ---
@@ -244,7 +359,7 @@ def handle_grab(bot, msg, bot_num):
                             print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU!", flush=True)
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, "🍉")
-                                print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DỰA THÀNH CÔNG!", flush=True)
+                                print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DƯA THÀNH CÔNG!", flush=True)
                             except Exception as e:
                                 print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
                             return
@@ -308,6 +423,8 @@ def safe_reboot_bot(bot_id):
     try:
         match = re.match(r"main_(\d+)", bot_id)
         if not match:
+             # For simplicity, we assume only main bots are rebootable this way.
+             # You could expand this to handle sub_bots if needed.
             raise ValueError("Định dạng bot_id không hợp lệ cho reboot.")
         
         bot_index = int(match.group(1)) - 1
@@ -583,14 +700,14 @@ def create_bot(token, bot_identifier, is_main=False):
 
 # --- FLASK APP & GIAO DIỆN ---
 app = Flask(__name__)
-# Giao diện HTML giữ nguyên như file gốc, không thay đổi
+
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Shadow Network Control - Enhanced</title>
+    <title>Shadow Network Control - Enhanced with Grab Logging</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Creepster&family=Orbitron:wght@400;700;900&family=Courier+Prime:wght@400;700&family=Nosifer&display=swap" rel="stylesheet">
     <style>
@@ -616,7 +733,7 @@ HTML_TEMPLATE = """
         .msg-status { text-align: center; color: var(--necro-green); padding: 12px; border: 1px dashed var(--border-color); border-radius: 4px; margin-bottom: 20px; display: none; }
         .msg-status.error { color: var(--blood-red); border-color: var(--blood-red); }
         .msg-status.warning { color: var(--warning-orange); border-color: var(--warning-orange); }
-        .status-panel, .global-settings-panel, .clan-drop-panel { grid-column: 1 / -1; }
+        .status-panel, .global-settings-panel, .clan-drop-panel, .grab-logs-panel { grid-column: 1 / -1; }
         .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
         .status-row { display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; }
         .timer-display { font-size: 1.2em; font-weight: 700; }
@@ -637,19 +754,107 @@ HTML_TEMPLATE = """
         .health-warning { background-color: var(--warning-orange); }
         .health-bad { background-color: var(--blood-red); }
         .system-stats { font-size: 0.9em; color: var(--text-secondary); margin-top: 10px; }
+        
+        /* Grab Logs Styles */
+        .grab-logs-panel { 
+            max-height: 400px; 
+            overflow-y: auto; 
+        }
+        .grab-log-item { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            padding: 8px 12px; 
+            margin-bottom: 5px; 
+            background: rgba(0, 50, 0, 0.2); 
+            border-left: 3px solid var(--success-green); 
+            border-radius: 4px; 
+        }
+        .grab-log-time { 
+            font-family: 'Orbitron', monospace; 
+            font-weight: 700; 
+            color: var(--necro-green); 
+            min-width: 70px;
+        }
+        .grab-log-bot { 
+            font-weight: 700; 
+            color: var(--warning-orange); 
+            min-width: 80px;
+            text-align: center;
+        }
+        .grab-log-card { 
+            color: var(--bone-white); 
+            flex-grow: 1; 
+            text-align: center; 
+            padding: 0 10px;
+        }
+        .grab-log-hearts { 
+            color: var(--blood-red); 
+            font-weight: 700; 
+            min-width: 50px;
+            text-align: right;
+        }
+        .no-logs-message { 
+            text-align: center; 
+            color: var(--text-secondary); 
+            padding: 20px; 
+            font-style: italic; 
+        }
+        
+        .bot-control-item {
+            background: rgba(0,0,0,0.4);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+        }
+        
+        .bot-control-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        
+        .bot-control-name {
+            font-weight: 700;
+            color: var(--bone-white);
+        }
+        
+        .bot-control-actions {
+            display: flex;
+            gap: 5px;
+            align-items: center;
+        }
+        
+        .bot-control-details {
+            font-size: 0.9em;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1 class="title">Shadow Network Control</h1>
-            <div class="subtitle">Enhanced Safe Reboot System</div>
+            <div class="subtitle">Enhanced Safe Reboot System + Grab Success Logging</div>
         </div>
-        <div id="msg-status-container" class="msg-status"> <span id="msg-status-text"></span></div>
+        <div id="msg-status-container" class="msg-status"> 
+            <span id="msg-status-text"></span>
+        </div>
+        
         <div class="main-grid">
+            <div class="panel grab-logs-panel">
+                <h2><i class="fas fa-trophy"></i> Grab Success Logs</h2>
+                <div id="grab-logs-container">
+                    <div class="no-logs-message">Chưa có log nhặt thẻ thành công nào...</div>
+                </div>
+            </div>
+
             <div class="panel status-panel">
                 <h2><i class="fas fa-heartbeat"></i> System Status & Enhanced Reboot Control</h2>
-                 <div class="status-row" style="margin-bottom: 20px;">
+                <div class="status-row" style="margin-bottom: 20px;">
                     <span><i class="fas fa-server"></i> System Uptime</span>
                     <div><span id="uptime-timer" class="timer-display">--:--:--</span></div>
                 </div>
@@ -658,43 +863,44 @@ HTML_TEMPLATE = """
                     <div><span id="reboot-status" class="timer-display">ACTIVE</span></div>
                 </div>
                 <div class="server-sub-panel">
-                     <h3><i class="fas fa-robot"></i> Enhanced Bot Control Matrix</h3>
-                     <div class="system-stats">
-                         <div>🔒 Safety Features: Health Checks, Exponential Backoff, Rate Limiting</div>
-                         <div>⏱️ Min Reboot Interval: 10 minutes | Max Failures: 5 attempts</div>
-                         <div>🎯 Reboot Strategy: Priority-based, one-at-a-time with cleanup delay</div>
-                     </div>
-                     <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));">
-                         </div>
+                    <h3><i class="fas fa-robot"></i> Enhanced Bot Control Matrix</h3>
+                    <div class="system-stats">
+                        <div>🔒 Safety Features: Health Checks, Exponential Backoff, Rate Limiting</div>
+                        <div>⏱️ Min Reboot Interval: 10 minutes | Max Failures: 5 attempts</div>
+                        <div>🎯 Reboot Strategy: Priority-based, one-at-a-time with cleanup delay</div>
+                        <div>🎯 New: Auto-detect grab success with "fought off" & "took the"</div>
+                    </div>
+                    <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));">
+                    </div>
                 </div>
             </div>
 
             <div class="panel clan-drop-panel">
                 <h2><i class="fas fa-users"></i> Clan Auto Drop</h2>
                 <div class="status-grid" style="grid-template-columns: 1fr;">
-                     <div class="status-row">
+                    <div class="status-row">
                         <span><i class="fas fa-hourglass-half"></i> Next Drop Cycle</span>
                         <div class="flex-row">
                             <span id="clan-drop-timer" class="timer-display">--:--:--</span>
-                            <button type="button" id="clan-drop-toggle-btn" class="btn btn-small">{{ 'DISABLE' if auto_clan_drop.enabled else 'ENABLE' }}</button>
+                            <button type="button" id="clan-drop-toggle-btn" class="btn btn-small">ENABLE</button>
                         </div>
                     </div>
                 </div>
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-cogs"></i> Configuration</h3>
-                    <div class="input-group"><label>Drop Channel ID</label><input type="text" id="clan-drop-channel-id" value="{{ auto_clan_drop.channel_id or '' }}"></div>
-                    <div class="input-group"><label>KTB Channel ID</label><input type="text" id="clan-drop-ktb-channel-id" value="{{ auto_clan_drop.ktb_channel_id or '' }}"></div>
+                    <div class="input-group">
+                        <label>Drop Channel ID</label>
+                        <input type="text" id="clan-drop-channel-id" value="">
+                    </div>
+                    <div class="input-group">
+                        <label>KTB Channel ID</label>
+                        <input type="text" id="clan-drop-ktb-channel-id" value="">
+                    </div>
                 </div>
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-crosshairs"></i> Soul Harvest (Clan Drop)</h3>
-                    {% for bot in main_bots_info %}
-                    <div class="grab-section">
-                        <h3>{{ bot.name }}</h3>
-                        <div class="input-group">
-                            <input type="number" class="clan-drop-threshold" data-node="main_{{ bot.id }}" value="{{ auto_clan_drop.heart_thresholds[('main_' + bot.id|string)]|default(50) }}" min="0">
+                    <div id="clan-drop-thresholds-container">
                         </div>
-                    </div>
-                    {% endfor %}
                 </div>
                 <button type="button" id="clan-drop-save-btn" class="btn" style="margin-top: 20px;">Save Clan Drop Settings</button>
             </div>
@@ -708,461 +914,940 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            {% for server in servers %}
-            <div class="panel server-panel" data-server-id="{{ server.id }}">
-                <button class="btn-delete-server" title="Delete Server"><i class="fas fa-times"></i></button>
-                <h2><i class="fas fa-server"></i> {{ server.name }}</h2>
-                <div class="server-sub-panel">
-                    <h3><i class="fas fa-cogs"></i> Channel Config</h3>
-                    <div class="input-group"><label>Main Channel ID</label><input type="text" class="channel-input" data-field="main_channel_id" value="{{ server.main_channel_id or '' }}"></div>
-                    <div class="input-group"><label>KTB Channel ID</label><input type="text" class="channel-input" data-field="ktb_channel_id" value="{{ server.ktb_channel_id or '' }}"></div>
-                    <div class="input-group"><label>Spam Channel ID</label><input type="text" class="channel-input" data-field="spam_channel_id" value="{{ server.spam_channel_id or '' }}"></div>
+            <div id="servers-container">
                 </div>
-                <div class="server-sub-panel">
-                    <h3><i class="fas fa-crosshairs"></i> Soul Harvest (Card Grab)</h3>
-                    {% for bot in main_bots_info %}
-                    <div class="grab-section">
-                        <h3>{{ bot.name }}</h3>
-                        <div class="input-group">
-                            <input type="number" class="harvest-threshold" data-node="{{ bot.id }}" value="{{ server['heart_threshold_' + bot.id|string] or 50 }}" min="0">
-                            <button type="button" class="btn harvest-toggle" data-node="{{ bot.id }}">
-                                {{ 'DISABLE' if server['auto_grab_enabled_' + bot.id|string] else 'ENABLE' }}
-                            </button>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-                <div class="server-sub-panel">
-                    <h3><i class="fas fa-paper-plane"></i> Auto Broadcast</h3>
-                    <div class="input-group"><label>Message</label><textarea class="spam-message" rows="2">{{ server.spam_message or '' }}</textarea></div>
-                    <div class="input-group">
-                         <label>Delay (s)</label>
-                         <input type="number" class="spam-delay" value="{{ server.spam_delay or 10 }}">
-                         <span class="timer-display spam-timer">--:--:--</span>
-                    </div>
-                    <button type="button" class="btn broadcast-toggle">{{ 'DISABLE' if server.spam_enabled else 'ENABLE' }}</button>
-                </div>
-            </div>
-            {% endfor %}
 
             <div class="panel add-server-btn" id="add-server-btn">
                 <i class="fas fa-plus"></i>
             </div>
         </div>
     </div>
+
 <script>
-    document.addEventListener('DOMContentLoaded', function () {
-        const msgStatusContainer = document.getElementById('msg-status-container');
-        const msgStatusText = document.getElementById('msg-status-text');
+document.addEventListener('DOMContentLoaded', function () {
+    const msgStatusContainer = document.getElementById('msg-status-container');
+    const msgStatusText = document.getElementById('msg-status-text');
 
-        function showStatusMessage(message, type = 'success') {
-            if (!message) return;
-            msgStatusText.textContent = message;
-            msgStatusContainer.className = `msg-status ${type === 'error' ? 'error' : type === 'warning' ? 'warning' : ''}`;
-            msgStatusContainer.style.display = 'block';
-            setTimeout(() => { msgStatusContainer.style.display = 'none'; }, 4000);
-        }
+    function showStatusMessage(message, type = 'success') {
+        if (!message) return;
+        msgStatusText.textContent = message;
+        msgStatusContainer.className = `msg-status ${type === 'error' ? 'error' : type === 'warning' ? 'warning' : ''}`;
+        msgStatusContainer.style.display = 'block';
+        setTimeout(() => { msgStatusContainer.style.display = 'none'; }, 4000);
+    }
 
-        async function postData(url = '', data = {}) {
-            try {
-                const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
-                const result = await response.json();
-                showStatusMessage(result.message, result.status !== 'success' ? 'error' : 'success');
-                if (result.status === 'success' && url !== '/api/save_settings') {
-                    fetch('/api/save_settings', { method: 'POST' });
-                    if (result.reload) { setTimeout(() => window.location.reload(), 500); }
+    async function postData(url = '', data = {}) {
+        try {
+            const response = await fetch(url, { 
+                method: 'POST', 
+                headers: { 'Content-Type': 'application/json' }, 
+                body: JSON.stringify(data) 
+            });
+            const result = await response.json();
+            showStatusMessage(result.message, result.status !== 'success' ? 'error' : 'success');
+            if (result.status === 'success' && url !== '/api/save_settings') {
+                fetch('/api/save_settings', { method: 'POST' });
+                if (result.reload) { 
+                    setTimeout(() => window.location.reload(), 500); 
                 }
-                setTimeout(fetchStatus, 500);
-                return result;
-            } catch (error) {
-                console.error('Error:', error);
-                showStatusMessage('Server communication error.', 'error');
             }
+            setTimeout(fetchStatus, 500);
+            return result;
+        } catch (error) {
+            console.error('Error:', error);
+            showStatusMessage('Server communication error.', 'error');
         }
+    }
 
-        function formatTime(seconds) {
-            if (isNaN(seconds) || seconds < 0) return "--:--:--";
-            seconds = Math.floor(seconds);
-            const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
-            const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
-            const s = (seconds % 60).toString().padStart(2, '0');
-            return `${h}:${m}:${s}`;
+    function formatTime(seconds) {
+        if (isNaN(seconds) || seconds < 0) return "--:--:--";
+        seconds = Math.floor(seconds);
+        const h = Math.floor(seconds / 3600).toString().padStart(2, '0');
+        const m = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+        const s = (seconds % 60).toString().padStart(2, '0');
+        return `${h}:${m}:${s}`;
+    }
+
+    function updateElement(element, { textContent, className, value, innerHTML }) {
+        if (!element) return;
+        if (textContent !== undefined) element.textContent = textContent;
+        if (className !== undefined) element.className = className;
+        if (value !== undefined) element.value = value;
+        if (innerHTML !== undefined) element.innerHTML = innerHTML;
+    }
+
+    function updateGrabLogs(logs) {
+        const container = document.getElementById('grab-logs-container');
+        if (!container) return;
+        
+        if (!logs || logs.length === 0) {
+            container.innerHTML = '<div class="no-logs-message">Chưa có log nhặt thẻ thành công nào...</div>';
+            return;
         }
+        
+        let logsHtml = '';
+        logs.forEach(log => {
+            logsHtml += `
+                <div class="grab-log-item">
+                    <span class="grab-log-time">${log.formatted_time}</span>
+                    <span class="grab-log-bot">${log.bot_name}</span>
+                    <span class="grab-log-card">${log.card_name}</span>
+                    <span class="grab-log-hearts">${log.hearts}♡</span>
+                </div>
+            `;
+        });
+        
+        container.innerHTML = logsHtml;
+    }
 
-        function updateElement(element, { textContent, className, value, innerHTML }) {
-            if (!element) return;
-            if (textContent !== undefined) element.textContent = textContent;
-            if (className !== undefined) element.className = className;
-            if (value !== undefined) element.value = value;
-            if (innerHTML !== undefined) element.innerHTML = innerHTML;
-        }
+    function updateBotControlGrid(botStatuses) {
+        const grid = document.getElementById('bot-control-grid');
+        if (!grid || !botStatuses) return;
 
-        async function fetchStatus() {
-            try {
-                const response = await fetch('/status');
-                const data = await response.json();
+        const allBots = [...botStatuses.main_bots, ...botStatuses.sub_accounts];
+        
+        let gridHtml = '';
+        allBots.forEach(bot => {
+            const healthClass = bot.consecutive_failures === 0 ? 'health-good' : 
+                                  bot.consecutive_failures < 3 ? 'health-warning' : 'health-bad';
+            
+            const activeText = bot.is_active ? 'RISE' : 'REST';
+            const activeClass = bot.is_active ? 'btn-rise' : 'btn-rest';
+            
+            const rebootEnabled = bot.reboot_enabled ? 'ON' : 'OFF';
+            const rebootClass = bot.reboot_enabled ? 'btn-rise' : 'btn-rest';
+            
+            gridHtml += `
+                <div class="bot-control-item">
+                    <div class="bot-control-header">
+                        <span class="bot-control-name">${bot.name}</span>
+                        <span class="health-indicator ${healthClass}"></span>
+                    </div>
+                    <div class="bot-control-actions">
+                        <button class="btn-toggle-state ${activeClass}" data-bot-id="${bot.reboot_id}" data-action="toggle_active">
+                            ${activeText}
+                        </button>
+                        <button class="btn-toggle-state ${rebootClass}" data-bot-id="${bot.reboot_id}" data-action="toggle_reboot">
+                            RBT: ${rebootEnabled}
+                        </button>
+                        <button class="btn-toggle-state btn-warning" data-bot-id="${bot.reboot_id}" data-action="force_reboot">
+                            FORCE
+                        </button>
+                    </div>
+                    <div class="bot-control-details">
+                        Failures: ${bot.consecutive_failures} | Next Reboot: ${bot.next_reboot}
+                    </div>
+                </div>
+            `;
+        });
+        
+        grid.innerHTML = gridHtml;
+    }
 
-                const serverUptimeSeconds = (Date.now() / 1000) - data.server_start_time;
-                updateElement(document.getElementById('uptime-timer'), { textContent: formatTime(serverUptimeSeconds) });
+    function updateWatermelonGrid(botStatuses) {
+        const grid = document.getElementById('global-watermelon-grid');
+        if (!grid || !botStatuses) return;
 
-                if (data.auto_clan_drop_status) {
-                    updateElement(document.getElementById('clan-drop-timer'), { textContent: formatTime(data.auto_clan_drop_status.countdown) });
-                    updateElement(document.getElementById('clan-drop-toggle-btn'), { textContent: data.auto_clan_drop_status.enabled ? 'DISABLE' : 'ENABLE' });
-                }
+        let gridHtml = '';
+        botStatuses.main_bots.forEach(bot => {
+            const watermelonEnabled = bot.watermelon_enabled ? 'ON' : 'OFF';
+            const watermelonClass = bot.watermelon_enabled ? 'btn-rise' : 'btn-rest';
+            
+            gridHtml += `
+                <div class="bot-status-item">
+                    <span>${bot.name}</span>
+                    <button class="btn-toggle-state ${watermelonClass}" data-bot-id="${bot.reboot_id}" data-action="toggle_watermelon">
+                        ${watermelonEnabled}
+                    </button>
+                </div>
+            `;
+        });
+        
+        grid.innerHTML = gridHtml;
+    }
 
-                const botControlGrid = document.getElementById('bot-control-grid');
-                const allBots = [...data.bot_statuses.main_bots, ...data.bot_statuses.sub_accounts];
-                
-                const updatedBotIds = new Set();
+    function updateClanDropThresholds(botStatuses, clanDropStatus) {
+        const container = document.getElementById('clan-drop-thresholds-container');
+        if (!container || !botStatuses) return;
 
-                allBots.forEach(bot => {
-                    const botId = bot.reboot_id;
-                    updatedBotIds.add(`bot-container-${botId}`);
-                    let itemContainer = document.getElementById(`bot-container-${botId}`);
+        let html = '';
+        botStatuses.main_bots.forEach(bot => {
+            const threshold = clanDropStatus?.heart_thresholds?.[bot.reboot_id] || 50;
+            html += `
+                <div class="grab-section">
+                    <h3>${bot.name}</h3>
+                    <div class="input-group">
+                        <input type="number" class="clan-drop-threshold" data-node="${bot.reboot_id}" value="${threshold}" min="0">
+                    </div>
+                </div>
+            `;
+        });
+        
+        container.innerHTML = html;
+    }
 
-                    if (!itemContainer) {
-                        itemContainer = document.createElement('div');
-                        itemContainer.id = `bot-container-${botId}`;
-                        itemContainer.className = 'status-row';
-                        itemContainer.style.cssText = 'flex-direction: column; align-items: stretch; padding: 10px;';
-                        botControlGrid.appendChild(itemContainer);
-                    }
-                    
-                    let healthClass = 'health-good';
-                    if (bot.health_status === 'warning') healthClass = 'health-warning';
-                    else if (bot.health_status === 'bad') healthClass = 'health-bad';
-                    
-                    let rebootingIndicator = bot.is_rebooting ? ' <i class="fas fa-sync-alt fa-spin"></i>' : '';
+    function createServerPanel(server) {
+        return `
+            <div class="panel server-panel" data-server-id="${server.id}">
+                <button class="btn-delete-server" title="Delete Server"><i class="fas fa-times"></i></button>
+                <h2><i class="fas fa-server"></i> ${server.name}</h2>
+                <div class="server-sub-panel">
+                    <h3><i class="fas fa-cogs"></i> Channel Config</h3>
+                    <div class="input-group">
+                        <label>Main Channel ID</label>
+                        <input type="text" class="channel-input" data-field="main_channel_id" value="${server.main_channel_id || ''}">
+                    </div>
+                    <div class="input-group">
+                        <label>KTB Channel ID</label>
+                        <input type="text" class="channel-input" data-field="ktb_channel_id" value="${server.ktb_channel_id || ''}">
+                    </div>
+                    <div class="input-group">
+                        <label>Spam Channel ID</label>
+                        <input type="text" class="channel-input" data-field="spam_channel_id" value="${server.spam_channel_id || ''}">
+                    </div>
+                </div>
+                <div class="server-sub-panel">
+                    <h3><i class="fas fa-crosshairs"></i> Soul Harvest (Card Grab)</h3>
+                    <div id="grab-settings-${server.id}">
+                        </div>
+                </div>
+                <div class="server-sub-panel">
+                    <h3><i class="fas fa-paper-plane"></i> Auto Broadcast</h3>
+                    <div class="input-group">
+                        <label>Message</label>
+                        <textarea class="spam-message" rows="2">${server.spam_message || ''}</textarea>
+                    </div>
+                    <div class="input-group">
+                        <label>Delay (s)</label>
+                        <input type="number" class="spam-delay" value="${server.spam_delay || 10}">
+                        <span class="timer-display spam-timer">--:--:--</span>
+                    </div>
+                    <button type="button" class="btn broadcast-toggle">
+                        ${server.spam_enabled ? 'DISABLE' : 'ENABLE'}
+                    </button>
+                </div>
+            </div>
+        `;
+    }
 
-                    let controlHtml = `
-                        <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
-                           <span style="font-weight: bold; ${bot.type === 'main' ? 'color: #FF4500;' : ''}">${bot.name}<span class="health-indicator ${healthClass}"></span>${rebootingIndicator}</span>
-                           <button type="button" id="toggle-state-${botId}" data-target="${botId}" class="btn-toggle-state ${bot.is_active ? 'btn-rise' : 'btn-rest'}">
-                               ${bot.is_active ? 'ONLINE' : 'OFFLINE'}
-                           </button>
-                        </div>`;
+    function updateServers(servers, botStatuses) {
+        const container = document.getElementById('servers-container');
+        if (!container) return;
 
-                    if (bot.type === 'main') {
-                        const r_settings = data.bot_reboot_settings[botId] || { delay: 3600, enabled: false, failure_count: 0 };
-                        const statusClass = r_settings.failure_count > 0 ? 'btn-warning' : (r_settings.enabled ? 'btn-rise' : 'btn-rest');
-                        const statusText = r_settings.failure_count > 0 ? `FAIL(${r_settings.failure_count})` : (r_settings.enabled ? 'AUTO' : 'MANUAL');
-                        const countdownText = formatTime(r_settings.countdown);
+        container.innerHTML = servers.map(server => createServerPanel(server)).join('');
+        
+        // Update grab settings for each server
+        servers.forEach(server => {
+            updateServerGrabSettings(server, botStatuses);
+        });
+    }
 
-                        controlHtml += `
-                        <div class="input-group" style="margin-top: 10px; margin-bottom: 0;">
-                             <input type="number" class="bot-reboot-delay" value="${r_settings.delay}" data-bot-id="${botId}" style="width: 80px; text-align: right; flex-grow: 0;">
-                             <span id="timer-${botId}" class="timer-display bot-reboot-timer" style="padding: 0 10px;">${countdownText}</span>
-                             <button type="button" id="toggle-reboot-${botId}" class="btn btn-small bot-reboot-toggle ${statusClass}" data-bot-id="${botId}">
-                                 ${statusText}
-                             </button>
-                        </div>`;
-                    }
-                    itemContainer.innerHTML = controlHtml;
+    function updateServerGrabSettings(server, botStatuses) {
+        const container = document.getElementById(`grab-settings-${server.id}`);
+        if (!container || !botStatuses) return;
+
+        let html = '';
+        botStatuses.main_bots.forEach(bot => {
+            const botNum = bot.reboot_id.split('_')[1];
+            const threshold = server[`heart_threshold_${botNum}`] || 50;
+            const enabled = server[`auto_grab_enabled_${botNum}`] || false;
+            
+            html += `
+                <div class="grab-section">
+                    <h3>${bot.name}</h3>
+                    <div class="input-group">
+                        <input type="number" class="harvest-threshold" data-node="${botNum}" value="${threshold}" min="0">
+                        <button type="button" class="btn harvest-toggle" data-node="${botNum}">
+                            ${enabled ? 'DISABLE' : 'ENABLE'}
+                        </button>
+                    </div>
+                </div>
+            `;
+        });
+        
+        container.innerHTML = html;
+    }
+
+    async function fetchStatus() {
+        try {
+            const response = await fetch('/status');
+            const data = await response.json();
+
+            // Update uptime
+            const serverUptimeSeconds = (Date.now() / 1000) - data.server_start_time;
+            updateElement(document.getElementById('uptime-timer'), { 
+                textContent: formatTime(serverUptimeSeconds) 
+            });
+
+            // Update grab logs
+            updateGrabLogs(data.grab_success_logs || []);
+
+            // Update clan drop status
+            if (data.auto_clan_drop_status) {
+                updateElement(document.getElementById('clan-drop-timer'), { 
+                    textContent: formatTime(data.auto_clan_drop_status.countdown) 
+                });
+                updateElement(document.getElementById('clan-drop-toggle-btn'), { 
+                    textContent: data.auto_clan_drop_status.enabled ? 'DISABLE' : 'ENABLE' 
+                });
+                updateElement(document.getElementById('clan-drop-channel-id'), { 
+                    value: data.auto_clan_drop_status.channel_id || '' 
+                });
+                updateElement(document.getElementById('clan-drop-ktb-channel-id'), { 
+                    value: data.auto_clan_drop_status.ktb_channel_id || '' 
                 });
                 
-                Array.from(botControlGrid.children).forEach(child => {
-                    if (!updatedBotIds.has(child.id)) {
-                        child.remove();
-                    }
-                });
+                // Update clan drop thresholds
+                updateClanDropThresholds(data.bot_statuses, data.auto_clan_drop_status);
+            }
 
-
-                const wmGrid = document.getElementById('global-watermelon-grid');
-                wmGrid.innerHTML = '';
-                if (data.watermelon_grab_states && data.bot_statuses) {
-                    data.bot_statuses.main_bots.forEach(bot => {
-                        const botNodeId = bot.reboot_id;
-                        const isEnabled = data.watermelon_grab_states[botNodeId];
-                        const item = document.createElement('div');
-                        item.className = 'bot-status-item';
-                        item.innerHTML = `<span>${bot.name}</span>
-                            <button type="button" class="btn btn-small watermelon-toggle" data-node="${botNodeId}">
-                                <i class="fas fa-seedling"></i>&nbsp;${isEnabled ? 'DISABLE' : 'ENABLE'}
-                            </button>`;
-                        wmGrid.appendChild(item);
-                    });
-                }
-
-                data.servers.forEach(serverData => {
-                    const serverPanel = document.querySelector(`.server-panel[data-server-id="${serverData.id}"]`);
-                    if (!serverPanel) return;
-                    serverPanel.querySelectorAll('.harvest-toggle').forEach(btn => {
-                        const node = btn.dataset.node;
-                        updateElement(btn, { textContent: serverData[`auto_grab_enabled_${node}`] ? 'DISABLE' : 'ENABLE' });
-                    });
-                    const spamToggleBtn = serverPanel.querySelector('.broadcast-toggle');
-                    updateElement(spamToggleBtn, { textContent: serverData.spam_enabled ? 'DISABLE' : 'ENABLE' });
-                    const spamTimer = serverPanel.querySelector('.spam-timer');
-                    updateElement(spamTimer, { textContent: formatTime(serverData.spam_countdown)});
-                });
-
-            } catch (error) { console.error('Error fetching status:', error); }
+            // Update bot controls
+            updateBotControlGrid(data.bot_statuses);
+            updateWatermelonGrid(data.bot_statuses);
+            
+            // Update servers
+            updateServers(data.servers || [], data.bot_statuses);
+            
+        } catch (error) {
+            console.error('Error fetching status:', error);
         }
+    }
 
-        setInterval(fetchStatus, 1000);
-
-        document.querySelector('.container').addEventListener('click', e => {
-            const button = e.target.closest('button');
-            if (!button) return;
-            const serverPanel = button.closest('.server-panel');
-            const serverId = serverPanel ? serverPanel.dataset.serverId : null;
-
-            const actions = {
-                'bot-reboot-toggle': () => postData('/api/bot_reboot_toggle', { bot_id: button.dataset.botId, delay: document.querySelector(`.bot-reboot-delay[data-bot-id="${button.dataset.botId}"]`).value }),
-                'btn-toggle-state': () => postData('/api/toggle_bot_state', { target: button.dataset.target }),
-                'clan-drop-toggle-btn': () => postData('/api/clan_drop_toggle'),
-                'clan-drop-save-btn': () => {
-                    const thresholds = {};
-                    document.querySelectorAll('.clan-drop-threshold').forEach(i => { thresholds[i.dataset.node] = parseInt(i.value, 10); });
-                    postData('/api/clan_drop_update', { channel_id: document.getElementById('clan-drop-channel-id').value, ktb_channel_id: document.getElementById('clan-drop-ktb-channel-id').value, heart_thresholds: thresholds });
-                },
-                'watermelon-toggle': () => postData('/api/watermelon_toggle', { node: button.dataset.node }),
-                'harvest-toggle': () => serverId && postData('/api/harvest_toggle', { server_id: serverId, node: button.dataset.node, threshold: serverPanel.querySelector(`.harvest-threshold[data-node="${button.dataset.node}"]`).value }),
-                'broadcast-toggle': () => serverId && postData('/api/broadcast_toggle', { server_id: serverId, message: serverPanel.querySelector('.spam-message').value, delay: serverPanel.querySelector('.spam-delay').value }),
-                'btn-delete-server': () => serverId && confirm('Are you sure?') && postData('/api/delete_server', { server_id: serverId })
-            };
-
-            for (const cls in actions) {
-                if (button.classList.contains(cls) || button.id === cls) {
-                    actions[cls]();
-                    return;
+    // Event listeners
+    document.addEventListener('click', async function(e) {
+        const target = e.target;
+        
+        // Bot control buttons
+        if (target.matches('.btn-toggle-state[data-action]')) {
+            const botId = target.dataset.botId;
+            const action = target.dataset.action;
+            
+            if (action === 'toggle_active') {
+                await postData('/api/toggle_bot_active', { bot_id: botId });
+            } else if (action === 'toggle_reboot') {
+                await postData('/api/toggle_reboot', { bot_id: botId });
+            } else if (action === 'force_reboot') {
+                if (confirm(`Force reboot ${botId}?`)) {
+                    await postData('/api/force_reboot', { bot_id: botId });
                 }
+            } else if (action === 'toggle_watermelon') {
+                await postData('/api/toggle_watermelon', { bot_id: botId });
             }
-        });
-
-        document.querySelector('.main-grid').addEventListener('change', e => {
-            const target = e.target;
-            const serverPanel = target.closest('.server-panel');
-            if (serverPanel && target.classList.contains('channel-input')) {
-                const payload = { server_id: serverPanel.dataset.serverId };
-                payload[target.dataset.field] = target.value;
-                postData('/api/update_server_channels', payload);
+        }
+        
+        // Clan drop toggle
+        if (target.matches('#clan-drop-toggle-btn')) {
+            await postData('/api/toggle_clan_drop');
+        }
+        
+        // Clan drop save
+        if (target.matches('#clan-drop-save-btn')) {
+            const channelId = document.getElementById('clan-drop-channel-id').value;
+            const ktbChannelId = document.getElementById('clan-drop-ktb-channel-id').value;
+            const thresholds = {};
+            
+            document.querySelectorAll('.clan-drop-threshold').forEach(input => {
+                thresholds[input.dataset.node] = parseInt(input.value) || 50;
+            });
+            
+            await postData('/api/save_clan_drop_settings', {
+                channel_id: channelId,
+                ktb_channel_id: ktbChannelId,
+                heart_thresholds: thresholds
+            });
+        }
+        
+        // Add server
+        if (target.matches('#add-server-btn, #add-server-btn *')) {
+            const serverName = prompt('Enter server name:');
+            if (serverName) {
+                await postData('/api/add_server', { name: serverName });
             }
-        });
-
-        document.getElementById('add-server-btn').addEventListener('click', () => {
-            const name = prompt("Enter a name for the new server:", "New Server");
-            if (name) { postData('/api/add_server', { name: name }); }
-        });
+        }
+        
+        // Delete server
+        if (target.matches('.btn-delete-server, .btn-delete-server *')) {
+            const panel = target.closest('.server-panel');
+            const serverId = panel.dataset.serverId;
+            if (confirm('Delete this server?')) {
+                await postData('/api/delete_server', { server_id: serverId });
+            }
+        }
+        
+        // Harvest toggle
+        if (target.matches('.harvest-toggle')) {
+            const panel = target.closest('.server-panel');
+            const serverId = panel.dataset.serverId;
+            const botNode = target.dataset.node;
+            await postData('/api/toggle_harvest', { 
+                server_id: serverId, 
+                bot_num: parseInt(botNode) 
+            });
+        }
+        
+        // Broadcast toggle
+        if (target.matches('.broadcast-toggle')) {
+            const panel = target.closest('.server-panel');
+            const serverId = panel.dataset.serverId;
+            await postData('/api/toggle_broadcast', { server_id: serverId });
+        }
     });
+    
+    // Input change handlers (using event delegation for dynamically added elements)
+    document.addEventListener('change', async function(e) {
+        const target = e.target;
+        
+        // Helper function for debouncing might be useful here in a real app,
+        // but for now, this is fine.
+        
+        const panel = target.closest('.server-panel');
+        if (!panel) return; // Ignore inputs outside server panels
+        
+        const serverId = panel.dataset.serverId;
+        let payload = { server_id: serverId };
+
+        if (target.matches('.channel-input')) {
+            payload.field = target.dataset.field;
+            payload.value = target.value;
+            await postData('/api/update_server_field', payload);
+        } else if (target.matches('.harvest-threshold')) {
+            payload.bot_num = parseInt(target.dataset.node);
+            payload.threshold = parseInt(target.value) || 50;
+            await postData('/api/update_harvest_threshold', payload);
+        } else if (target.matches('.spam-message')) {
+            payload.field = 'spam_message';
+            payload.value = target.value;
+            await postData('/api/update_server_field', payload);
+        } else if (target.matches('.spam-delay')) {
+            payload.field = 'spam_delay';
+            payload.value = parseInt(target.value) || 10;
+            await postData('/api/update_server_field', payload);
+        }
+    });
+
+
+    // Initialize status fetching
+    fetchStatus();
+    setInterval(fetchStatus, 5000); // Update every 5 seconds
+});
 </script>
 </body>
 </html>
 """
 
-# --- FLASK ROUTES ---
-@app.route("/")
-def index():
-    main_bots_info = [{"id": int(bot_id.split('_')[1]), "name": get_bot_name(bot_id)} for bot_id, _ in bot_manager.get_main_bots_info()]
-    main_bots_info.sort(key=lambda x: x['id'])
-    return render_template_string(HTML_TEMPLATE, servers=sorted(servers, key=lambda s: s.get('name', '')), main_bots_info=main_bots_info, auto_clan_drop=bot_states["auto_clan_drop"])
+# --- FLASK ROUTES & API ENDPOINTS ---
 
-@app.route("/api/clan_drop_toggle", methods=['POST'])
-def api_clan_drop_toggle():
-    settings = bot_states["auto_clan_drop"]
-    settings['enabled'] = not settings.get('enabled', False)
-    if settings['enabled']:
-        if not settings.get('channel_id') or not settings.get('ktb_channel_id'):
-            settings['enabled'] = False
-            return jsonify({'status': 'error', 'message': 'Clan Drop & KTB Channel ID phải được cài đặt.'})
-        threading.Thread(target=run_clan_drop_cycle).start()
-        msg = "✅ Clan Auto Drop ENABLED & First cycle triggered."
-    else:
-        msg = "🛑 Clan Auto Drop DISABLED."
-    return jsonify({'status': 'success', 'message': msg})
+@app.route('/')
+def dashboard():
+    """Render main dashboard. The new JS will handle dynamic content."""
+    # The template is now mostly client-side rendered, so we don't need to pass much.
+    # The JS will call /status to get all the dynamic data.
+    return render_template_string(HTML_TEMPLATE)
 
-@app.route("/api/clan_drop_update", methods=['POST'])
-def api_clan_drop_update():
-    data = request.get_json()
-    thresholds = bot_states["auto_clan_drop"].setdefault('heart_thresholds', {})
-    for key, value in data.get('heart_thresholds', {}).items():
-        if isinstance(value, int): thresholds[key] = value
-    bot_states["auto_clan_drop"].update({
-        'channel_id': data.get('channel_id', '').strip(),
-        'ktb_channel_id': data.get('ktb_channel_id', '').strip()
-    })
-    return jsonify({'status': 'success', 'message': '💾 Clan Drop settings updated.'})
-
-@app.route("/api/add_server", methods=['POST'])
-def api_add_server():
-    name = request.json.get('name')
-    if not name: return jsonify({'status': 'error', 'message': 'Tên server là bắt buộc.'}), 400
-    new_server = {"id": f"server_{uuid.uuid4().hex}", "name": name, "spam_delay": 10}
-    main_bots_count = len([t for t in main_tokens if t.strip()])
-    for i in range(main_bots_count):
-        new_server[f'auto_grab_enabled_{i+1}'] = False
-        new_server[f'heart_threshold_{i+1}'] = 50
-    servers.append(new_server)
-    return jsonify({'status': 'success', 'message': f'✅ Server "{name}" đã được thêm.', 'reload': True})
-
-@app.route("/api/delete_server", methods=['POST'])
-def api_delete_server():
-    server_id = request.json.get('server_id')
-    servers[:] = [s for s in servers if s.get('id') != server_id]
-    return jsonify({'status': 'success', 'message': f'🗑️ Server đã được xóa.', 'reload': True})
-
-def find_server(server_id):
-    return next((s for s in servers if s.get('id') == server_id), None)
-
-@app.route("/api/update_server_channels", methods=['POST'])
-def api_update_server_channels():
-    data = request.json
-    server = find_server(data.get('server_id'))
-    if not server: return jsonify({'status': 'error', 'message': 'Không tìm thấy server.'}), 404
-    for field in ['main_channel_id', 'ktb_channel_id', 'spam_channel_id']:
-        if field in data: server[field] = data[field]
-    return jsonify({'status': 'success', 'message': f'🔧 Kênh đã được cập nhật cho {server["name"]}.'})
-
-@app.route("/api/harvest_toggle", methods=['POST'])
-def api_harvest_toggle():
-    data = request.json
-    server, node_str = find_server(data.get('server_id')), data.get('node')
-    if not server or not node_str: return jsonify({'status': 'error', 'message': 'Yêu cầu không hợp lệ.'}), 400
-    node = str(node_str)
-    grab_key, threshold_key = f'auto_grab_enabled_{node}', f'heart_threshold_{node}'
-    server[grab_key] = not server.get(grab_key, False)
-    server[threshold_key] = int(data.get('threshold', 50))
-    status_msg = 'ENABLED' if server[grab_key] else 'DISABLED'
-    bot_id = f'main_{node}'
-    return jsonify({'status': 'success', 'message': f"🎯 Card Grab cho {get_bot_name(bot_id)} đã {status_msg}."})
-
-@app.route("/api/watermelon_toggle", methods=['POST'])
-def api_watermelon_toggle():
-    node = request.json.get('node')
-    if node not in bot_states["watermelon_grab"]: return jsonify({'status': 'error', 'message': 'Invalid bot node.'}), 404
-    bot_states["watermelon_grab"][node] = not bot_states["watermelon_grab"].get(node, False)
-    status_msg = 'ENABLED' if bot_states["watermelon_grab"][node] else 'DISABLED'
-    return jsonify({'status': 'success', 'message': f"🍉 Global Watermelon Grab đã {status_msg} cho {get_bot_name(node)}."})
-
-@app.route("/api/broadcast_toggle", methods=['POST'])
-def api_broadcast_toggle():
-    data = request.json
-    server = find_server(data.get('server_id'))
-    if not server: return jsonify({'status': 'error', 'message': 'Không tìm thấy server.'}), 404
-    server['spam_enabled'] = not server.get('spam_enabled', False)
-    server['spam_message'] = data.get("message", "").strip()
-    server['spam_delay'] = int(data.get("delay", 10))
-    if server['spam_enabled'] and (not server['spam_message'] or not server['spam_channel_id']):
-        server['spam_enabled'] = False
-        return jsonify({'status': 'error', 'message': f'❌ Cần có message/channel spam cho {server["name"]}.'})
-    status_msg = 'ENABLED' if server['spam_enabled'] else 'DISABLED'
-    return jsonify({'status': 'success', 'message': f"📢 Auto Broadcast đã {status_msg} cho {server['name']}."})
-
-@app.route("/api/bot_reboot_toggle", methods=['POST'])
-def api_bot_reboot_toggle():
-    data = request.json
-    bot_id, delay = data.get('bot_id'), int(data.get("delay", 3600))
-    if not re.match(r"main_\d+", bot_id):
-        return jsonify({'status': 'error', 'message': '❌ Invalid Bot ID Format.'}), 400
-    settings = bot_states["reboot_settings"].get(bot_id)
-    if not settings: return jsonify({'status': 'error', 'message': '❌ Invalid Bot ID.'}), 400
-    
-    settings.update({'enabled': not settings.get('enabled', False), 'delay': delay, 'failure_count': 0})
-    if settings['enabled']:
-        settings['next_reboot_time'] = time.time() + delay
-        msg = f"🔄 Safe Auto-Reboot ENABLED cho {get_bot_name(bot_id)} (mỗi {delay}s)"
-    else:
-        msg = f"🛑 Auto-Reboot DISABLED cho {get_bot_name(bot_id)}"
-    return jsonify({'status': 'success', 'message': msg})
-
-@app.route("/api/toggle_bot_state", methods=['POST'])
-def api_toggle_bot_state():
-    target = request.json.get('target')
-    if target in bot_states["active"]:
-        bot_states["active"][target] = not bot_states["active"][target]
-        state_text = "🟢 ONLINE" if bot_states["active"][target] else "🔴 OFFLINE"
-        return jsonify({'status': 'success', 'message': f"Bot {get_bot_name(target)} đã được set thành {state_text}"})
-    return jsonify({'status': 'error', 'message': 'Không tìm thấy target.'}), 404
-
-@app.route("/api/save_settings", methods=['POST'])
-def api_save_settings():
-    save_settings()
-    return jsonify({'status': 'success', 'message': '💾 Settings saved.'})
-
-@app.route("/status")
-def status_endpoint():
-    now = time.time()
-    def get_bot_status_list(bot_info_list, type_prefix):
-        status_list = []
-        for bot_id, bot_instance in bot_info_list:
-            failures = bot_states["health_stats"].get(bot_id, {}).get('consecutive_failures', 0)
-            health_status = 'bad' if failures >= 3 else 'warning' if failures > 0 else 'good'
-            status_list.append({
-                "name": get_bot_name(bot_id), 
-                "status": bot_instance is not None, 
-                "reboot_id": bot_id,
-                "is_active": bot_states["active"].get(bot_id, False), 
-                "type": type_prefix, 
-                "health_status": health_status,
-                "is_rebooting": bot_manager.is_rebooting(bot_id)
-            })
-        return sorted(status_list, key=lambda x: int(x['reboot_id'].split('_')[1]))
-
-    bot_statuses = {
-        "main_bots": get_bot_status_list(bot_manager.get_main_bots_info(), "main"),
-        "sub_accounts": get_bot_status_list(bot_manager.get_sub_bots_info(), "sub")
-    }
-    
-    clan_settings = bot_states["auto_clan_drop"]
-    clan_drop_status = {
-        "enabled": clan_settings.get("enabled", False),
-        "countdown": (clan_settings.get("last_cycle_start_time", 0) + clan_settings.get("cycle_interval", 1800) - now) if clan_settings.get("enabled") else 0
-    }
-    
-    reboot_settings_copy = bot_states["reboot_settings"].copy()
-    for bot_id, settings in reboot_settings_copy.items():
-        settings['countdown'] = max(0, settings.get('next_reboot_time', 0) - now) if settings.get('enabled') else 0
-
-    return jsonify({
-        'bot_reboot_settings': reboot_settings_copy,
-        'bot_statuses': bot_statuses,
-        'server_start_time': server_start_time,
-        'servers': servers,
-        'watermelon_grab_states': bot_states["watermelon_grab"],
-        'auto_clan_drop_status': clan_drop_status
-    })
-
-# --- MAIN EXECUTION ---
-if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V3 Stable Version Starting...", flush=True)
-    load_settings()
-
-    print("🔌 Initializing bots using Bot Manager...", flush=True)
-    
-    # Khởi tạo bot chính
-    for i, token in enumerate(t for t in main_tokens if t.strip()):
-        bot_num = i + 1
-        bot_id = f"main_{bot_num}"
-        bot = create_bot(token.strip(), bot_identifier=bot_num, is_main=True)
-        if bot:
-            bot_manager.add_bot(bot_id, bot)
+@app.route('/status')
+def status():
+    """API endpoint trả về status realtime của toàn bộ hệ thống"""
+    try:
+        # Bot statuses
+        main_bots = []
+        sub_accounts = []
         
-        bot_states["active"].setdefault(bot_id, True)
-        bot_states["watermelon_grab"].setdefault(bot_id, False)
-        bot_states["auto_clan_drop"]["heart_thresholds"].setdefault(bot_id, 50)
-        bot_states["reboot_settings"].setdefault(bot_id, {'enabled': False, 'delay': 3600, 'next_reboot_time': 0, 'failure_count': 0})
-        bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
+        # Main bots
+        for i in range(1, len(main_tokens) + 1):
+            bot_id = f'main_{i}'
+            bot_instance = bot_manager.get_bot(bot_id)
+            health_stats = bot_states["health_stats"].get(bot_id, {})
+            reboot_settings = bot_states["reboot_settings"].get(bot_id, {})
+            
+            # Calculate next reboot time
+            next_reboot_time = reboot_settings.get('next_reboot_time', 0)
+            now = time.time()
+            next_reboot_str = "Ready" if now >= next_reboot_time else formatTime(next_reboot_time - now)
+            
+            main_bots.append({
+                'name': get_bot_name(bot_id),
+                'reboot_id': bot_id,
+                'is_active': bot_states["active"].get(bot_id, False),
+                'consecutive_failures': health_stats.get('consecutive_failures', 0),
+                'watermelon_enabled': bot_states["watermelon_grab"].get(bot_id, False),
+                'reboot_enabled': reboot_settings.get('enabled', True),
+                'next_reboot': next_reboot_str,
+                'is_connected': check_bot_health(bot_instance, bot_id) if bot_instance else False
+            })
+        
+        # Sub accounts
+        for i in range(1, len(tokens) + 1):
+            bot_id = f'sub_{i}'
+            bot_instance = bot_manager.get_bot(bot_id)
+            health_stats = bot_states["health_stats"].get(bot_id, {})
+            reboot_settings = bot_states["reboot_settings"].get(bot_id, {}) # Note: Reboot logic primarily targets main bots for now
+            
+            next_reboot_time = reboot_settings.get('next_reboot_time', 0)
+            now = time.time()
+            next_reboot_str = "N/A" # Sub-bots don't have auto-reboot loop by default in this script
+            
+            sub_accounts.append({
+                'name': get_bot_name(bot_id),
+                'reboot_id': bot_id,
+                'is_active': bot_states["active"].get(bot_id, False),
+                'consecutive_failures': health_stats.get('consecutive_failures', 0),
+                'reboot_enabled': False, # No reboot for sub-accounts in this logic
+                'next_reboot': next_reboot_str,
+                'is_connected': check_bot_health(bot_instance, bot_id) if bot_instance else False
+            })
+        
+        # Clan drop status
+        clan_drop_settings = bot_states["auto_clan_drop"]
+        next_cycle_time = clan_drop_settings.get("last_cycle_start_time", 0) + clan_drop_settings.get("cycle_interval", 1800)
+        clan_drop_countdown = max(0, next_cycle_time - time.time())
+        
+        clan_drop_status = {
+            'enabled': clan_drop_settings.get('enabled', False),
+            'countdown': clan_drop_countdown,
+            'channel_id': clan_drop_settings.get('channel_id', ''),
+            'ktb_channel_id': clan_drop_settings.get('ktb_channel_id', ''),
+            'heart_thresholds': clan_drop_settings.get('heart_thresholds', {})
+        }
+        
+        # Grab success logs
+        grab_logs = bot_manager.get_grab_logs()
+        
+        return jsonify({
+            'server_start_time': server_start_time,
+            'bot_statuses': {
+                'main_bots': main_bots,
+                'sub_accounts': sub_accounts
+            },
+            'auto_clan_drop_status': clan_drop_status,
+            'servers': servers,
+            'grab_success_logs': grab_logs
+        })
+        
+    except Exception as e:
+        print(f"[Flask] ❌ Error in status endpoint: {e}", flush=True)
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
-    # Khởi tạo bot phụ
-    for i, token in enumerate(t for t in tokens if t.strip()):
-        bot_id = f"sub_{i}"
-        bot = create_bot(token.strip(), bot_identifier=i, is_main=False)
-        if bot:
-            bot_manager.add_bot(bot_id, bot)
-        bot_states["active"].setdefault(bot_id, True)
-        bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
+def formatTime(seconds):
+    """Helper function to format time for frontend"""
+    if seconds <= 0:
+        return "00:00:00"
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
-    print("🔧 Starting background threads...", flush=True)
-    threading.Thread(target=periodic_task, args=(1800, save_settings, "Save"), daemon=True).start()
-    threading.Thread(target=periodic_task, args=(300, health_monitoring_check, "Health"), daemon=True).start()
-    threading.Thread(target=spam_loop_manager, daemon=True).start()
+# --- API ENDPOINTS FOR BOT CONTROL ---
+
+@app.route('/api/toggle_bot_active', methods=['POST'])
+def toggle_bot_active():
+    try:
+        data = request.get_json()
+        bot_id = data.get('bot_id')
+        
+        if not bot_id:
+            return jsonify({'status': 'error', 'message': 'Bot ID required'})
+        
+        current_state = bot_states["active"].get(bot_id, False)
+        bot_states["active"][bot_id] = not current_state
+        
+        bot_name = get_bot_name(bot_id)
+        new_state = "RISEN" if not current_state else "RESTING"
+        
+        return jsonify({
+            'status': 'success', 
+            'message': f'{bot_name} is now {new_state}',
+            'reload': False
+        })
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error toggling bot: {e}'})
+
+@app.route('/api/toggle_reboot', methods=['POST'])
+def toggle_reboot():
+    try:
+        data = request.get_json()
+        bot_id = data.get('bot_id')
+        
+        if not bot_id:
+            return jsonify({'status': 'error', 'message': 'Bot ID required'})
+        
+        reboot_settings = bot_states["reboot_settings"].setdefault(bot_id, {
+            'enabled': True, 
+            'delay': 3600, 
+            'next_reboot_time': time.time() + 3600
+        })
+        
+        current_state = reboot_settings.get('enabled', True)
+        reboot_settings['enabled'] = not current_state
+        
+        bot_name = get_bot_name(bot_id)
+        new_state = "ENABLED" if not current_state else "DISABLED"
+        
+        return jsonify({
+            'status': 'success', 
+            'message': f'Auto-reboot for {bot_name} is now {new_state}',
+            'reload': False
+        })
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error toggling reboot: {e}'})
+
+@app.route('/api/force_reboot', methods=['POST'])
+def force_reboot():
+    try:
+        data = request.get_json()
+        bot_id = data.get('bot_id')
+        
+        if not bot_id:
+            return jsonify({'status': 'error', 'message': 'Bot ID required'})
+        
+        bot_name = get_bot_name(bot_id)
+        
+        # Schedule immediate reboot
+        bot_states["reboot_settings"].setdefault(bot_id, {})['next_reboot_time'] = time.time() - 1
+        
+        return jsonify({
+            'status': 'success', 
+            'message': f'Force reboot scheduled for {bot_name}',
+            'reload': False
+        })
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error forcing reboot: {e}'})
+
+@app.route('/api/toggle_watermelon', methods=['POST'])
+def toggle_watermelon():
+    try:
+        data = request.get_json()
+        bot_id = data.get('bot_id')
+        
+        if not bot_id:
+            return jsonify({'status': 'error', 'message': 'Bot ID required'})
+        
+        current_state = bot_states["watermelon_grab"].get(bot_id, False)
+        bot_states["watermelon_grab"][bot_id] = not current_state
+        
+        bot_name = get_bot_name(bot_id)
+        new_state = "ENABLED" if not current_state else "DISABLED"
+        
+        return jsonify({
+            'status': 'success', 
+            'message': f'Watermelon grab for {bot_name} is now {new_state}',
+            'reload': False
+        })
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error toggling watermelon: {e}'})
+
+# --- API ENDPOINTS FOR CLAN DROP ---
+
+@app.route('/api/toggle_clan_drop', methods=['POST'])
+def toggle_clan_drop():
+    try:
+        current_state = bot_states["auto_clan_drop"].get('enabled', False)
+        bot_states["auto_clan_drop"]['enabled'] = not current_state
+        
+        new_state = "ENABLED" if not current_state else "DISABLED"
+        
+        return jsonify({
+            'status': 'success', 
+            'message': f'Clan Auto Drop is now {new_state}',
+            'reload': False
+        })
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error toggling clan drop: {e}'})
+
+@app.route('/api/save_clan_drop_settings', methods=['POST'])
+def save_clan_drop_settings():
+    try:
+        data = request.get_json()
+        
+        clan_settings = bot_states["auto_clan_drop"]
+        clan_settings['channel_id'] = data.get('channel_id', '').strip()
+        clan_settings['ktb_channel_id'] = data.get('ktb_channel_id', '').strip()
+        clan_settings['heart_thresholds'] = data.get('heart_thresholds', {})
+        
+        return jsonify({
+            'status': 'success', 
+            'message': 'Clan Drop settings saved successfully',
+            'reload': False
+        })
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error saving clan drop settings: {e}'})
+
+# --- API ENDPOINTS FOR SERVER MANAGEMENT ---
+
+@app.route('/api/add_server', methods=['POST'])
+def add_server():
+    try:
+        data = request.get_json()
+        server_name = data.get('name', '').strip()
+        
+        if not server_name:
+            return jsonify({'status': 'error', 'message': 'Server name required'})
+        
+        new_server = {
+            'id': str(uuid.uuid4()),
+            'name': server_name,
+            'main_channel_id': '',
+            'ktb_channel_id': '',
+            'spam_channel_id': '',
+            'spam_message': '',
+            'spam_delay': 10,
+            'spam_enabled': False
+        }
+        
+        # Add grab settings for each main bot
+        for i in range(1, len(main_tokens) + 1):
+            new_server[f'auto_grab_enabled_{i}'] = False
+            new_server[f'heart_threshold_{i}'] = 50
+        
+        servers.append(new_server)
+        
+        return jsonify({
+            'status': 'success', 
+            'message': f'Server "{server_name}" added successfully',
+            'reload': True # Reload to render new server panel correctly
+        })
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error adding server: {e}'})
+
+@app.route('/api/delete_server', methods=['POST'])
+def delete_server():
+    try:
+        data = request.get_json()
+        server_id = data.get('server_id')
+        
+        if not server_id:
+            return jsonify({'status': 'error', 'message': 'Server ID required'})
+        
+        global servers
+        server_name = next((s.get('name') for s in servers if s.get('id') == server_id), 'Unknown')
+        servers = [s for s in servers if s.get('id') != server_id]
+        
+        return jsonify({
+            'status': 'success', 
+            'message': f'Server "{server_name}" deleted successfully',
+            'reload': True # Reload to remove the panel
+        })
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error deleting server: {e}'})
+
+@app.route('/api/update_server_field', methods=['POST'])
+def update_server_field():
+    try:
+        data = request.get_json()
+        server_id = data.get('server_id')
+        field = data.get('field')
+        value = data.get('value')
+        
+        if not server_id or not field:
+            return jsonify({'status': 'error', 'message': 'Server ID and field required'})
+        
+        server = next((s for s in servers if s.get('id') == server_id), None)
+        if not server:
+            return jsonify({'status': 'error', 'message': 'Server not found'})
+        
+        # Convert to correct type if necessary
+        if field in ['spam_delay']:
+             server[field] = int(value)
+        else:
+            server[field] = value
+
+        return jsonify({
+            'status': 'success', 
+            'message': f'Updated {field}',
+            'reload': False
+        })
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error updating server field: {e}'})
+
+@app.route('/api/toggle_harvest', methods=['POST'])
+def toggle_harvest():
+    try:
+        data = request.get_json()
+        server_id = data.get('server_id')
+        bot_num = data.get('bot_num')
+        
+        if not server_id or bot_num is None:
+            return jsonify({'status': 'error', 'message': 'Server ID and bot number required'})
+        
+        server = next((s for s in servers if s.get('id') == server_id), None)
+        if not server:
+            return jsonify({'status': 'error', 'message': 'Server not found'})
+        
+        field = f'auto_grab_enabled_{bot_num}'
+        current_state = server.get(field, False)
+        server[field] = not current_state
+        
+        bot_name = get_bot_name(f'main_{bot_num}')
+        new_state = "ENABLED" if not current_state else "DISABLED"
+        
+        return jsonify({
+            'status': 'success', 
+            'message': f'Harvest for {bot_name} is now {new_state}',
+            'reload': False
+        })
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error toggling harvest: {e}'})
+
+@app.route('/api/update_harvest_threshold', methods=['POST'])
+def update_harvest_threshold():
+    try:
+        data = request.get_json()
+        server_id = data.get('server_id')
+        bot_num = data.get('bot_num')
+        threshold = data.get('threshold', 50)
+        
+        if not server_id or bot_num is None:
+            return jsonify({'status': 'error', 'message': 'Server ID and bot number required'})
+        
+        server = next((s for s in servers if s.get('id') == server_id), None)
+        if not server:
+            return jsonify({'status': 'error', 'message': 'Server not found'})
+        
+        field = f'heart_threshold_{bot_num}'
+        server[field] = max(0, int(threshold))
+        
+        return jsonify({
+            'status': 'success', 
+            'message': f'Threshold updated to {threshold}',
+            'reload': False
+        })
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error updating threshold: {e}'})
+
+@app.route('/api/toggle_broadcast', methods=['POST'])
+def toggle_broadcast():
+    try:
+        data = request.get_json()
+        server_id = data.get('server_id')
+        
+        if not server_id:
+            return jsonify({'status': 'error', 'message': 'Server ID required'})
+        
+        server = next((s for s in servers if s.get('id') == server_id), None)
+        if not server:
+            return jsonify({'status': 'error', 'message': 'Server not found'})
+        
+        current_state = server.get('spam_enabled', False)
+        server['spam_enabled'] = not current_state
+        
+        new_state = "ENABLED" if not current_state else "DISABLED"
+        
+        return jsonify({
+            'status': 'success', 
+            'message': f'Broadcast for {server.get("name", "server")} is now {new_state}',
+            'reload': False
+        })
+        
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error toggling broadcast: {e}'})
+
+@app.route('/api/save_settings', methods=['POST'])
+def save_settings_api():
+    try:
+        save_settings()
+        return jsonify({'status': 'success', 'message': 'Settings saved'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': f'Error saving settings: {e}'})
+
+# --- KHỞI ĐỘNG HỆ THỐNG ---
+def initialize_bots():
+    """Initialize all bots and start background processes"""
+    print("[System] 🚀 Initializing Shadow Network...", flush=True)
     
-    auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
-    auto_reboot_thread.start()
+    # Load settings trước
+    load_settings()
     
-    auto_clan_drop_thread = threading.Thread(target=auto_clan_drop_loop, daemon=True)
-    auto_clan_drop_thread.start()
+    # Initialize main bots
+    for i, token in enumerate(main_tokens, 1):
+        if token.strip():
+            try:
+                bot = create_bot(token.strip(), i, is_main=True)
+                if bot:
+                    bot_id = f'main_{i}'
+                    bot_manager.add_bot(bot_id, bot)
+                    
+                    # Initialize states
+                    bot_states["active"].setdefault(bot_id, False)
+                    bot_states["watermelon_grab"].setdefault(bot_id, False)
+                    bot_states["reboot_settings"].setdefault(bot_id, {
+                        'enabled': True,
+                        'delay': 3600,
+                        'next_reboot_time': time.time() + 3600,
+                        'failure_count': 0
+                    })
+            except Exception as e:
+                print(f"[System] ❌ Failed to initialize main bot {i}: {e}", flush=True)
     
-    port = int(os.environ.get("PORT", 10000))
-    print(f"🌐 Web Server running at http://0.0.0.0:{port}", flush=True)
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    # Initialize sub bots
+    for i, token in enumerate(tokens, 1):
+        if token.strip():
+            try:
+                bot = create_bot(token.strip(), i, is_main=False)
+                if bot:
+                    bot_id = f'sub_{i}'
+                    bot_manager.add_bot(bot_id, bot)
+                    
+                    # Initialize states
+                    bot_states["active"].setdefault(bot_id, False)
+                    bot_states["reboot_settings"].setdefault(bot_id, {
+                        'enabled': False, # Disabled for sub bots by default
+                        'delay': 3600,
+                        'next_reboot_time': time.time() + 3600,
+                        'failure_count': 0
+                    })
+            except Exception as e:
+                print(f"[System] ❌ Failed to initialize sub bot {i}: {e}", flush=True)
+    
+    # Start background threads
+    threads = [
+        threading.Thread(target=auto_reboot_loop, daemon=True),
+        threading.Thread(target=auto_clan_drop_loop, daemon=True),
+        threading.Thread(target=spam_loop_manager, daemon=True),
+        threading.Thread(target=periodic_task, args=(300, save_settings, "Auto Save"), daemon=True),
+        threading.Thread(target=periodic_task, args=(60, health_monitoring_check, "Health Monitor"), daemon=True)
+    ]
+    
+    for thread in threads:
+        thread.start()
+    
+    print("[System] ✅ Shadow Network initialized successfully!", flush=True)
+    print(f"[System] 📊 Main bots: {len([b for b in bot_manager.get_main_bots_info()])} | Sub accounts: {len([b for b in bot_manager.get_sub_bots_info()])}", flush=True)
+
+if __name__ == "__main__":
+    try:
+        initialize_bots()
+        
+        # Start Flask app
+        port = int(os.getenv("PORT", 10000))
+        print(f"[Flask] 🌐 Starting web interface on port {port}...", flush=True)
+        app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+        
+    except KeyboardInterrupt:
+        print("\n[System] 🛑 Shutting down Shadow Network...", flush=True)
+        stop_events["reboot"].set()
+        stop_events["clan_drop"].set()
+        
+        # Cleanup all bots
+        for bot_id, bot in bot_manager.get_all_bots():
+            try:
+                bot_manager.remove_bot(bot_id)
+            except Exception as e:
+                print(f"[System] ⚠️ Error during cleanup of {bot_id}: {e}", flush=True)
+        
+        save_settings()
+        print("[System] 💤 Shadow Network terminated.", flush=True)
+        
+    except Exception as e:
+        print(f"[System] ❌ Critical error: {e}", flush=True)
+        traceback.print_exc()
