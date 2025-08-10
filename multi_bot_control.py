@@ -3,7 +3,7 @@ import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
-from collections import deque # Thêm import này
+from collections import deque
 
 load_dotenv()
 
@@ -24,10 +24,10 @@ stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
 
 # --- BIẾN MỚI CHO LOG GRAB ---
-grab_logs = deque(maxlen=50) # Lưu 50 log gần nhất
-pending_grabs = {} # Key: message_id của drop, Value: {'bot_id':..., 'hearts':..., 'time':...}
-user_id_to_bot_id_map = {} # Ánh xạ Discord User ID sang Bot ID nội bộ (vd: 'main_1')
-pending_grabs_lock = threading.Lock() # Khóa để bảo vệ pending_grabs
+grab_logs = deque(maxlen=50)
+pending_grabs = {} # Key: message_id, Value: List of grabber dicts
+user_id_to_bot_id_map = {}
+pending_grabs_lock = threading.Lock()
 
 # --- QUẢN LÝ BOT THREAD-SAFE (IMPROVED) ---
 class ThreadSafeBotManager:
@@ -51,7 +51,6 @@ class ThreadSafeBotManager:
                 except Exception as e:
                     print(f"[Bot Manager] ⚠️ Error closing gateway for {bot_id}: {e}", flush=True)
                 print(f"[Bot Manager] 🗑️ Removed bot {bot_id}", flush=True)
-
 
     def get_bot(self, bot_id):
         with self._lock:
@@ -192,15 +191,14 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                         emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
                         delay = bot_delays[max_index]
                         
-                        # --- PHẦN CẦN THÊM ---
                         with pending_grabs_lock:
                             bot_id_str = f'main_{bot_num}'
-                            pending_grabs[last_drop_msg_id] = {
+                            grab_list = pending_grabs.setdefault(last_drop_msg_id, [])
+                            grab_list.append({
                                 'bot_id': bot_id_str,
                                 'hearts': max_num,
                                 'time': time.time()
-                            }
-                        # ---------------------
+                            })
                         
                         print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
                         
@@ -526,9 +524,10 @@ def health_monitoring_check():
 def cleanup_pending_grabs():
     with pending_grabs_lock:
         now = time.time()
-        keys_to_delete = [k for k, v in pending_grabs.items() if now - v.get('time', 0) > 60]
-        for key in keys_to_delete:
-            del pending_grabs[key]
+        keys_to_delete = [k for k, v_list in pending_grabs.items() for v in v_list if now - v.get('time', 0) > 60]
+        for key in set(keys_to_delete):
+            if key in pending_grabs:
+                del pending_grabs[key]
 
 # --- KHỞI TẠO BOT (IMPROVED) ---
 def create_bot(token, bot_identifier, is_main=False):
@@ -545,7 +544,7 @@ def create_bot(token, bot_identifier, is_main=False):
                     username = user.get('username', 'Unknown')
                     print(f"[Bot] ✅ Đăng nhập: {user_id} ({get_bot_name(bot_id_str)}) - {username}", flush=True)
                     
-                    user_id_to_bot_id_map[user_id] = bot_id_str # Ánh xạ User ID
+                    user_id_to_bot_id_map[user_id] = bot_id_str
                     
                     bot_states["health_stats"].setdefault(bot_id_str, {})
                     bot_states["health_stats"][bot_id_str].update({
@@ -576,20 +575,22 @@ def create_bot(token, bot_identifier, is_main=False):
                             original_drop_id = ref['message_id']
                             
                             with pending_grabs_lock:
-                                grab_info = pending_grabs.pop(original_drop_id, None)
+                                grabber_list = pending_grabs.pop(original_drop_id, None)
 
-                            if grab_info:
+                            if grabber_list:
                                 winner_id_match = re.search(r'<@!?(\d+)>', msg.get('content', ''))
                                 if winner_id_match:
                                     winner_id = winner_id_match.group(1)
                                     winner_bot_id = user_id_to_bot_id_map.get(winner_id)
                                     
-                                    if winner_bot_id == grab_info['bot_id']:
-                                        bot_name = get_bot_name(winner_bot_id)
-                                        hearts = grab_info['hearts']
-                                        log_message = f"[{datetime.now():%H:%M:%S}] {bot_name} đã nhặt thẻ với {hearts}♡"
-                                        grab_logs.appendleft(log_message)
-                                        print(f"[GRAB SUCCESS] {log_message}", flush=True)
+                                    for grab_info in grabber_list:
+                                        if winner_bot_id == grab_info['bot_id']:
+                                            bot_name = get_bot_name(winner_bot_id)
+                                            hearts = grab_info['hearts']
+                                            log_message = f"[{datetime.now():%H:%M:%S}] {bot_name} đã nhặt thẻ với {hearts}♡"
+                                            grab_logs.appendleft(log_message)
+                                            print(f"[GRAB SUCCESS] {log_message}", flush=True)
+                                            break 
                 except Exception as e:
                     print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}", flush=True)
 
@@ -940,7 +941,6 @@ HTML_TEMPLATE = """
                     updateElement(spamTimer, { textContent: formatTime(serverData.spam_countdown)});
                 });
 
-                // --- PHẦN JS MỚI ĐỂ LẤY LOG ---
                 try {
                     const logResponse = await fetch('/api/grab_logs');
                     const logData = await logResponse.json();
@@ -951,7 +951,6 @@ HTML_TEMPLATE = """
                 } catch (logError) {
                     console.error('Error fetching grab logs:', logError);
                 }
-                // --------------------------------
 
             } catch (error) { console.error('Error fetching status:', error); }
         }
@@ -1190,7 +1189,6 @@ if __name__ == "__main__":
 
     print("🔌 Initializing bots using Bot Manager...", flush=True)
     
-    # Khởi tạo bot chính
     for i, token in enumerate(t for t in main_tokens if t.strip()):
         bot_num = i + 1
         bot_id = f"main_{bot_num}"
@@ -1204,7 +1202,6 @@ if __name__ == "__main__":
         bot_states["reboot_settings"].setdefault(bot_id, {'enabled': False, 'delay': 3600, 'next_reboot_time': 0, 'failure_count': 0})
         bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
 
-    # Khởi tạo bot phụ
     for i, token in enumerate(t for t in tokens if t.strip()):
         bot_id = f"sub_{i}"
         bot = create_bot(token.strip(), bot_identifier=i, is_main=False)
