@@ -25,7 +25,7 @@ server_start_time = time.time()
 
 # --- BIẾN MỚI CHO LOG GRAB ---
 grab_logs = deque(maxlen=50)
-pending_grabs = {} # Key: message_id, Value: List of grabber dicts
+pending_grabs = {}
 user_id_to_bot_id_map = {}
 pending_grabs_lock = threading.Lock()
 
@@ -529,6 +529,48 @@ def cleanup_pending_grabs():
             if key in pending_grabs:
                 del pending_grabs[key]
 
+# --- HÀM DEBUG ĐỂ TEST PATTERN (có thể gọi qua endpoint) ---
+def test_grab_message_patterns():
+    """Hàm test để kiểm tra regex patterns với message thực tế"""
+    
+    test_messages = [
+        "<@1400135139312402565> fought off <@1400837785296048161> and took the **Kyaru** card `vrdddks`! It's in **good** condition.",
+        "<@1331952318534516810> fought off others and took the **Franky** card `vrd7wcm`! Wow, it appears to be in **mint** condition!",
+        "<@1400837785296048161> took the **Laurent Thierry** card `vrd7ftf`! It's in **good** condition."
+    ]
+    
+    for i, content in enumerate(test_messages, 1):
+        print(f"\n=== TEST MESSAGE {i} ===")
+        print(f"Content: {content}")
+        
+        grab_results = []
+        
+        # Pattern 1: "fought off ... and took the ... card"
+        fought_off_pattern = r'<@!?(\d+)> fought off .+? and took the \*\*(.+?)\*\* card `([^`]+)`!'
+        fought_off_matches = re.finditer(fought_off_pattern, content)
+        
+        for match in fought_off_matches:
+            grab_results.append({
+                'user_id': match.group(1), 'card_name': match.group(2),
+                'card_id': match.group(3), 'type': 'fought_off'
+            })
+            print(f"  ✅ FOUGHT OFF: User {match.group(1)} got {match.group(2)} ({match.group(3)})")
+        
+        # Pattern 2: "took the ... card" (simple)
+        # Chỉ chạy nếu pattern 1 không khớp để tránh trùng lặp
+        if not grab_results:
+            simple_took_pattern = r'<@!?(\d+)> took the \*\*(.+?)\*\* card `([^`]+)`!'
+            simple_took_matches = re.finditer(simple_took_pattern, content)
+            
+            for match in simple_took_matches:
+                grab_results.append({
+                    'user_id': match.group(1), 'card_name': match.group(2),
+                    'card_id': match.group(3), 'type': 'simple_took'
+                })
+                print(f"  ✅ SIMPLE TOOK: User {match.group(1)} got {match.group(2)} ({match.group(3)})")
+        
+        print(f"  📊 Total results: {len(grab_results)}")
+
 # --- KHỞI TẠO BOT (IMPROVED) ---
 def create_bot(token, bot_identifier, is_main=False):
     try:
@@ -545,6 +587,7 @@ def create_bot(token, bot_identifier, is_main=False):
                     print(f"[Bot] ✅ Đăng nhập: {user_id} ({get_bot_name(bot_id_str)}) - {username}", flush=True)
                     
                     user_id_to_bot_id_map[user_id] = bot_id_str
+                    print(f"[Bot] 🗺️  Mapped user_id {user_id} -> {bot_id_str}", flush=True)
                     
                     bot_states["health_stats"].setdefault(bot_id_str, {})
                     bot_states["health_stats"][bot_id_str].update({
@@ -561,38 +604,72 @@ def create_bot(token, bot_identifier, is_main=False):
                     if resp.event.message:
                         msg = resp.parsed.auto()
                         author_id = msg.get("author", {}).get("id")
-                        content = msg.get("content", "").lower()
+                        content = msg.get("content", "")  # Không lower() để giữ nguyên format
                         
-                        if author_id == karuta_id and "dropping" in content:
+                        if author_id == karuta_id and "dropping" in content.lower():
                             handler = handle_clan_drop if msg.get("mentions") else handle_grab
                             safe_message_handler_wrapper(handler, bot, msg, bot_identifier)
                         
                         elif author_id == karuta_id and ("took the" in content or "fought off" in content):
-                            ref = msg.get('message_reference')
-                            if not ref or 'message_id' not in ref:
-                                return
-
-                            original_drop_id = ref['message_id']
+                            grab_results = []
                             
-                            with pending_grabs_lock:
-                                grabber_list = pending_grabs.pop(original_drop_id, None)
+                            # Pattern 1: Bắt trường hợp "fought off" trước vì nó cụ thể hơn
+                            fought_off_pattern = r'<@!?(\d+)> fought off .+? and took the \*\*(.+?)\*\* card `([^`]+)`!'
+                            fought_off_matches = re.finditer(fought_off_pattern, content)
+                            for match in fought_off_matches:
+                                grab_results.append({
+                                    'user_id': match.group(1), 'card_name': match.group(2),
+                                    'card_id': match.group(3), 'type': 'fought_off'
+                                })
 
-                            if grabber_list:
-                                winner_id_match = re.search(r'<@!?(\d+)>', msg.get('content', ''))
-                                if winner_id_match:
-                                    winner_id = winner_id_match.group(1)
-                                    winner_bot_id = user_id_to_bot_id_map.get(winner_id)
+                            # Pattern 2: Nếu không có "fought off", bắt trường hợp "took the" đơn giản
+                            if not grab_results:
+                                simple_took_pattern = r'<@!?(\d+)> took the \*\*(.+?)\*\* card `([^`]+)`!'
+                                simple_took_matches = re.finditer(simple_took_pattern, content)
+                                for match in simple_took_matches:
+                                    grab_results.append({
+                                        'user_id': match.group(1), 'card_name': match.group(2),
+                                        'card_id': match.group(3), 'type': 'simple_took'
+                                    })
+                            
+                            if not grab_results: return
+
+                            for result in grab_results:
+                                user_id = result['user_id']
+                                winner_bot_id = user_id_to_bot_id_map.get(user_id)
+                                
+                                if winner_bot_id:
+                                    bot_name = get_bot_name(winner_bot_id)
+                                    card_name = result['card_name']
+                                    card_id = result['card_id']
+                                    grab_type = result['type']
                                     
-                                    for grab_info in grabber_list:
-                                        if winner_bot_id == grab_info['bot_id']:
-                                            bot_name = get_bot_name(winner_bot_id)
-                                            hearts = grab_info['hearts']
-                                            log_message = f"[{datetime.now():%H:%M:%S}] {bot_name} đã nhặt thẻ với {hearts}♡"
-                                            grab_logs.appendleft(log_message)
-                                            print(f"[GRAB SUCCESS] {log_message}", flush=True)
-                                            break 
+                                    hearts_info = ""
+                                    original_drop_id = None
+                                    ref = msg.get('message_reference')
+                                    if ref and 'message_id' in ref:
+                                        original_drop_id = ref['message_id']
+                                        with pending_grabs_lock:
+                                            grabber_list = pending_grabs.get(original_drop_id, [])
+                                            for grab_info in grabber_list:
+                                                if grab_info['bot_id'] == winner_bot_id:
+                                                    hearts_info = f" ({grab_info['hearts']}♡)"
+                                                    break
+                                    
+                                    status_emoji = "🏆" if grab_type == "fought_off" else "✨"
+                                    log_message = f"[{datetime.now():%H:%M:%S}] {status_emoji} {bot_name} nhặt {card_name}{hearts_info} - {card_id}"
+                                    
+                                    grab_logs.appendleft(log_message)
+                                    print(f"[GRAB SUCCESS] {log_message}", flush=True)
+                                    
+                                    if original_drop_id:
+                                        with pending_grabs_lock:
+                                            if original_drop_id in pending_grabs:
+                                                del pending_grabs[original_drop_id]
+                                                
                 except Exception as e:
                     print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}", flush=True)
+                    traceback.print_exc()
 
         def start_gateway():
             try:
@@ -709,6 +786,10 @@ HTML_TEMPLATE = """
 
             <div class="panel grab-log-panel" style="grid-column: 1 / -1;">
                 <h2><i class="fas fa-trophy"></i> Grab Success Log</h2>
+                <div style="margin-bottom: 10px; display: flex; gap: 10px;">
+                    <button type="button" id="test-patterns-btn" class="btn btn-small" style="width: auto;">Test Patterns</button>
+                    <button type="button" id="debug-mapping-btn" class="btn btn-small" style="width: auto;">Debug Mapping</button>
+                </div>
                 <div id="grab-log-container" style="background: #000; border-radius: 5px; padding: 15px; height: 200px; overflow-y: auto; font-family: 'Courier Prime', monospace; font-size: 0.9em;">
                     <pre id="grab-log-content" style="white-space: pre-wrap; margin: 0;"></pre>
                 </div>
@@ -977,22 +1058,10 @@ HTML_TEMPLATE = """
                 'broadcast-toggle': () => serverId && postData('/api/broadcast_toggle', { server_id: serverId, message: serverPanel.querySelector('.spam-message').value, delay: serverPanel.querySelector('.spam-delay').value }),
                 'btn-delete-server': () => serverId && confirm('Are you sure?') && postData('/api/delete_server', { server_id: serverId })
             };
-
-            for (const cls in actions) {
-                if (button.classList.contains(cls) || button.id === cls) {
-                    actions[cls]();
-                    return;
-                }
-            }
-        });
-
-        document.querySelector('.main-grid').addEventListener('change', e => {
-            const target = e.target;
-            const serverPanel = target.closest('.server-panel');
-            if (serverPanel && target.classList.contains('channel-input')) {
-                const payload = { server_id: serverPanel.dataset.serverId };
-                payload[target.dataset.field] = target.value;
-                postData('/api/update_server_channels', payload);
+            
+            if (actions[button.id] || actions[button.classList[1]]) {
+                 (actions[button.id] || actions[button.classList[1]])();
+                 return;
             }
         });
 
@@ -1000,6 +1069,22 @@ HTML_TEMPLATE = """
             const name = prompt("Enter a name for the new server:", "New Server");
             if (name) { postData('/api/add_server', { name: name }); }
         });
+        
+        document.getElementById('test-patterns-btn')?.addEventListener('click', () => {
+            postData('/api/test_grab_patterns');
+        });
+
+        document.getElementById('debug-mapping-btn')?.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/debug_user_mapping');
+                const data = await response.json();
+                console.log('User Mapping Debug:', data);
+                showStatusMessage(`Mapped: ${Object.keys(data.user_id_to_bot_id_map).length} users. Check console.`, 'success');
+            } catch (error) {
+                console.error('Debug mapping error:', error);
+            }
+        });
+
     });
 </script>
 </body>
@@ -1138,6 +1223,23 @@ def api_toggle_bot_state():
 def api_save_settings():
     save_settings()
     return jsonify({'status': 'success', 'message': '💾 Settings saved.'})
+
+@app.route("/api/debug_user_mapping")
+def api_debug_user_mapping():
+    return jsonify({
+        'user_id_to_bot_id_map': dict(user_id_to_bot_id_map),
+        'active_bots': list(bot_states["active"].keys()),
+        'pending_grabs_count': len(pending_grabs),
+        'grab_logs_count': len(grab_logs)
+    })
+
+@app.route("/api/test_grab_patterns", methods=['POST'])
+def api_test_grab_patterns():
+    try:
+        test_grab_message_patterns()
+        return jsonify({'status': 'success', 'message': 'Check console for pattern test results'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)})
 
 @app.route("/status")
 def status_endpoint():
