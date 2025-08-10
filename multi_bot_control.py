@@ -1,4 +1,4 @@
-# PHIÊN BẢN CUỐI CÙNG - SỬA LỖI LOG & CẬP NHẬT GIAO DIỆN
+# PHIÊN BẢN CUỐI CÙNG - SỬA LỖI SYNTAXERROR
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -173,43 +173,30 @@ def safe_message_handler_wrapper(handler_func, bot, msg, *args):
         print(f"[Message Handler] 🐛 Traceback: {traceback.format_exc()}", flush=True)
         return None
 
-# ======================================================================
-# >>>>> HÀM ĐÃ SỬA: LOGIC KIỂM TRA NHẶT THẺ CHÍNH XÁC HƠN <<<<<
-# ======================================================================
 def check_grab_result(bot, channel_id, drop_msg_id, bot_name, selected_card):
     """Kiểm tra kết quả nhặt thẻ và log nếu thành công (ĐÃ SỬA LỖI)"""
     try:
         time.sleep(2)
         messages = bot.getMessages(channel_id, num=10).json()
-        
         if not isinstance(messages, list):
             return False
-            
         for msg in messages:
             if msg.get("author", {}).get("id") != karuta_id:
                 continue
-            
             content = msg.get("content", "").lower()
-            
-            # --- ĐIỀU KIỆN SỬA ĐỔI ---
-            # Phải có từ khóa thành công VÀ tên của bot phải được đề cập
             success_keywords = ["fought off", "took the"]
             if any(keyword in content for keyword in success_keywords) and bot_name.lower() in content:
-                
                 grabbed_card_name = selected_card['name']
                 card_match = re.search(r"took the (.+?) card", content)
                 if card_match:
                     grabbed_card_name = card_match.group(1).strip()
-
                 bot_manager.add_grab_success_log(
                     bot_name=bot_name,
                     card_name=grabbed_card_name,
                     hearts=selected_card['hearts']
                 )
-                return True # Ghi nhận thành công và thoát
-                
+                return True
         return False
-        
     except Exception as e:
         print(f"[GRAB CHECK | {bot_name}] ❌ Lỗi kiểm tra kết quả: {e}", flush=True)
         return False
@@ -674,7 +661,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const el = $('#msg-status-container');
         if (!message || !el) return;
         el.textContent = message;
-        el.className = `msg-status ${type}`;
+        el.className = `msg-status ${type === 'error' ? 'error' : ''}`;
         el.style.display = 'block';
         setTimeout(() => { el.style.display = 'none'; }, 4000);
     }
@@ -708,16 +695,11 @@ document.addEventListener('DOMContentLoaded', function () {
         if (value !== undefined) el.value = value;
     }
     
-    // ======================================================================
-    // >>>>> HÀM ĐÃ SỬA: TẠO GIAO DIỆN BOT CONTROL ĐƠN GIẢN HƠN <<<<<
-    // ======================================================================
     function updateBotControlGrid(botStatuses) {
         const grid = $('#bot-control-grid');
         if (!grid || !botStatuses) return;
-
-        grid.style.gridTemplateColumns = '1fr'; // Ensure single column layout
+        grid.style.gridTemplateColumns = '1fr';
         const allBots = [...botStatuses.main_bots, ...botStatuses.sub_accounts];
-        
         let gridHtml = '';
         allBots.forEach(bot => {
             const healthClass = bot.consecutive_failures === 0 ? 'health-good' : bot.consecutive_failures < 3 ? 'health-warning' : 'health-bad';
@@ -725,7 +707,6 @@ document.addEventListener('DOMContentLoaded', function () {
             const activeClass = bot.is_active ? 'btn-rise' : 'btn-rest';
             const rebootEnabled = bot.reboot_enabled ? 'ON' : 'OFF';
             const rebootClass = bot.reboot_enabled ? 'btn-rise' : 'btn-rest';
-            
             gridHtml += `
                 <div class="bot-status-item" style="padding: 8px 12px; justify-content: flex-start; gap: 12px;">
                     <span class="health-indicator ${healthClass}" title="Failures: ${bot.consecutive_failures}"></span>
@@ -766,7 +747,6 @@ document.addEventListener('DOMContentLoaded', function () {
                     </div>
                 </div>`;
         }).join('');
-
         return `
             <div class="panel server-panel" data-server-id="${server.id}">
                 <button class="btn-delete-server" title="Delete Server"><i class="fas fa-times"></i></button>
@@ -793,7 +773,6 @@ document.addEventListener('DOMContentLoaded', function () {
             updateElement($('#uptime-timer'), formatTime((Date.now() / 1000) - data.server_start_time));
             renderGrabLogs(data.grab_success_logs);
             updateBotControlGrid(data.bot_statuses);
-
             const clanDropStatus = data.auto_clan_drop_status;
             if (clanDropStatus) {
                 updateElement($('#clan-drop-timer'), formatTime(clanDropStatus.countdown));
@@ -805,25 +784,21 @@ document.addEventListener('DOMContentLoaded', function () {
                     return `<div class="grab-section"><h3>${bot.name}</h3><div class="input-group"><input type="number" class="clan-drop-threshold" data-node="${bot.reboot_id}" value="${threshold}" min="0"></div></div>`;
                 }).join('');
             }
-            
             $('#global-watermelon-grid').innerHTML = data.bot_statuses.main_bots.map(bot => {
                 const enabled = bot.watermelon_enabled;
                 return `<div class="bot-status-item" style="justify-content:space-between;"><span>${bot.name}</span><button class="btn-toggle-state ${enabled ? 'btn-rise' : 'btn-rest'}" data-bot-id="${bot.reboot_id}" data-action="toggle_watermelon">${enabled ? 'ON' : 'OFF'}</button></div>`;
             }).join('');
-            
             $('#servers-container').innerHTML = (data.servers || []).map(server => renderServer(server, data.bot_statuses)).join('');
-
         } catch (error) { console.error('Error fetching status:', error); }
     }
 
     doc.addEventListener('click', function(e) {
         const target = e.target.closest('[data-action], .btn-delete-server, #clan-drop-toggle-btn, #clan-drop-save-btn, #add-server-btn, .harvest-toggle, .broadcast-toggle');
         if (!target) return;
-        
         const serverPanel = e.target.closest('.server-panel');
         const serverId = serverPanel ? serverPanel.dataset.serverId : null;
-
         if (target.dataset.action) {
+            if (target.dataset.action === 'force_reboot' && !confirm(`Force reboot ${target.dataset.botId}?`)) return;
             postData('/api/' + target.dataset.action, { bot_id: target.dataset.botId });
         } else if (target.id === 'add-server-btn') {
             const name = prompt('Enter server name:');
@@ -926,93 +901,138 @@ def formatTime(seconds):
     s = int(seconds % 60)
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-@app.route('/api/<action>', methods=['POST'])
-def handle_api_action(action):
+@app.route('/api/toggle_bot_active', methods=['POST'])
+def toggle_bot_active():
+    data = request.get_json()
+    bot_id = data.get('bot_id')
+    state = bot_states["active"].get(bot_id, False)
+    bot_states["active"][bot_id] = not state
+    return jsonify({'status': 'success', 'message': f'{get_bot_name(bot_id)} is now {"RISEN" if not state else "RESTING"}'})
+
+@app.route('/api/toggle_reboot', methods=['POST'])
+def toggle_reboot():
+    data = request.get_json()
+    bot_id = data.get('bot_id')
+    settings = bot_states["reboot_settings"].setdefault(bot_id, {'enabled': True, 'delay': 3600})
+    state = settings.get('enabled', True)
+    settings['enabled'] = not state
+    return jsonify({'status': 'success', 'message': f'Auto-reboot for {get_bot_name(bot_id)} is now {"ENABLED" if not state else "DISABLED"}'})
+
+@app.route('/api/force_reboot', methods=['POST'])
+def force_reboot():
+    data = request.get_json()
+    bot_id = data.get('bot_id')
+    bot_states["reboot_settings"].setdefault(bot_id, {})['next_reboot_time'] = time.time() - 1
+    return jsonify({'status': 'success', 'message': f'Force reboot scheduled for {get_bot_name(bot_id)}'})
+
+@app.route('/api/toggle_watermelon', methods=['POST'])
+def toggle_watermelon():
+    data = request.get_json()
+    bot_id = data.get('bot_id')
+    state = bot_states["watermelon_grab"].get(bot_id, False)
+    bot_states["watermelon_grab"][bot_id] = not state
+    return jsonify({'status': 'success', 'message': f'Watermelon grab for {get_bot_name(bot_id)} is now {"ENABLED" if not state else "DISABLED"}'})
+
+@app.route('/api/toggle_clan_drop', methods=['POST'])
+def toggle_clan_drop():
+    state = bot_states["auto_clan_drop"].get('enabled', False)
+    bot_states["auto_clan_drop"]['enabled'] = not state
+    return jsonify({'status': 'success', 'message': f'Clan Auto Drop is now {"ENABLED" if not state else "DISABLED"}'})
+
+@app.route('/api/save_clan_drop_settings', methods=['POST'])
+def save_clan_drop_settings():
+    bot_states["auto_clan_drop"].update(request.get_json())
+    return jsonify({'status': 'success', 'message': 'Clan Drop settings saved'})
+
+@app.route('/api/add_server', methods=['POST'])
+def add_server():
+    data = request.get_json()
+    new_server = {'id': str(uuid.uuid4()), 'name': data.get('name'), 'spam_delay': 10}
+    for i in range(1, len(main_tokens) + 1):
+        new_server[f'auto_grab_enabled_{i}'] = False
+        new_server[f'heart_threshold_{i}'] = 50
+    servers.append(new_server)
+    return jsonify({'status': 'success', 'message': f'Server "{data.get("name")}" added', 'reload': True})
+
+# ======================================================================
+# >>>>> HÀM ĐÃ SỬA LỖI SYNTAXERROR <<<<<
+# ======================================================================
+@app.route('/api/delete_server', methods=['POST'])
+def delete_server():
     try:
+        global servers
         data = request.get_json()
-        bot_id = data.get('bot_id')
         server_id = data.get('server_id')
-        bot_num = data.get('bot_num')
-        
-        if action == 'toggle_bot_active':
-            state = bot_states["active"].get(bot_id, False)
-            bot_states["active"][bot_id] = not state
-            return jsonify({'status': 'success', 'message': f'{get_bot_name(bot_id)} is now {"RISEN" if not state else "RESTING"}'})
-        
-        if action == 'toggle_reboot':
-            settings = bot_states["reboot_settings"].setdefault(bot_id, {'enabled': True, 'delay': 3600})
-            state = settings.get('enabled', True)
-            settings['enabled'] = not state
-            return jsonify({'status': 'success', 'message': f'Auto-reboot for {get_bot_name(bot_id)} is now {"ENABLED" if not state else "DISABLED"}'})
-
-        if action == 'force_reboot':
-            bot_states["reboot_settings"].setdefault(bot_id, {})['next_reboot_time'] = time.time() - 1
-            return jsonify({'status': 'success', 'message': f'Force reboot scheduled for {get_bot_name(bot_id)}'})
-        
-        if action == 'toggle_watermelon':
-            state = bot_states["watermelon_grab"].get(bot_id, False)
-            bot_states["watermelon_grab"][bot_id] = not state
-            return jsonify({'status': 'success', 'message': f'Watermelon grab for {get_bot_name(bot_id)} is now {"ENABLED" if not state else "DISABLED"}'})
-        
-        if action == 'toggle_clan_drop':
-            state = bot_states["auto_clan_drop"].get('enabled', False)
-            bot_states["auto_clan_drop"]['enabled'] = not state
-            return jsonify({'status': 'success', 'message': f'Clan Auto Drop is now {"ENABLED" if not state else "DISABLED"}'})
-
-        if action == 'save_clan_drop_settings':
-            bot_states["auto_clan_drop"].update(data)
-            return jsonify({'status': 'success', 'message': 'Clan Drop settings saved'})
-
-        if action == 'add_server':
-            new_server = {'id': str(uuid.uuid4()), 'name': data.get('name'), 'spam_delay': 10}
-            for i in range(1, len(main_tokens) + 1):
-                new_server[f'auto_grab_enabled_{i}'] = False
-                new_server[f'heart_threshold_{i}'] = 50
-            servers.append(new_server)
-            return jsonify({'status': 'success', 'message': f'Server "{data.get("name")}" added', 'reload': True})
-
-        if action == 'delete_server':
-            global servers
-            servers = [s for s in servers if s.get('id') != server_id]
-            return jsonify({'status': 'success', 'message': 'Server deleted', 'reload': True})
-
-        server = next((s for s in servers if s.get('id') == server_id), None)
-        if not server: return jsonify({'status': 'error', 'message': 'Server not found'})
-
-        if action == 'update_server_field':
-            server[data.get('field')] = int(data.get('value')) if data.get('field') == 'spam_delay' else data.get('value')
-        elif action == 'toggle_harvest':
-            field = f'auto_grab_enabled_{bot_num}'
-            state = server.get(field, False)
-            server[field] = not state
-        elif action == 'update_harvest_threshold':
-            server[f'heart_threshold_{bot_num}'] = max(0, int(data.get('threshold', 50)))
-        elif action == 'toggle_broadcast':
-            state = server.get('spam_enabled', False)
-            server['spam_enabled'] = not state
-        elif action == 'save_settings':
-            save_settings()
-        
-        return jsonify({'status': 'success', 'message': 'Action completed'})
-
+        if not server_id:
+            return jsonify({'status': 'error', 'message': 'Server ID required'})
+        server_name = next((s.get('name') for s in servers if s.get('id') == server_id), 'Unknown')
+        servers = [s for s in servers if s.get('id') != server_id]
+        return jsonify({'status': 'success', 'message': f'Server "{server_name}" deleted', 'reload': True})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)})
+
+@app.route('/api/update_server_field', methods=['POST'])
+def update_server_field():
+    data = request.get_json()
+    server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
+    if server:
+        field = data.get('field')
+        value = data.get('value')
+        server[field] = int(value) if field == 'spam_delay' else value
+    return jsonify({'status': 'success', 'message': 'Field updated'})
+
+@app.route('/api/toggle_harvest', methods=['POST'])
+def toggle_harvest():
+    data = request.get_json()
+    server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
+    if server:
+        field = f"auto_grab_enabled_{data.get('bot_num')}"
+        server[field] = not server.get(field, False)
+    return jsonify({'status': 'success', 'message': 'Harvest toggled'})
+
+@app.route('/api/update_harvest_threshold', methods=['POST'])
+def update_harvest_threshold():
+    data = request.get_json()
+    server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
+    if server:
+        field = f"heart_threshold_{data.get('bot_num')}"
+        server[field] = max(0, int(data.get('threshold', 50)))
+    return jsonify({'status': 'success', 'message': 'Threshold updated'})
+
+@app.route('/api/toggle_broadcast', methods=['POST'])
+def toggle_broadcast():
+    data = request.get_json()
+    server = next((s for s in servers if s.get('id') == data.get('server_id')), None)
+    if server:
+        server['spam_enabled'] = not server.get('spam_enabled', False)
+    return jsonify({'status': 'success', 'message': 'Broadcast toggled'})
+
+@app.route('/api/save_settings', methods=['POST'])
+def save_settings_api():
+    save_settings()
+    return jsonify({'status': 'success', 'message': 'Settings saved'})
 
 # --- KHỞI ĐỘNG HỆ THỐNG ---
 def initialize_bots():
     print("[System] 🚀 Initializing Shadow Network...", flush=True)
     load_settings()
     for i, token in enumerate(main_tokens, 1):
-        if token.strip() and create_bot(token.strip(), i, is_main=True):
-            bot_manager.add_bot(f'main_{i}', _)
-            bot_states["active"].setdefault(f'main_{i}', False)
-            bot_states["watermelon_grab"].setdefault(f'main_{i}', False)
-            bot_states["reboot_settings"].setdefault(f'main_{i}', {'enabled': True, 'delay': 3600, 'next_reboot_time': time.time() + 3600, 'failure_count': 0})
+        if token.strip():
+            bot = create_bot(token.strip(), i, is_main=True)
+            if bot:
+                bot_id = f'main_{i}'
+                bot_manager.add_bot(bot_id, bot)
+                bot_states["active"].setdefault(bot_id, False)
+                bot_states["watermelon_grab"].setdefault(bot_id, False)
+                bot_states["reboot_settings"].setdefault(bot_id, {'enabled': True, 'delay': 3600, 'next_reboot_time': time.time() + 3600, 'failure_count': 0})
     for i, token in enumerate(tokens, 1):
-        if token.strip() and create_bot(token.strip(), i, is_main=False):
-            bot_manager.add_bot(f'sub_{i}', _)
-            bot_states["active"].setdefault(f'sub_{i}', False)
-            bot_states["reboot_settings"].setdefault(f'sub_{i}', {'enabled': False})
+        if token.strip():
+            bot = create_bot(token.strip(), i, is_main=False)
+            if bot:
+                bot_id = f'sub_{i}'
+                bot_manager.add_bot(bot_id, bot)
+                bot_states["active"].setdefault(bot_id, False)
+                bot_states["reboot_settings"].setdefault(bot_id, {'enabled': False})
     
     threads = [
         threading.Thread(target=auto_reboot_loop, daemon=True),
