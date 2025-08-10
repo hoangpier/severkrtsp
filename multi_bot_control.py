@@ -255,12 +255,7 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
 
 def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, original_msg_id):
     start_time = time.time()
-    try:
-        my_id = bot.__dict__.get('_user', {}).get('id')
-        if not my_id:
-            return
-    except:
-        return
+    bot_clean = bot_name.lower().replace(" ", "")  # "Clam girl" → "clamgirl"
 
     while time.time() - start_time < 4:
         try:
@@ -272,7 +267,6 @@ def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, origi
             for msg in messages:
                 if msg.get("author", {}).get("id") != karuta_id:
                     continue
-
                 content = msg.get("content", "")
 
                 # ✅ Bắt cả "took the" và "fought off"
@@ -283,11 +277,8 @@ def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, origi
                 )
                 if match:
                     won_card = match.group(1).strip()
-
-                    # Kiểm tra bot hiện tại có trong tin nhắn không
-                    mentions = msg.get("mentions", [])
-                    mentioned_ids = [str(m.get("id", "")) for m in mentions]
-                    if my_id in mentioned_ids or my_id in content:
+                    # Kiểm tra tên bot có trong tin nhắn không
+                    if bot_clean in content.lower().replace(" ", ""):
                         card_logger.add_log(
                             "win",
                             bot_name,
@@ -298,7 +289,6 @@ def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, origi
                         )
                         print(f"[✅ WIN] {bot_name} won **{won_card}** with {hearts}♡")
                         return
-
             time.sleep(1)
         except Exception:
             time.sleep(1)
