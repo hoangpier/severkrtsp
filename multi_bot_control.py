@@ -1,4 +1,4 @@
-# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V4.6 - ROBUST WINNER DETECTION
+# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V4.7 - FINAL ROBUST LOGGING FIX
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -33,7 +33,7 @@ class CardGrabLogger:
 
     def parse_card_info(self, message_content):
         content_lower = message_content.lower()
-        condition_map = {'poor': ['poor', 'tệ'], 'good': ['good', 'tốt'], 'excellent': ['excellent', 'tuyệt vời', 'xuất sắc'], 'mint': ['mint', 'hoàn hảo']}
+        condition_map = {'poor': ['poor', 'tệ', 'badly damaged'], 'good': ['good', 'tốt'], 'excellent': ['excellent', 'tuyệt vời', 'xuất sắc'], 'mint': ['mint', 'hoàn hảo']}
         condition = next((cond for cond, patterns in condition_map.items() if any(p in content_lower for p in patterns)), 'unknown')
         hearts_match = re.search(r'(\d+)\s*♡', message_content)
         hearts = int(hearts_match.group(1)) if hearts_match else 0
@@ -217,35 +217,34 @@ def handle_card_drop(bot, msg, bot_num):
                 pass
         threading.Thread(target=check_watermelon, daemon=True).start()
 
-# << SỬA LỖI: Sử dụng regex mạnh hơn để tìm chính xác tên người thắng cuộc
+# << SỬA LỖI DỨT ĐIỂM: Logic nhận diện người thắng cuộc siêu bền vững
 def handle_karuta_response(msg):
     content = msg.get("content", "")
     content_lower = content.lower()
 
-    # Pattern để tìm tên người thắng cuộc (bao gồm cả mention và tên thường)
-    pattern = r"^(?:<@!?\d+>|@?\S+)\s+(?:fought off|took the)"
-    match = re.search(pattern, content)
-    
-    if not match:
+    if "took the" not in content_lower and "fought off" not in content_lower:
         return
-
-    # Tách lấy phần tên của người thắng cuộc
-    winner_part = match.group(0)
 
     # Duyệt qua tất cả các bot đã biết để tìm người thắng
     for bot_id, user_id in list(bot_user_ids.items()):
         if not user_id: continue
 
-        # Cách 1 (Ưu tiên): Kiểm tra mention qua ID
-        if f'<@{user_id}>' in winner_part:
-            card_logger.log_event(get_bot_name(bot_id), 'card_success', message=content)
-            return
+        # Cách kiểm tra TỐI ƯU và DUY NHẤT:
+        # Kiểm tra xem chuỗi số ID của bot có nằm trong tin nhắn hay không.
+        # Cách này đúng cho cả 2 trường hợp Karuta tag: <@USER_ID> và <@!USER_ID> (có nickname)
+        if user_id in content:
+            # Bây giờ, xác nhận bot này thực sự là người thắng cuộc ở đầu tin nhắn
+            # để tránh trường hợp bot được tag ở vị trí khác với mục đích khác.
+            winner_part_check = ""
+            if "fought off" in content_lower:
+                winner_part_check = content.split("fought off")[0]
+            elif "took the" in content_lower:
+                winner_part_check = content.split(" took the")[0]
 
-        # Cách 2 (Fallback): Kiểm tra xem tên bot có nằm trong phần tên người thắng không
-        bot_name = get_bot_name(bot_id)
-        if bot_name.lower() in winner_part.lower():
-            card_logger.log_event(bot_name, 'card_success', message=content)
-            return
+            if user_id in winner_part_check:
+                bot_name = get_bot_name(bot_id)
+                card_logger.log_event(bot_name, 'card_success', message=content)
+                return # Đã tìm thấy, thoát khỏi hàm
 
 # --- HỆ THỐNG REBOOT & HEALTH CHECK ---
 def check_bot_health(bot_instance, bot_id):
@@ -860,7 +859,7 @@ def status_endpoint():
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V4.6 Stable Log Starting...", flush=True)
+    print("🚀 Shadow Network Control - V4.7 Final Fix Starting...", flush=True)
     load_settings()
 
     print("🔌 Initializing bots using Bot Manager...", flush=True)
