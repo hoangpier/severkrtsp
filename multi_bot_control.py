@@ -17,6 +17,7 @@ acc_names = [f"Bot-{i:02d}" for i in range(1, 21)]
 servers = []
 bot_states = {
     "reboot_settings": {}, "active": {}, "watermelon_grab": {}, "health_stats": {},
+    "user_ids": {},  # NEW: Store user IDs for each bot
     "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}},
     "card_logs": [],  # Store recent card pickup logs
     "success_logs": []  # Store successful card wins
@@ -46,7 +47,6 @@ class ThreadSafeBotManager:
                 except Exception as e:
                     print(f"[Bot Manager] ⚠️ Error closing gateway for {bot_id}: {e}", flush=True)
                 print(f"[Bot Manager] 🗑️ Removed bot {bot_id}", flush=True)
-
 
     def get_bot(self, bot_id):
         with self._lock:
@@ -197,10 +197,57 @@ def safe_message_handler_wrapper(handler_func, bot, msg, *args):
         print(f"[Message Handler] 🐛 Traceback: {traceback.format_exc()}", flush=True)
         return None
 
+# --- IMPROVED USER ID RETRIEVAL ---
+def get_user_id_from_bot(bot, bot_id):
+    """Get user ID with multiple fallback methods."""
+    try:
+        # Method 1: From gateway user data
+        if hasattr(bot, 'gateway') and hasattr(bot.gateway, 'session'):
+            session_data = getattr(bot.gateway.session, 'user', None)
+            if session_data and 'id' in session_data:
+                user_id = session_data['id']
+                bot_states["user_ids"][bot_id] = user_id
+                print(f"[User ID] ✅ Found user ID for {bot_id} from gateway: {user_id}", flush=True)
+                return user_id
+
+        # Method 2: From stored health stats
+        stored_user_id = bot_states["health_stats"].get(bot_id, {}).get('user_id')
+        if stored_user_id:
+            bot_states["user_ids"][bot_id] = stored_user_id
+            print(f"[User ID] ✅ Found user ID for {bot_id} from health stats: {stored_user_id}", flush=True)
+            return stored_user_id
+
+        # Method 3: From user_ids cache
+        cached_user_id = bot_states["user_ids"].get(bot_id)
+        if cached_user_id:
+            print(f"[User ID] ✅ Found user ID for {bot_id} from cache: {cached_user_id}", flush=True)
+            return cached_user_id
+
+        # Method 4: Try to get from Discord API
+        if hasattr(bot, 'getUser'):
+            try:
+                user_data = bot.getUser('@me')
+                if user_data and user_data.status_code == 200:
+                    user_info = user_data.json()
+                    if 'id' in user_info:
+                        user_id = user_info['id']
+                        bot_states["user_ids"][bot_id] = user_id
+                        print(f"[User ID] ✅ Found user ID for {bot_id} from API: {user_id}", flush=True)
+                        return user_id
+            except Exception as e:
+                print(f"[User ID] ⚠️ API method failed for {bot_id}: {e}", flush=True)
+
+        print(f"[User ID] ❌ Could not find user ID for {bot_id}", flush=True)
+        return None
+    except Exception as e:
+        print(f"[User ID] ❌ Error getting user ID for {bot_id}: {e}", flush=True)
+        return None
+
 # --- LOGIC GRAB CARD ---
 def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id):
     """Hàm chung để tìm và chọn card dựa trên số heart."""
     bot_name = get_bot_name(f'main_{bot_num}')
+    bot_id = f'main_{bot_num}'
     
     for _ in range(7):
         time.sleep(0.5)
@@ -233,16 +280,12 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                         print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
                         
                         def grab_action():
-                            my_user_id = None
-                            start_wait_time = time.time()
-                            while time.time() - start_wait_time < 10:
-                                my_user_id = bot_states["health_stats"].get(f'main_{bot_num}', {}).get('user_id')
-                                if my_user_id:
-                                    break
-                                time.sleep(1)
-
+                            # Get user ID with improved method
+                            my_user_id = get_user_id_from_bot(bot, bot_id)
+                            
                             if not my_user_id:
-                                print(f"[CARD GRAB | Bot {bot_num}] ❌ Không tìm thấy User ID sau khi chờ, không thể theo dõi win.", flush=True)
+                                print(f"[CARD GRAB | Bot {bot_num}] ❌ Không tìm thấy User ID, không thể theo dõi win.", flush=True)
+                                card_logger.add_log("error", bot_name, max_num, card_name, message="No User ID found")
                                 return
                             
                             try:
@@ -274,9 +317,9 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
 def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, original_msg_id, my_user_id):
     start_time = time.time()
     
-    while time.time() - start_time < 5:
+    while time.time() - start_time < 8:  # Extended monitoring time
         try:
-            messages = bot.getMessages(channel_id, num=10).json()
+            messages = bot.getMessages(channel_id, num=15).json()  # Check more messages
             if not isinstance(messages, list):
                 time.sleep(0.5)
                 continue
@@ -287,30 +330,45 @@ def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, origi
                 
                 content = msg.get("content", "")
 
+                # Check if this message is about our user
                 if f'<@{my_user_id}>' in content:
-                    match = re.search(
+                    # Multiple patterns for different win messages
+                    win_patterns = [
                         r'(?:fought off.*took the|took the)\s*\*\*(.+?)\*\*\s*card',
-                        content,
-                        re.IGNORECASE
-                    )
+                        r'won\s*\*\*(.+?)\*\*',
+                        r'captured\s*\*\*(.+?)\*\*',
+                        r'obtained\s*\*\*(.+?)\*\*'
+                    ]
                     
-                    if match:
-                        won_card = match.group(1).strip()
-                        card_logger.add_log(
-                            "win",
-                            bot_name,
-                            hearts,
-                            won_card,
-                            success=True,
-                            message=f"🎉 {content}"
-                        )
-                        print(f"[✅ WIN] {bot_name} won **{won_card}** with {hearts}♡", flush=True)
-                        return
+                    for pattern in win_patterns:
+                        match = re.search(pattern, content, re.IGNORECASE)
+                        if match:
+                            won_card = match.group(1).strip()
+                            card_logger.add_log(
+                                "win",
+                                bot_name,
+                                hearts,
+                                won_card,
+                                success=True,
+                                message=f"🎉 Won: {won_card}"
+                            )
+                            print(f"[✅ WIN] {bot_name} won **{won_card}** with {hearts}♡", flush=True)
+                            return
+                    
+                    # If we found a message mentioning our user but no win pattern
+                    # Log it as an attempt result
+                    card_logger.add_log(
+                        "attempt",
+                        bot_name,
+                        hearts,
+                        card_name,
+                        message=f"Result: {content[:100]}..."
+                    )
 
             time.sleep(0.5)
-        except Exception:
+        except Exception as e:
+            print(f"[Win Monitor] ❌ Error monitoring for {bot_name}: {e}", flush=True)
             time.sleep(1)
-
 
 # --- LOGIC BOT ---
 def handle_clan_drop(bot, msg, bot_num):
@@ -353,6 +411,7 @@ def handle_grab(bot, msg, bot_num):
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, "🍉")
                                 print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DỰA THÀNH CÔNG!", flush=True)
+                                card_logger.add_log("fruit", get_bot_name(bot_id_str), 0, "Watermelon", message="🍉 Grabbed watermelon")
                             except Exception as e:
                                 print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
                             return
@@ -378,6 +437,9 @@ def check_bot_health(bot_instance, bot_id):
         
         if is_connected:
             stats['consecutive_failures'] = 0
+            # Try to get user ID if we don't have it
+            if bot_id not in bot_states["user_ids"]:
+                get_user_id_from_bot(bot_instance, bot_id)
         else:
             stats['consecutive_failures'] += 1
             print(f"[Health Check] ⚠️ Bot {bot_id} not connected - failures: {stats['consecutive_failures']}", flush=True)
@@ -425,6 +487,8 @@ def safe_reboot_bot(bot_id):
 
         print(f"[Safe Reboot] 🧹 Cleaning up old bot instance for {bot_name}", flush=True)
         bot_manager.remove_bot(bot_id)
+        # Clear cached user ID for fresh start
+        bot_states["user_ids"].pop(bot_id, None)
 
         settings = bot_states["reboot_settings"].get(bot_id, {})
         failure_count = settings.get('failure_count', 0)
@@ -630,6 +694,8 @@ def create_bot(token, bot_identifier, is_main=False):
                     username = user.get('username', 'Unknown')
                     print(f"[Bot] ✅ Đăng nhập: {user_id} ({get_bot_name(bot_id_str)}) - {username}", flush=True)
                     
+                    # Store user ID immediately when bot connects
+                    bot_states["user_ids"][bot_id_str] = user_id
                     bot_states["health_stats"].setdefault(bot_id_str, {})
                     bot_states["health_stats"][bot_id_str].update({
                         'created_time': time.time(),
@@ -667,6 +733,9 @@ def create_bot(token, bot_identifier, is_main=False):
         while time.time() - start_time < connection_timeout:
             if hasattr(bot.gateway, 'connected') and bot.gateway.connected:
                 print(f"[Bot] ✅ Gateway connected for {bot_id_str}", flush=True)
+                # Try to get user ID after connection
+                time.sleep(2)  # Wait for ready event
+                get_user_id_from_bot(bot, bot_id_str)
                 return bot
             time.sleep(0.5)
         
@@ -745,7 +814,7 @@ HTML_TEMPLATE = """
     <div class="container">
         <div class="header">
             <h1 class="title">Shadow Network Control</h1>
-            <div class="subtitle">Enhanced Safe Reboot System</div>
+            <div class="subtitle">Enhanced Safe Reboot System with Improved User ID Tracking</div>
         </div>
         <div id="msg-status-container" class="msg-status"> <span id="msg-status-text"></span></div>
         <div class="main-grid">
@@ -765,6 +834,7 @@ HTML_TEMPLATE = """
                          <div>🔒 Safety Features: Health Checks, Exponential Backoff, Rate Limiting</div>
                          <div>⏱️ Min Reboot Interval: 10 minutes | Max Failures: 5 attempts</div>
                          <div>🎯 Reboot Strategy: Priority-based, one-at-a-time with cleanup delay</div>
+                         <div>🆔 User ID Tracking: Multi-method fallback system for win monitoring</div>
                      </div>
                      <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));">
                      </div>
@@ -793,27 +863,7 @@ HTML_TEMPLATE = """
                         <span><i class="fas fa-hourglass-half"></i> Next Drop Cycle</span>
                         <div class="flex-row">
                             <span id="clan-drop-timer" class="timer-display">--:--:--</span>
-                            <button type="button" id="clan-drop-toggle-btn" class="btn btn-small">{{ 'DISABLE' if auto_clan_drop.enabled else 'ENABLE' }}</button>
-                        </div>
-                    </div>
-                </div>
-                <div class="server-sub-panel">
-                    <h3><i class="fas fa-cogs"></i> Configuration</h3>
-                    <div class="input-group"><label>Drop Channel ID</label><input type="text" id="clan-drop-channel-id" value="{{ auto_clan_drop.channel_id or '' }}"></div>
-                    <div class="input-group"><label>KTB Channel ID</label><input type="text" id="clan-drop-ktb-channel-id" value="{{ auto_clan_drop.ktb_channel_id or '' }}"></div>
-                </div>
-                <div class="server-sub-panel">
-                    <h3><i class="fas fa-crosshairs"></i> Soul Harvest (Clan Drop)</h3>
-                    {% for bot in main_bots_info %}
-                    <div class="grab-section">
-                        <h3>{{ bot.name }}</h3>
-                        <div class="input-group">
-                            <input type="number" class="clan-drop-threshold" data-node="main_{{ bot.id }}" value="{{ auto_clan_drop.heart_thresholds[('main_' + bot.id|string)]|default(50) }}" min="0">
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-                <button type="button" id="clan-drop-save-btn" class="btn" style="margin-top: 20px;">Save Clan Drop Settings</button>
+                            <button type="button" id="clan-drop-save-btn" class="btn" style="margin-top: 20px;">Save Clan Drop Settings</button>
             </div>
 
             <div class="panel global-settings-panel">
@@ -857,7 +907,7 @@ HTML_TEMPLATE = """
                          <input type="number" class="spam-delay" value="{{ server.spam_delay or 10 }}">
                          <span class="timer-display spam-timer">--:--:--</span>
                     </div>
-                    <button type="button" class="btn broadcast-toggle">{{ 'DISABLE' if server.spam_enabled else 'ENABLE' }}</button>
+                    <button type="button" class="broadcast-toggle">{{ 'DISABLE' if server.spam_enabled else 'ENABLE' }}</button>
                 </div>
             </div>
             {% endfor %}
@@ -983,7 +1033,6 @@ HTML_TEMPLATE = """
                     }
                 });
 
-
                 const wmGrid = document.getElementById('global-watermelon-grid');
                 wmGrid.innerHTML = '';
                 if (data.watermelon_grab_states && data.bot_statuses) {
@@ -1055,7 +1104,6 @@ HTML_TEMPLATE = """
                 })
                 .catch(error => console.error('Error loading logs:', error));
         }
-
 
         setInterval(fetchStatus, 1000);
         setInterval(loadCardLogs, 3000);
@@ -1291,10 +1339,10 @@ def status_endpoint():
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V3 Stable Version Starting...", flush=True)
+    print("🚀 Shadow Network Control - V3 Enhanced Version with Fixed User ID Tracking Starting...", flush=True)
     load_settings()
 
-    print("🔌 Initializing bots using Bot Manager...", flush=True)
+    print("🔌 Initializing bots using Bot Manager with improved User ID tracking...", flush=True)
     
     for i, token in enumerate(t for t in main_tokens if t.strip()):
         bot_num = i + 1
@@ -1330,4 +1378,6 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"🌐 Web Server running at http://0.0.0.0:{port}", flush=True)
+    print("🆔 User ID tracking system: Enhanced with multiple fallback methods", flush=True)
+    print("✅ System ready with improved stability and win monitoring!", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
