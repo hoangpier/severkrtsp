@@ -40,7 +40,6 @@ class ThreadSafeBotManager:
         with self._lock:
             bot = self._bots.pop(bot_id, None)
             if bot:
-                # Đảm bảo cleanup gateway một cách an toàn
                 try:
                     if hasattr(bot, 'gateway') and hasattr(bot.gateway, 'close'):
                         bot.gateway.close()
@@ -234,6 +233,18 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                         print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
                         
                         def grab_action():
+                            my_user_id = None
+                            start_wait_time = time.time()
+                            while time.time() - start_wait_time < 10:
+                                my_user_id = bot_states["health_stats"].get(f'main_{bot_num}', {}).get('user_id')
+                                if my_user_id:
+                                    break
+                                time.sleep(1)
+
+                            if not my_user_id:
+                                print(f"[CARD GRAB | Bot {bot_num}] ❌ Không tìm thấy User ID sau khi chờ, không thể theo dõi win.", flush=True)
+                                return
+                            
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
                                 time.sleep(2)
@@ -242,11 +253,6 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                                 
                                 if ktb_channel_id: 
                                     bot.sendMessage(ktb_channel_id, "kt b")
-
-                                my_user_id = bot_states["health_stats"].get(f'main_{bot_num}', {}).get('user_id')
-                                if not my_user_id:
-                                    print(f"[CARD GRAB | Bot {bot_num}] ❌ Không tìm thấy User ID đã lưu, không thể theo dõi win.", flush=True)
-                                    return
 
                                 threading.Thread(
                                     target=_monitor_success_message,
@@ -388,7 +394,6 @@ def handle_reboot_failure(bot_id):
     failure_count = settings.get('failure_count', 0) + 1
     settings['failure_count'] = failure_count
     
-    # Exponential Backoff
     backoff_multiplier = min(2 ** failure_count, 8)
     base_delay = settings.get('delay', 3600)
     next_try_delay = max(600, base_delay / backoff_multiplier) * backoff_multiplier
