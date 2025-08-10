@@ -1,4 +1,4 @@
-# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V4.5 - FIX NAMEERROR & FLEXIBLE NAME MATCHING
+# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V4.6 - ROBUST WINNER DETECTION
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -217,32 +217,33 @@ def handle_card_drop(bot, msg, bot_num):
                 pass
         threading.Thread(target=check_watermelon, daemon=True).start()
 
+# << SỬA LỖI: Sử dụng regex mạnh hơn để tìm chính xác tên người thắng cuộc
 def handle_karuta_response(msg):
     content = msg.get("content", "")
     content_lower = content.lower()
 
-    if "took the" not in content_lower and "fought off" not in content_lower:
+    # Pattern để tìm tên người thắng cuộc (bao gồm cả mention và tên thường)
+    pattern = r"^(?:<@!?\d+>|@?\S+)\s+(?:fought off|took the)"
+    match = re.search(pattern, content)
+    
+    if not match:
         return
 
-    winner_part = ""
-    if "fought off" in content_lower:
-        winner_part = content_lower.split("fought off")[0]
-    elif "took the" in content_lower:
-        winner_part = content_lower.split(" took the")[0]
+    # Tách lấy phần tên của người thắng cuộc
+    winner_part = match.group(0)
 
-    if not winner_part:
-        return
-
+    # Duyệt qua tất cả các bot đã biết để tìm người thắng
     for bot_id, user_id in list(bot_user_ids.items()):
         if not user_id: continue
 
-        if f'<@{user_id}>' in content:
-            bot_name = get_bot_name(bot_id)
-            card_logger.log_event(bot_name, 'card_success', message=content)
+        # Cách 1 (Ưu tiên): Kiểm tra mention qua ID
+        if f'<@{user_id}>' in winner_part:
+            card_logger.log_event(get_bot_name(bot_id), 'card_success', message=content)
             return
 
+        # Cách 2 (Fallback): Kiểm tra xem tên bot có nằm trong phần tên người thắng không
         bot_name = get_bot_name(bot_id)
-        if bot_name.lower() in winner_part:
+        if bot_name.lower() in winner_part.lower():
             card_logger.log_event(bot_name, 'card_success', message=content)
             return
 
@@ -859,7 +860,7 @@ def status_endpoint():
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V4.5 Stable Log Starting...", flush=True)
+    print("🚀 Shadow Network Control - V4.6 Stable Log Starting...", flush=True)
     load_settings()
 
     print("🔌 Initializing bots using Bot Manager...", flush=True)
@@ -889,8 +890,7 @@ if __name__ == "__main__":
 
     print("🔧 Starting background threads...", flush=True)
     threading.Thread(target=periodic_task, args=(1800, save_settings, "Save"), daemon=True).start()
-    # << SỬA LỖI: Thay thế hàm không tồn tại bằng lambda
-    threading.Thread(target=periodic_task, args=(300, lambda: [check_bot_health(b, bid) for bid, b in bot_manager.get_all_bots()], "Health"), daemon=True).start()
+    threading.Thread(target=periodic_task, args=(300, lambda: [check_bot_health(b, bid) for bid, b in bot_manager.get_all_bots(active_only=True)], "Health"), daemon=True).start()
     threading.Thread(target=spam_loop_manager, daemon=True).start()
     
     auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
