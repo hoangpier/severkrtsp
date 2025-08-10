@@ -140,20 +140,16 @@ def load_settings():
 
     def load_from_dict(settings):
         try:
-            # Tải servers một cách an toàn
             loaded_servers = settings.get('servers', [])
             if isinstance(loaded_servers, list):
                 servers.extend(loaded_servers)
 
-            # Tải bot_states, xử lý đúng cả dict và list
             loaded_bot_states = settings.get('bot_states', {})
             if isinstance(loaded_bot_states, dict):
                 for key, value in loaded_bot_states.items():
                     if key in bot_states:
-                        # Nếu là dict, update để không mất key mặc định
                         if isinstance(bot_states[key], dict) and isinstance(value, dict):
                             bot_states[key].update(value)
-                        # Nếu là list (như card_logs) hoặc loại khác, gán trực tiếp
                         else:
                             bot_states[key] = value
             return True
@@ -233,7 +229,6 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                         
                         card_name_match = re.search(r'\*\*(.+?)\*\*', lines[max_index])
                         card_name = card_name_match.group(1) if card_name_match else "Unknown Card"
-                        # Sanitize card_name
                         card_name = re.sub(r'[^\w\s\-\.\']', '', str(card_name)).strip()
                         
                         print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
@@ -241,16 +236,21 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                         def grab_action():
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
-                                time.sleep(2)  # Wait for Karuta to process
+                                time.sleep(2)
 
                                 card_logger.add_log("attempt", bot_name, max_num, card_name, message=f"Reacting with {emoji}...")
                                 
                                 if ktb_channel_id: 
                                     bot.sendMessage(ktb_channel_id, "kt b")
 
+                                my_user_id = bot_states["health_stats"].get(f'main_{bot_num}', {}).get('user_id')
+                                if not my_user_id:
+                                    print(f"[CARD GRAB | Bot {bot_num}] ❌ Không tìm thấy User ID đã lưu, không thể theo dõi win.", flush=True)
+                                    return
+
                                 threading.Thread(
                                     target=_monitor_success_message,
-                                    args=(bot, channel_id, bot_name, max_num, card_name, last_drop_msg_id),
+                                    args=(bot, channel_id, bot_name, max_num, card_name, last_drop_msg_id, my_user_id),
                                     daemon=True
                                 ).start()
                             
@@ -265,26 +265,9 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
             print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi đọc messages: {e}", flush=True)
     return False
 
-# THAY THẾ TOÀN BỘ HÀM _monitor_success_message BẰNG PHIÊN BẢN NÀY
-
-# THAY THẾ TOÀN BỘ HÀM _monitor_success_message BẰNG PHIÊN BẢN NÀY
-
-def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, original_msg_id):
+def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, original_msg_id, my_user_id):
     start_time = time.time()
     
-    try:
-        # --- SỬA LỖI TẠI ĐÂY ---
-        # Lấy ID của bot từ bot.gateway.user, không phải bot.user
-        my_user_id = bot.gateway.user.get('id')
-    except AttributeError:
-        # Xử lý trường hợp gateway chưa sẵn sàng và chưa có thông tin user
-        print(f"[Monitor] ⚠️ Gateway chưa sẵn sàng cho bot {bot_name}, không thể lấy user ID.", flush=True)
-        return
-
-    if not my_user_id:
-        print(f"[Monitor] ⚠️ Không thể lấy User ID cho bot {bot_name}, không thể xác nhận win.", flush=True)
-        return
-
     while time.time() - start_time < 5:
         try:
             messages = bot.getMessages(channel_id, num=10).json()
@@ -407,7 +390,6 @@ def handle_reboot_failure(bot_id):
     
     # Exponential Backoff
     backoff_multiplier = min(2 ** failure_count, 8)
-    # Ensure delay is not excessively long for the first few failures
     base_delay = settings.get('delay', 3600)
     next_try_delay = max(600, base_delay / backoff_multiplier) * backoff_multiplier
 
@@ -436,18 +418,15 @@ def safe_reboot_bot(bot_id):
         token = main_tokens[bot_index].strip()
         bot_name = get_bot_name(bot_id)
 
-        # Cleanup bot cũ
         print(f"[Safe Reboot] 🧹 Cleaning up old bot instance for {bot_name}", flush=True)
-        bot_manager.remove_bot(bot_id) # remove_bot đã bao gồm gateway.close()
+        bot_manager.remove_bot(bot_id)
 
-        # Exponential backoff delay
         settings = bot_states["reboot_settings"].get(bot_id, {})
         failure_count = settings.get('failure_count', 0)
         wait_time = random.uniform(20, 40) + min(failure_count * 30, 300)
         print(f"[Safe Reboot] ⏳ Chờ {wait_time:.1f}s để cleanup và tránh rate limit...", flush=True)
         time.sleep(wait_time)
 
-        # Tạo bot mới với logic kết nối đáng tin cậy hơn
         print(f"[Safe Reboot] 🏗️ Creating new bot instance for {bot_name}", flush=True)
         new_bot = create_bot(token, bot_identifier=(bot_index + 1), is_main=True)
         if not new_bot:
@@ -469,7 +448,7 @@ def safe_reboot_bot(bot_id):
         handle_reboot_failure(bot_id)
         return False
     finally:
-        bot_manager.end_reboot(bot_id) # Luôn đảm bảo cờ reboot được gỡ
+        bot_manager.end_reboot(bot_id)
 
 # --- VÒNG LẶP NỀN (IMPROVED) ---
 def auto_reboot_loop():
@@ -481,8 +460,7 @@ def auto_reboot_loop():
         try:
             now = time.time()
             
-            # Global rate limiting
-            min_global_interval = 600 # Tối thiểu 10 phút giữa các lần reboot
+            min_global_interval = 600
             if now - last_global_reboot_time < min_global_interval:
                 stop_events["reboot"].wait(60)
                 continue
@@ -500,7 +478,6 @@ def auto_reboot_loop():
                 if now < next_reboot_time:
                     continue
                     
-                # Tính điểm ưu tiên
                 health_stats = bot_states["health_stats"].get(bot_id, {})
                 failure_count = health_stats.get('consecutive_failures', 0)
                 time_overdue = now - next_reboot_time
@@ -517,14 +494,12 @@ def auto_reboot_loop():
                 if safe_reboot_bot(bot_to_reboot):
                     last_global_reboot_time = now
                     consecutive_system_failures = 0
-                    # Chờ lâu hơn nếu không có bot nào khác cần reboot gấp
                     wait_time = random.uniform(300, 600)
                     print(f"[Safe Reboot] ⏳ Chờ {wait_time:.0f}s trước khi tìm bot reboot tiếp theo.", flush=True)
                     stop_events["reboot"].wait(wait_time)
                 else:
-                    # Nếu reboot thất bại, backoff để tránh spam
                     consecutive_system_failures += 1
-                    backoff_time = min(120 * (2 ** consecutive_system_failures), 1800) # Max 30 phút
+                    backoff_time = min(120 * (2 ** consecutive_system_failures), 1800)
                     print(f"[Safe Reboot] ❌ Reboot thất bại. Hệ thống backoff: {backoff_time}s", flush=True)
                     stop_events["reboot"].wait(backoff_time)
             else:
@@ -654,6 +629,7 @@ def create_bot(token, bot_identifier, is_main=False):
                     bot_states["health_stats"][bot_id_str].update({
                         'created_time': time.time(),
                         'consecutive_failures': 0,
+                        'user_id': user_id
                     })
             except Exception as e:
                 print(f"[Bot] ❌ Error in on_ready for {bot_id_str}: {e}", flush=True)
@@ -669,7 +645,6 @@ def create_bot(token, bot_identifier, is_main=False):
                         
                         if author_id == karuta_id and "dropping" in content:
                             handler = handle_clan_drop if msg.get("mentions") else handle_grab
-                            # Sử dụng wrapper để tăng độ an toàn
                             safe_message_handler_wrapper(handler, bot, msg, bot_identifier)
                 except Exception as e:
                     print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}", flush=True)
@@ -682,7 +657,6 @@ def create_bot(token, bot_identifier, is_main=False):
         
         threading.Thread(target=start_gateway, daemon=True).start()
         
-        # Chờ kết nối với timeout để xác nhận bot hoạt động
         connection_timeout = 20
         start_time = time.time()
         while time.time() - start_time < connection_timeout:
@@ -1141,8 +1115,8 @@ def index():
 @app.route("/api/card_logs", methods=['GET'])
 def api_card_logs():
     return jsonify({
-        "recent_wins": bot_states["success_logs"][:5],  # Last 5 wins
-        "recent_attempts": bot_states["card_logs"][:10]  # Last 10 activities
+        "recent_wins": bot_states["success_logs"][:5],
+        "recent_attempts": bot_states["card_logs"][:10]
     })
 
 @app.route("/api/clan_drop_toggle", methods=['POST'])
@@ -1317,7 +1291,6 @@ if __name__ == "__main__":
 
     print("🔌 Initializing bots using Bot Manager...", flush=True)
     
-    # Khởi tạo bot chính
     for i, token in enumerate(t for t in main_tokens if t.strip()):
         bot_num = i + 1
         bot_id = f"main_{bot_num}"
@@ -1331,7 +1304,6 @@ if __name__ == "__main__":
         bot_states["reboot_settings"].setdefault(bot_id, {'enabled': False, 'delay': 3600, 'next_reboot_time': 0, 'failure_count': 0})
         bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
 
-    # Khởi tạo bot phụ
     for i, token in enumerate(t for t in tokens if t.strip()):
         bot_id = f"sub_{i}"
         bot = create_bot(token.strip(), bot_identifier=i, is_main=False)
