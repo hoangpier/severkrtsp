@@ -255,36 +255,32 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
 
 def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, original_msg_id):
     start_time = time.time()
-    
-    while time.time() - start_time < 4:  # ⬅️ Increased to 30 seconds
+
+    while time.time() - start_time < 4:
         try:
-            messages = bot.getMessages(channel_id, num=20).json()  # ⬅️ Fetch more messages
+            messages = bot.getMessages(channel_id, num=20).json()
             if not isinstance(messages, list):
-                time.sleep(1)  # ⬅️ Slower polling
+                time.sleep(1)
                 continue
 
             for msg in messages:
                 if msg.get("author", {}).get("id") != karuta_id:
                     continue
-                
+
                 content = msg.get("content", "")
                 
-                # ✅ Looser regex matching
+                # ✅ Bắt cả "fought off" và "took the"
                 patterns = [
-                    rf"{re.escape(bot_name)}.*fought off.*took the (.+?) card",
-                    rf"{re.escape(bot_name)}.*took the (.+?) card",
-                    rf"{re.escape(bot_name)}.*claimed the (.+?) card",
-                    rf"fought off.*{re.escape(bot_name)}.*took the (.+?) card",
-                    rf"took the (.+?) card.*{re.escape(bot_name)}",
+                    rf"{re.escape(bot_name)}.*fought off.*took the \*\*(.+?)\*\* card",
+                    rf"{re.escape(bot_name)}.*took the \*\*(.+?)\*\* card",
+                    rf"fought off.*{re.escape(bot_name)}.*took the \*\*(.+?)\*\* card",
+                    rf"took the \*\*(.+?)\*\* card.*{re.escape(bot_name)}"
                 ]
-                
+
                 for pattern in patterns:
                     match = re.search(pattern, content, re.IGNORECASE)
                     if match:
                         won_card = match.group(1).strip()
-                        # Sanitize won_card
-                        won_card = re.sub(r'[^\w\s\-\.\']', '', str(won_card)).strip()
-                        
                         card_logger.add_log(
                             "win",
                             bot_name,
@@ -293,10 +289,11 @@ def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, origi
                             success=True,
                             message=f"🎉 {content}"
                         )
-                        print(f"[CARD WIN] 🏆 {bot_name} won **{won_card}** with {hearts}♡")
-                        return  # ✅ Exit after finding winner
+                        print(f"[✅ WIN] {bot_name} won **{won_card}** with {hearts}♡")
+                        return  # Dừng sau khi tìm được
+
             time.sleep(1)
-        except Exception as e:
+        except Exception:
             time.sleep(1)
 
 
