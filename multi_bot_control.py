@@ -1,4 +1,4 @@
-# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V4.2 - CLEAN LOG
+# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V4.3 - FIX KEYERROR
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -16,6 +16,7 @@ acc_names = [f"Bot-{i:02d}" for i in range(1, 21)]
 
 # --- BIẾN TRẠNG THÁI & KHÓA ---
 servers = []
+bot_user_ids = {} # << THÊM MỚI: Nơi lưu trữ an toàn ID của các bot
 bot_states = {
     "reboot_settings": {}, "active": {}, "watermelon_grab": {}, "health_stats": {},
     "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}}
@@ -126,7 +127,7 @@ def save_settings():
     except Exception as e: print(f"[Settings] ❌ Save failed: {e}", flush=True)
 
 def load_settings():
-    global servers, bot_states
+    global servers, bot_states, bot_user_ids
     api_key, bin_id = os.getenv("JSONBIN_API_KEY"), os.getenv("JSONBIN_BIN_ID")
     settings = None
     try:
@@ -143,6 +144,7 @@ def load_settings():
     
     if settings:
         servers.extend(settings.get('servers', []))
+        # bot_user_ids = settings.get('bot_user_ids', {}) # Also load saved IDs if you want persistence across restarts
         for key, value in settings.get('bot_states', {}).items():
             if key in bot_states and isinstance(value, dict): bot_states[key].update(value)
         print("[Settings] ✅ Settings loaded.", flush=True)
@@ -190,20 +192,18 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                                 print(f"[GRAB ACTION] ❌ Error reacting: {e}", flush=True)
                         
                         threading.Timer(delay, grab_action).start()
-                        return # Exit after starting the grab action
+                        return
         except Exception as e: print(f"[CARD FIND] ❌ Error finding card: {e}", flush=True)
 
 def handle_card_drop(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
     bot_id_str = f'main_{bot_num}'
     
-    # Clan Drop Logic
     clan_settings = bot_states["auto_clan_drop"]
     if clan_settings.get("enabled") and channel_id == clan_settings.get("channel_id"):
         threshold = clan_settings.get("heart_thresholds", {}).get(bot_id_str, 50)
         return threading.Thread(target=_find_and_select_card, args=(bot, channel_id, msg["id"], threshold, bot_num, clan_settings["ktb_channel_id"]), daemon=True).start()
 
-    # Server Grab Logic
     if not (target_server := next((s for s in servers if s.get('main_channel_id') == channel_id), None)): return
 
     if target_server.get(f'auto_grab_enabled_{bot_num}', False):
@@ -219,22 +219,26 @@ def handle_card_drop(bot, msg, bot_num):
                     print(f"[{get_bot_name(bot_id_str)}] 🎯 WATERMELON DETECTED!", flush=True)
                     bot.addReaction(channel_id, msg["id"], "🍉")
                     card_logger.log_event(get_bot_name(bot_id_str), 'item_success', item_name="Dưa Hấu 🍉")
-            except Exception as e:
-                # We don't log this failure as it's not critical and spams the log
+            except Exception:
                 pass
         threading.Thread(target=check_watermelon, daemon=True).start()
 
 def handle_karuta_response(msg, bot_identifier):
     """
-    Handles responses from Karuta.
-    This is the SOLE place for logging card grab success.
-    The "must wait" log has been REMOVED as requested to prevent spam.
+    Handles responses from Karuta. This is now the ONLY place for logging card grab success.
+    The "must wait" log has been REMOVED as requested.
     """
+    bot_id_str = f'main_{bot_identifier}'
+    bot_user_id = bot_user_ids.get(bot_id_str) # << SỬA LỖI: Lấy ID đã lưu
+    
+    # If ID isn't ready, we can't reliably check mentions.
+    if not bot_user_id:
+        return
+
     content = msg.get("content", "")
     content_lower = content.lower()
-    bot_name = get_bot_name(f'main_{bot_identifier}')
+    bot_name = get_bot_name(bot_id_str)
     
-    bot_user_id = bot_manager.get_bot(f'main_{bot_identifier}').gateway.session.user['id']
     mentioned = f'<@{bot_user_id}>' in content
     
     if (bot_name.lower() in content_lower or mentioned) and ("took the" in content_lower or "fought off" in content_lower):
@@ -375,8 +379,11 @@ def create_bot(token, bot_identifier, is_main=False):
         def on_ready(resp):
             if resp.event.ready:
                 user = resp.raw.get("user", {})
-                print(f"[Bot] ✅ Logged in: {user.get('id')} ({get_bot_name(bot_id_str)})", flush=True)
+                user_id = user.get('id')
+                print(f"[Bot] ✅ Logged in: {user_id} ({get_bot_name(bot_id_str)})", flush=True)
                 bot_states["health_stats"].setdefault(bot_id_str, {})['consecutive_failures'] = 0
+                if user_id:
+                    bot_user_ids[bot_id_str] = user_id # << SỬA LỖI: Lưu ID tại đây
         
         if is_main:
             @bot.gateway.command
@@ -388,10 +395,8 @@ def create_bot(token, bot_identifier, is_main=False):
                 try:
                     if author_id == karuta_id:
                         if "dropping" in msg.get("content", "").lower():
-                             # This is a drop, trigger the card finding logic
                              threading.Thread(target=handle_card_drop, args=(bot, msg, bot_identifier), daemon=True).start()
                         else:
-                             # This is a response from Karuta (grab result, etc.)
                              handle_karuta_response(msg, bot_identifier)
                 except Exception as e:
                     print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}\n{traceback.format_exc()}", flush=True)
@@ -828,7 +833,7 @@ def api_get_card_stats():
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V4.2 Clean Log Starting...", flush=True)
+    print("🚀 Shadow Network Control - V4.3 KeyError Fix Starting...", flush=True)
     load_settings()
 
     print("🔌 Initializing bots...", flush=True)
