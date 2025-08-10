@@ -252,13 +252,12 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
     return False
 
 def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, original_msg_id):
-    """Monitor for success messages after attempting to grab a card"""
+    """Only log the actual winner from Karuta's win message"""
     start_time = time.time()
-    bot_lower = bot_name.lower()
     
-    while time.time() - start_time < 15:  # Monitor for 15 seconds
+    while time.time() - start_time < 15:
         try:
-            messages = bot.getMessages(channel_id, num=15).json()
+            messages = bot.getMessages(channel_id, num=10).json()
             if not isinstance(messages, list):
                 time.sleep(0.5)
                 continue
@@ -267,38 +266,32 @@ def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, origi
                 if msg.get("author", {}).get("id") == karuta_id:
                     content = msg.get("content", "")
                     
-                    success_indicators = [
-                        "fought off", "took the", "claimed", "won the", "successfully grabbed"
+                    # ✅ Exact win message pattern
+                    win_patterns = [
+                        r"(@[^,\s!]+).*fought off.*took the (.+?) card",
+                        r"(@[^,\s!]+).*took the (.+?) card",
+                        r"(@[^,\s!]+).*claimed the (.+?) card",
+                        r"(@[^,\s!]+).*won the (.+?) card"
                     ]
-                    
-                    if any(indicator in content.lower() for indicator in success_indicators):
-                        bot_mention = re.search(r'@([^,\s!]+)', content)
-                        actual_bot_name = bot_mention.group(1) if bot_mention else "Unknown"
-                        
-                        card_match = re.search(r'took the (.+?) card|fought off .* took the (.+?) card|claimed (.+?) card', content, re.IGNORECASE)
-                        won_card_name = ""
-                        if card_match:
-                            won_card_name = next((g for g in card_match.groups() if g), "Unknown Card")
-                        
-                        is_our_bot = (actual_bot_name.lower() in bot_lower or 
-                                      bot_lower in actual_bot_name.lower() or
-                                      "fought off" in content.lower())
-                        
-                        if is_our_bot:
-                            card_logger.add_log(
-                                "win", bot_name, hearts, won_card_name, success=True,
-                                message=f"🎉 {content}"
-                            )
-                            print(f"[CARD WIN] 🏆 {bot_name} won {won_card_name} with {hearts}♡!")
-                            return
-                            
-                    if "gathered a fruit" in content.lower() and bot_lower in content.lower():
-                        card_logger.add_log(
-                            "fruit", bot_name, 0, "Fruit Piece", success=True,
-                            message="🍉 Gathered a fruit piece!"
-                        )
-                        return
-                        
+
+                    for pattern in win_patterns:
+                        match = re.search(pattern, content, re.IGNORECASE)
+                        if match:
+                            winner_mention = match.group(1).strip()
+                            won_card = match.group(2).strip()
+
+                            # ✅ Check if this bot actually won
+                            if winner_mention.lower() in bot_name.lower() or bot_name.lower() in winner_mention.lower():
+                                card_logger.add_log(
+                                    "win",
+                                    bot_name,
+                                    hearts,
+                                    won_card,
+                                    success=True,
+                                    message=f"🎉 {content}"
+                                )
+                                print(f"[CARD WIN] 🏆 {bot_name} won **{won_card}** with {hearts}♡")
+                                return  # ✅ Stop monitoring once winner is found
             time.sleep(0.5)
         except Exception as e:
             time.sleep(0.5)
