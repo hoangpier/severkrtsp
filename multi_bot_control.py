@@ -140,10 +140,22 @@ def load_settings():
 
     def load_from_dict(settings):
         try:
-            servers.extend(settings.get('servers', []))
-            for key, value in settings.get('bot_states', {}).items():
-                if key in bot_states and isinstance(value, dict):
-                    bot_states[key].update(value)
+            # Tải servers một cách an toàn
+            loaded_servers = settings.get('servers', [])
+            if isinstance(loaded_servers, list):
+                servers.extend(loaded_servers)
+
+            # Tải bot_states, xử lý đúng cả dict và list
+            loaded_bot_states = settings.get('bot_states', {})
+            if isinstance(loaded_bot_states, dict):
+                for key, value in loaded_bot_states.items():
+                    if key in bot_states:
+                        # Nếu là dict, update để không mất key mặc định
+                        if isinstance(bot_states[key], dict) and isinstance(value, dict):
+                            bot_states[key].update(value)
+                        # Nếu là list (như card_logs) hoặc loại khác, gán trực tiếp
+                        else:
+                            bot_states[key] = value
             return True
         except Exception as e:
             print(f"[Settings] ❌ Lỗi parse settings: {e}", flush=True)
