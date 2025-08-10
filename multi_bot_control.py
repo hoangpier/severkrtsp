@@ -1,4 +1,4 @@
-# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V5.1 - DETAILED WEB LOGS
+# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V5.3 - FIX UI DISPLAY
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -516,16 +516,16 @@ HTML_TEMPLATE = """
         .health-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-left: 5px; }
         .health-good { background: var(--success-green); } .health-warning { background: var(--warning-orange); } .health-bad { background: var(--blood-red); }
         .log-list { max-height: 500px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; padding: 5px; }
-        .log-entry { padding: 8px; border-bottom: 1px solid #222; display: flex; gap: 10px; align-items: flex-start; font-size: 0.9em; }
-        .log-timestamp { color: #888; white-space: nowrap; }
-        .log-bot-name { font-weight: bold; min-width: 80px; color: var(--mint-cyan); white-space: nowrap;}
+        .log-entry { display: flex; gap: 15px; align-items: flex-start; padding: 10px; border-bottom: 1px solid #222; }
+        .log-timestamp { color: #888; }
+        .log-content { flex-grow: 1; }
+        .log-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
+        .log-table td { padding: 3px 0; vertical-align: top; }
+        .log-table-label { white-space: nowrap; color: var(--text-secondary); width: 1%; padding-right: 10px;}
         .card-condition { padding: 2px 6px; border-radius: 3px; font-size: 0.8rem; text-transform: uppercase; color: black; }
         .condition-poor { background: #ff4444; } .condition-good { background: #ffaa00; } .condition-excellent { background: #44ff44; } .condition-mint { background: #00ffff; } .condition-unknown { background: #888888; color: white; }
         .stat-card { background: rgba(0,0,0,0.3); padding: 10px; border-radius: 6px; text-align: center; border: 1px solid var(--border-color); }
         .stat-number { font-size: 1.5rem; font-weight: bold; color: var(--success-green); }
-        .log-details { font-family: 'Courier New', monospace; line-height: 1.6; white-space: pre-wrap; }
-        .log-details div { padding-left: 5px; }
-        .log-details .hearts-display { font-weight: bold; color: var(--mint-cyan); font-size: 1.1em; }
     </style>
 </head>
 <body>
@@ -670,38 +670,56 @@ document.addEventListener('DOMContentLoaded', function () {
     function updateLogs(data, statsData) {
         const logContainer = document.getElementById('log-container');
         if (!data.logs || data.logs.length === 0) {
-            logContainer.innerHTML = '<div class="no-logs">No activity yet.</div>'; 
+            logContainer.innerHTML = '<div class="no-logs">Waiting for activity...</div>';
             return;
         }
-        
+
         let newHtml = '';
         data.logs.forEach(log => {
-            let content = '';
-            
+            let contentHtml = '';
             if (log.type === 'card_success') {
                 const botStats = statsData && statsData.bot_stats ? statsData.bot_stats[log.bot_name] : null;
-                
-                content = `<div class="log-details">
-                    <div>🎉 <b>${log.bot_name}</b> GRABBED CARD!</div>
-                    <div><span style="display: inline-block; width: 110px;">🃏 Card Name:</span> ${log.card_name}</div>
-                    <div><span style="display: inline-block; width: 110px;">💎 Condition:</span> <span class="card-condition condition-${log.condition}">${log.condition}</span></div>
-                    <div class="hearts-display"><span style="display: inline-block; width: 110px;">♡♡♡ HEARTS:</span> ${log.hearts} ♡♡♡</div>`;
-                
+
+                contentHtml = `
+                    <b>🎉 ${log.bot_name} GRABBED CARD!</b>
+                    <table class="log-table">
+                        <tr>
+                            <td class="log-table-label">🃏 Card Name:</td>
+                            <td class="log-table-value">${log.card_name}</td>
+                        </tr>
+                        <tr>
+                            <td class="log-table-label">💎 Condition:</td>
+                            <td class="log-table-value"><span class="card-condition condition-${log.condition}">${log.condition}</span></td>
+                        </tr>
+                        <tr>
+                            <td class="log-table-label">♡ Hearts:</td>
+                            <td class="log-table-value" style="color:var(--mint-cyan); font-weight:bold;">${log.hearts}</td>
+                        </tr>
+                `;
+
                 if (botStats) {
-                    content += `<div><span style="display: inline-block; width: 110px;">💰 Total Hearts:</span> ${botStats.total_hearts_grabbed}</div>
-                                <div><span style="display: inline-block; width: 110px;">🏆 Highest Heart:</span> ${botStats.highest_heart_grabbed}</div>`;
+                    contentHtml += `
+                        <tr>
+                            <td class="log-table-label">💰 Total Hearts:</td>
+                            <td class="log-table-value">${botStats.total_hearts_grabbed}</td>
+                        </tr>
+                        <tr>
+                            <td class="log-table-label">🏆 Highest Heart:</td>
+                            <td class="log-table-value">${botStats.highest_heart_grabbed}</td>
+                        </tr>
+                    `;
                 }
-                content += `</div>`;
-                           
+                contentHtml += `</table>`;
+
             } else if (log.type === 'failed') {
-                content = `<span style="color: #ffaa88;">Failed: ${log.reason}</span>`;
+                contentHtml = `<span style="color: #ffaa88;">Failed: ${log.reason}</span>`;
             } else if (log.type === 'attempt') {
-                content = `<span style="color: #ffdd44;">Attempting grab (threshold: ${log.threshold}♡)</span>`;
+                contentHtml = `<span style="color: #ffdd44;">Attempting grab (threshold: ${log.threshold}♡)</span>`;
             }
-            
+
             newHtml += `<div class="log-entry ${log.type}">
                 <span class="log-timestamp">[${log.timestamp}]</span>
-                <div style="flex-grow: 1;">${content}</div>
+                <div class="log-content">${contentHtml}</div>
             </div>`;
         });
         logContainer.innerHTML = newHtml;
@@ -978,7 +996,7 @@ def api_test_card_log():
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V5.1 Final Debug Starting...", flush=True)
+    print("🚀 Shadow Network Control - V5.3 UI Fix Starting...", flush=True)
     load_settings()
 
     print("🔌 Initializing bots using Bot Manager...", flush=True)
