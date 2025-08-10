@@ -17,10 +17,7 @@ acc_names = [f"Bot-{i:02d}" for i in range(1, 21)]
 servers = []
 bot_states = {
     "reboot_settings": {}, "active": {}, "watermelon_grab": {}, "health_stats": {},
-    "user_ids": {},
-    "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}},
-    "card_logs": [],
-    "success_logs": []
+    "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}}
 }
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
@@ -41,12 +38,14 @@ class ThreadSafeBotManager:
         with self._lock:
             bot = self._bots.pop(bot_id, None)
             if bot:
+                # Đảm bảo cleanup gateway một cách an toàn
                 try:
                     if hasattr(bot, 'gateway') and hasattr(bot.gateway, 'close'):
                         bot.gateway.close()
                 except Exception as e:
                     print(f"[Bot Manager] ⚠️ Error closing gateway for {bot_id}: {e}", flush=True)
                 print(f"[Bot Manager] 🗑️ Removed bot {bot_id}", flush=True)
+
 
     def get_bot(self, bot_id):
         with self._lock:
@@ -81,35 +80,6 @@ class ThreadSafeBotManager:
 
 bot_manager = ThreadSafeBotManager()
 
-# --- CARD LOG MANAGER ---
-class CardLogManager:
-    def __init__(self, max_logs=50):
-        self.max_logs = max_logs
-        self._lock = threading.Lock()
-    
-    def add_log(self, log_type, bot_name, hearts, card_name=None, success=False, message=""):
-        with self._lock:
-            log_entry = {
-                "timestamp": datetime.now().strftime("%H:%M:%S"),
-                "bot_name": bot_name,
-                "hearts": hearts,
-                "card_name": card_name,
-                "success": success,
-                "message": message,
-                "type": log_type
-            }
-            
-            if success:
-                bot_states["success_logs"].insert(0, log_entry)
-                if len(bot_states["success_logs"]) > self.max_logs:
-                    bot_states["success_logs"] = bot_states["success_logs"][:self.max_logs]
-            else:
-                bot_states["card_logs"].insert(0, log_entry)
-                if len(bot_states["card_logs"]) > self.max_logs:
-                    bot_states["card_logs"] = bot_states["card_logs"][:self.max_logs]
-
-card_logger = CardLogManager()
-
 # --- LƯU & TẢI CÀI ĐẶT ---
 def save_settings():
     api_key, bin_id = os.getenv("JSONBIN_API_KEY"), os.getenv("JSONBIN_BIN_ID")
@@ -139,18 +109,10 @@ def load_settings():
 
     def load_from_dict(settings):
         try:
-            loaded_servers = settings.get('servers', [])
-            if isinstance(loaded_servers, list):
-                servers.extend(loaded_servers)
-
-            loaded_bot_states = settings.get('bot_states', {})
-            if isinstance(loaded_bot_states, dict):
-                for key, value in loaded_bot_states.items():
-                    if key in bot_states:
-                        if isinstance(bot_states[key], dict) and isinstance(value, dict):
-                            bot_states[key].update(value)
-                        else:
-                            bot_states[key] = value
+            servers.extend(settings.get('servers', []))
+            for key, value in settings.get('bot_states', {}).items():
+                if key in bot_states and isinstance(value, dict):
+                    bot_states[key].update(value)
             return True
         except Exception as e:
             print(f"[Settings] ❌ Lỗi parse settings: {e}", flush=True)
@@ -197,45 +159,9 @@ def safe_message_handler_wrapper(handler_func, bot, msg, *args):
         print(f"[Message Handler] 🐛 Traceback: {traceback.format_exc()}", flush=True)
         return None
 
-# --- IMPROVED USER ID RETRIEVAL ---
-def get_user_id_from_bot(bot, bot_id):
-    """Get user ID with multiple fallback methods."""
-    try:
-        # Method 1: From user_ids cache first
-        cached_user_id = bot_states["user_ids"].get(bot_id)
-        if cached_user_id:
-            return cached_user_id
-
-        # Method 2: From gateway user data
-        if hasattr(bot, 'gateway'):
-            user_data = None
-            if hasattr(bot.gateway, 'user') and isinstance(bot.gateway.user, dict):
-                user_data = bot.gateway.user
-            elif hasattr(bot.gateway, 'session') and hasattr(bot.gateway.session, 'user') and isinstance(bot.gateway.session.user, dict):
-                user_data = bot.gateway.session.user
-
-            if user_data and 'id' in user_data:
-                user_id = user_data['id']
-                bot_states["user_ids"][bot_id] = user_id
-                return user_id
-
-        # Method 3: From stored health stats (fallback)
-        stored_user_id = bot_states["health_stats"].get(bot_id, {}).get('user_id')
-        if stored_user_id:
-            bot_states["user_ids"][bot_id] = stored_user_id
-            return stored_user_id
-            
-        return None
-    except Exception as e:
-        print(f"[User ID] ❌ Error getting user ID for {bot_id}: {e}", flush=True)
-        return None
-
 # --- LOGIC GRAB CARD ---
 def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id):
     """Hàm chung để tìm và chọn card dựa trên số heart."""
-    bot_name = get_bot_name(f'main_{bot_num}')
-    bot_id = f'main_{bot_num}'
-    
     for _ in range(7):
         time.sleep(0.5)
         try:
@@ -260,37 +186,15 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                         emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
                         delay = bot_delays[max_index]
                         
-                        card_name_match = re.search(r'\*\*(.+?)\*\*', lines[max_index])
-                        card_name = card_name_match.group(1) if card_name_match else "Unknown Card"
-                        card_name = re.sub(r'[^\w\s\-\.\']', '', str(card_name)).strip()
-                        
                         print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
                         
                         def grab_action():
-                            my_user_id = get_user_id_from_bot(bot, bot_id)
-                            
-                            if not my_user_id:
-                                print(f"[CARD GRAB | Bot {bot_num}] ❌ Không tìm thấy User ID, không thể theo dõi win.", flush=True)
-                                card_logger.add_log("error", bot_name, max_num, card_name, message="No User ID found")
-                                return
-                            
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
-                                time.sleep(2)
-
-                                card_logger.add_log("attempt", bot_name, max_num, card_name, message=f"Reacting with {emoji}...")
-                                
-                                if ktb_channel_id: 
-                                    bot.sendMessage(ktb_channel_id, "kt b")
-
-                                threading.Thread(
-                                    target=_monitor_success_message,
-                                    args=(bot, channel_id, bot_name, max_num, card_name, last_drop_msg_id, my_user_id),
-                                    daemon=True
-                                ).start()
-                            
+                                time.sleep(1.2)
+                                if ktb_channel_id: bot.sendMessage(ktb_channel_id, "kt b")
+                                print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
                             except Exception as e:
-                                card_logger.add_log("error", bot_name, max_num, card_name, message=f"Failed to grab: {str(e)}")
                                 print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
 
                         threading.Timer(delay, grab_action).start()
@@ -299,50 +203,6 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
         except Exception as e:
             print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi đọc messages: {e}", flush=True)
     return False
-
-def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, original_msg_id, my_user_id):
-    start_time = time.time()
-    
-    while time.time() - start_time < 8:
-        try:
-            messages = bot.getMessages(channel_id, num=15).json()
-            if not isinstance(messages, list):
-                time.sleep(0.5)
-                continue
-
-            for msg in messages:
-                if msg.get("author", {}).get("id") != karuta_id:
-                    continue
-                
-                content = msg.get("content", "")
-
-                if f'<@{my_user_id}>' in content:
-                    win_patterns = [
-                        r'(?:fought off.*took the|took the)\s*\*\*(.+?)\*\*\s*card',
-                        r'won\s*\*\*(.+?)\*\*',
-                        r'captured\s*\*\*(.+?)\*\*',
-                        r'obtained\s*\*\*(.+?)\*\*'
-                    ]
-                    
-                    for pattern in win_patterns:
-                        match = re.search(pattern, content, re.IGNORECASE)
-                        if match:
-                            won_card = match.group(1).strip()
-                            card_logger.add_log(
-                                "win",
-                                bot_name,
-                                hearts,
-                                won_card,
-                                success=True,
-                                message=f"🎉 Won: {won_card}"
-                            )
-                            print(f"[✅ WIN] {bot_name} won **{won_card}** with {hearts}♡", flush=True)
-                            return
-                    
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"[Win Monitor] ❌ Error monitoring for {bot_name}: {e}", flush=True)
-            time.sleep(1)
 
 # --- LOGIC BOT ---
 def handle_clan_drop(bot, msg, bot_num):
@@ -385,7 +245,6 @@ def handle_grab(bot, msg, bot_num):
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, "🍉")
                                 print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DỰA THÀNH CÔNG!", flush=True)
-                                card_logger.add_log("fruit", get_bot_name(bot_id_str), 0, "Watermelon", message="🍉 Grabbed watermelon")
                             except Exception as e:
                                 print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
                             return
@@ -411,8 +270,6 @@ def check_bot_health(bot_instance, bot_id):
         
         if is_connected:
             stats['consecutive_failures'] = 0
-            if bot_id not in bot_states["user_ids"]:
-                get_user_id_from_bot(bot_instance, bot_id)
         else:
             stats['consecutive_failures'] += 1
             print(f"[Health Check] ⚠️ Bot {bot_id} not connected - failures: {stats['consecutive_failures']}", flush=True)
@@ -429,7 +286,9 @@ def handle_reboot_failure(bot_id):
     failure_count = settings.get('failure_count', 0) + 1
     settings['failure_count'] = failure_count
     
+    # Exponential Backoff
     backoff_multiplier = min(2 ** failure_count, 8)
+    # Ensure delay is not excessively long for the first few failures
     base_delay = settings.get('delay', 3600)
     next_try_delay = max(600, base_delay / backoff_multiplier) * backoff_multiplier
 
@@ -458,16 +317,18 @@ def safe_reboot_bot(bot_id):
         token = main_tokens[bot_index].strip()
         bot_name = get_bot_name(bot_id)
 
+        # Cleanup bot cũ
         print(f"[Safe Reboot] 🧹 Cleaning up old bot instance for {bot_name}", flush=True)
-        bot_manager.remove_bot(bot_id)
-        bot_states["user_ids"].pop(bot_id, None)
+        bot_manager.remove_bot(bot_id) # remove_bot đã bao gồm gateway.close()
 
+        # Exponential backoff delay
         settings = bot_states["reboot_settings"].get(bot_id, {})
         failure_count = settings.get('failure_count', 0)
         wait_time = random.uniform(20, 40) + min(failure_count * 30, 300)
         print(f"[Safe Reboot] ⏳ Chờ {wait_time:.1f}s để cleanup và tránh rate limit...", flush=True)
         time.sleep(wait_time)
 
+        # Tạo bot mới với logic kết nối đáng tin cậy hơn
         print(f"[Safe Reboot] 🏗️ Creating new bot instance for {bot_name}", flush=True)
         new_bot = create_bot(token, bot_identifier=(bot_index + 1), is_main=True)
         if not new_bot:
@@ -489,7 +350,7 @@ def safe_reboot_bot(bot_id):
         handle_reboot_failure(bot_id)
         return False
     finally:
-        bot_manager.end_reboot(bot_id)
+        bot_manager.end_reboot(bot_id) # Luôn đảm bảo cờ reboot được gỡ
 
 # --- VÒNG LẶP NỀN (IMPROVED) ---
 def auto_reboot_loop():
@@ -501,7 +362,8 @@ def auto_reboot_loop():
         try:
             now = time.time()
             
-            min_global_interval = 600
+            # Global rate limiting
+            min_global_interval = 600 # Tối thiểu 10 phút giữa các lần reboot
             if now - last_global_reboot_time < min_global_interval:
                 stop_events["reboot"].wait(60)
                 continue
@@ -519,6 +381,7 @@ def auto_reboot_loop():
                 if now < next_reboot_time:
                     continue
                     
+                # Tính điểm ưu tiên
                 health_stats = bot_states["health_stats"].get(bot_id, {})
                 failure_count = health_stats.get('consecutive_failures', 0)
                 time_overdue = now - next_reboot_time
@@ -535,12 +398,14 @@ def auto_reboot_loop():
                 if safe_reboot_bot(bot_to_reboot):
                     last_global_reboot_time = now
                     consecutive_system_failures = 0
+                    # Chờ lâu hơn nếu không có bot nào khác cần reboot gấp
                     wait_time = random.uniform(300, 600)
                     print(f"[Safe Reboot] ⏳ Chờ {wait_time:.0f}s trước khi tìm bot reboot tiếp theo.", flush=True)
                     stop_events["reboot"].wait(wait_time)
                 else:
+                    # Nếu reboot thất bại, backoff để tránh spam
                     consecutive_system_failures += 1
-                    backoff_time = min(120 * (2 ** consecutive_system_failures), 1800)
+                    backoff_time = min(120 * (2 ** consecutive_system_failures), 1800) # Max 30 phút
                     print(f"[Safe Reboot] ❌ Reboot thất bại. Hệ thống backoff: {backoff_time}s", flush=True)
                     stop_events["reboot"].wait(backoff_time)
             else:
@@ -661,17 +526,15 @@ def create_bot(token, bot_identifier, is_main=False):
         def on_ready(resp):
             try:
                 if resp.event.ready:
-                    user_data = resp.raw.get("user", {})
-                    user_id = user_data.get('id', 'Unknown')
-                    username = user_data.get('username', 'Unknown')
+                    user = resp.raw.get("user", {})
+                    user_id = user.get('id', 'Unknown')
+                    username = user.get('username', 'Unknown')
                     print(f"[Bot] ✅ Đăng nhập: {user_id} ({get_bot_name(bot_id_str)}) - {username}", flush=True)
                     
-                    bot_states["user_ids"][bot_id_str] = user_id
                     bot_states["health_stats"].setdefault(bot_id_str, {})
                     bot_states["health_stats"][bot_id_str].update({
                         'created_time': time.time(),
                         'consecutive_failures': 0,
-                        'user_id': user_id
                     })
             except Exception as e:
                 print(f"[Bot] ❌ Error in on_ready for {bot_id_str}: {e}", flush=True)
@@ -687,6 +550,7 @@ def create_bot(token, bot_identifier, is_main=False):
                         
                         if author_id == karuta_id and "dropping" in content:
                             handler = handle_clan_drop if msg.get("mentions") else handle_grab
+                            # Sử dụng wrapper để tăng độ an toàn
                             safe_message_handler_wrapper(handler, bot, msg, bot_identifier)
                 except Exception as e:
                     print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}", flush=True)
@@ -699,16 +563,14 @@ def create_bot(token, bot_identifier, is_main=False):
         
         threading.Thread(target=start_gateway, daemon=True).start()
         
-        connection_timeout = 25
+        # Chờ kết nối với timeout để xác nhận bot hoạt động
+        connection_timeout = 20
         start_time = time.time()
         while time.time() - start_time < connection_timeout:
             if hasattr(bot.gateway, 'connected') and bot.gateway.connected:
-                # Wait for the ready event to be processed
-                time.sleep(3) 
-                if get_user_id_from_bot(bot, bot_id_str):
-                     print(f"[Bot] ✅ Gateway and User ID ready for {bot_id_str}", flush=True)
-                     return bot
-            time.sleep(1)
+                print(f"[Bot] ✅ Gateway connected for {bot_id_str}", flush=True)
+                return bot
+            time.sleep(0.5)
         
         print(f"[Bot] ⚠️ Gateway connection timeout for {bot_id_str}. Closing gateway.", flush=True)
         bot.gateway.close()
@@ -721,6 +583,7 @@ def create_bot(token, bot_identifier, is_main=False):
 
 # --- FLASK APP & GIAO DIỆN ---
 app = Flask(__name__)
+# Giao diện HTML giữ nguyên như file gốc, không thay đổi
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -774,18 +637,13 @@ HTML_TEMPLATE = """
         .health-warning { background-color: var(--warning-orange); }
         .health-bad { background-color: var(--blood-red); }
         .system-stats { font-size: 0.9em; color: var(--text-secondary); margin-top: 10px; }
-        .log-entry { padding: 4px 6px; margin: 2px 0; border-radius: 3px; font-size: 0.85em; line-height: 1.2; }
-        .win-log { background: rgba(50, 205, 50, 0.15); border-left: 2px solid #32cd32; }
-        .attempt-log { background: rgba(255, 140, 0, 0.15); border-left: 2px solid #ff8c00; }
-        .error-log { background: rgba(220, 20, 60, 0.15); border-left: 2px solid #dc143c; }
-        .fruit-log { background: rgba(255, 105, 180, 0.15); border-left: 2px solid #ff69b4; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1 class="title">Shadow Network Control</h1>
-            <div class="subtitle">Enhanced Safe Reboot System with Improved User ID Tracking</div>
+            <div class="subtitle">Enhanced Safe Reboot System</div>
         </div>
         <div id="msg-status-container" class="msg-status"> <span id="msg-status-text"></span></div>
         <div class="main-grid">
@@ -805,25 +663,9 @@ HTML_TEMPLATE = """
                          <div>🔒 Safety Features: Health Checks, Exponential Backoff, Rate Limiting</div>
                          <div>⏱️ Min Reboot Interval: 10 minutes | Max Failures: 5 attempts</div>
                          <div>🎯 Reboot Strategy: Priority-based, one-at-a-time with cleanup delay</div>
-                         <div>🆔 User ID Tracking: Multi-method fallback system for win monitoring</div>
                      </div>
                      <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));">
-                     </div>
-                </div>
-                <div class="server-sub-panel">
-                    <h3><i class="fas fa-history"></i> Recent Card Activity</h3>
-                    <div id="card-logs-container">
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-                            <div>
-                                <h4 style="color: #32cd32; margin: 5px 0; font-size: 0.9em;">🏆 Recent Wins</h4>
-                                <div id="win-logs" style="max-height: 150px; overflow-y: auto;"></div>
-                            </div>
-                            <div>
-                                <h4 style="color: #ff8c00; margin: 5px 0; font-size: 0.9em;">🎯 Activity</h4>
-                                <div id="activity-logs" style="max-height: 150px; overflow-y: auto;"></div>
-                            </div>
-                        </div>
-                    </div>
+                         </div>
                 </div>
             </div>
 
@@ -1024,6 +866,7 @@ HTML_TEMPLATE = """
                     }
                 });
 
+
                 const wmGrid = document.getElementById('global-watermelon-grid');
                 wmGrid.innerHTML = '';
                 if (data.watermelon_grab_states && data.bot_statuses) {
@@ -1056,49 +899,7 @@ HTML_TEMPLATE = """
             } catch (error) { console.error('Error fetching status:', error); }
         }
 
-        function loadCardLogs() {
-            fetch('/api/card_logs')
-                .then(response => response.json())
-                .then(data => {
-                    const winContainer = document.getElementById('win-logs');
-                    const activityContainer = document.getElementById('activity-logs');
-                    
-                    let winHtml = '';
-                    if (data.recent_wins.length > 0) {
-                        data.recent_wins.forEach(log => {
-                            winHtml += `<div class="log-entry win-log">
-                                <span style="color: #ccc;">${log.timestamp}</span><br>
-                                <strong>${log.bot_name}</strong>
-                                <span style="color: #ff69b4;">(${log.hearts}♡)</span>
-                                won ${log.card_name}
-                            </div>`;
-                        });
-                    } else {
-                        winHtml = '<div style="padding: 10px; color: #666;">No wins yet</div>';
-                    }
-                    winContainer.innerHTML = winHtml;
-                    
-                    let activityHtml = '';
-                    if (data.recent_attempts.length > 0) {
-                        data.recent_attempts.forEach(log => {
-                            const logClass = log.type === 'fruit' ? 'fruit-log' : 
-                                           log.type === 'error' ? 'error-log' : 'attempt-log';
-                            activityHtml += `<div class="log-entry ${logClass}">
-                                <span style="color: #ccc;">${log.timestamp}</span><br>
-                                <strong>${log.bot_name}</strong>: ${log.message}
-                            </div>`;
-                        });
-                    } else {
-                         activityHtml = '<div style="padding: 10px; color: #666;">No activity</div>';
-                    }
-                    activityContainer.innerHTML = activityHtml;
-                })
-                .catch(error => console.error('Error loading logs:', error));
-        }
-
         setInterval(fetchStatus, 1000);
-        setInterval(loadCardLogs, 3000);
-        loadCardLogs();
 
         document.querySelector('.container').addEventListener('click', e => {
             const button = e.target.closest('button');
@@ -1155,13 +956,6 @@ def index():
     main_bots_info = [{"id": int(bot_id.split('_')[1]), "name": get_bot_name(bot_id)} for bot_id, _ in bot_manager.get_main_bots_info()]
     main_bots_info.sort(key=lambda x: x['id'])
     return render_template_string(HTML_TEMPLATE, servers=sorted(servers, key=lambda s: s.get('name', '')), main_bots_info=main_bots_info, auto_clan_drop=bot_states["auto_clan_drop"])
-
-@app.route("/api/card_logs", methods=['GET'])
-def api_card_logs():
-    return jsonify({
-        "recent_wins": bot_states["success_logs"][:5],
-        "recent_attempts": bot_states["card_logs"][:10]
-    })
 
 @app.route("/api/clan_drop_toggle", methods=['POST'])
 def api_clan_drop_toggle():
@@ -1330,11 +1124,12 @@ def status_endpoint():
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V3 Enhanced Version with Fixed User ID Tracking Starting...", flush=True)
+    print("🚀 Shadow Network Control - V3 Stable Version Starting...", flush=True)
     load_settings()
 
-    print("🔌 Initializing bots using Bot Manager with improved User ID tracking...", flush=True)
+    print("🔌 Initializing bots using Bot Manager...", flush=True)
     
+    # Khởi tạo bot chính
     for i, token in enumerate(t for t in main_tokens if t.strip()):
         bot_num = i + 1
         bot_id = f"main_{bot_num}"
@@ -1348,6 +1143,7 @@ if __name__ == "__main__":
         bot_states["reboot_settings"].setdefault(bot_id, {'enabled': False, 'delay': 3600, 'next_reboot_time': 0, 'failure_count': 0})
         bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
 
+    # Khởi tạo bot phụ
     for i, token in enumerate(t for t in tokens if t.strip()):
         bot_id = f"sub_{i}"
         bot = create_bot(token.strip(), bot_identifier=i, is_main=False)
@@ -1369,5 +1165,4 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"🌐 Web Server running at http://0.0.0.0:{port}", flush=True)
-    print("✅ System ready with improved stability and win monitoring!", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
