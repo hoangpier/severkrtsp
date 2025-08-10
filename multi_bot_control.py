@@ -221,6 +221,8 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                         
                         card_name_match = re.search(r'\*\*(.+?)\*\*', lines[max_index])
                         card_name = card_name_match.group(1) if card_name_match else "Unknown Card"
+                        # Sanitize card_name
+                        card_name = re.sub(r'[^\w\s\-\.\']', '', str(card_name)).strip()
                         
                         print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
                         
@@ -254,9 +256,8 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
 def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, original_msg_id):
     start_time = time.time()
     
-    while time.time() - start_time < 7:  # ⬅️ Increased to 30 seconds
+    while time.time() - start_time < 4:  # ⬅️ Increased to 30 seconds
         try:
-            print(f"[DEBUG] Monitoring for {bot_name} - scanning messages...")
             messages = bot.getMessages(channel_id, num=20).json()  # ⬅️ Fetch more messages
             if not isinstance(messages, list):
                 time.sleep(1)  # ⬅️ Slower polling
@@ -266,7 +267,6 @@ def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, origi
                 if msg.get("author", {}).get("id") != karuta_id:
                     continue
                 
-                print(f"[DEBUG] Karuta message: {msg.get('content')}")
                 content = msg.get("content", "")
                 
                 # ✅ Looser regex matching
@@ -282,6 +282,9 @@ def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, origi
                     match = re.search(pattern, content, re.IGNORECASE)
                     if match:
                         won_card = match.group(1).strip()
+                        # Sanitize won_card
+                        won_card = re.sub(r'[^\w\s\-\.\']', '', str(won_card)).strip()
+                        
                         card_logger.add_log(
                             "win",
                             bot_name,
@@ -1019,29 +1022,38 @@ HTML_TEMPLATE = """
                     const activityContainer = document.getElementById('activity-logs');
                     
                     let winHtml = '';
-                    data.recent_wins.forEach(log => {
-                        winHtml += `<div class="log-entry win-log">
-                            <span style="color: #ccc;">${log.timestamp}</span><br>
-                            <strong>${log.bot_name}</strong><br>
-                            <span style="color: #ff69b4;">${log.hearts}♡</span> ${log.card_name}
-                        </div>`;
-                    });
-                    winContainer.innerHTML = winHtml || '<div style="padding: 10px; color: #666;">No wins yet</div>';
+                    if (data.recent_wins.length > 0) {
+                        data.recent_wins.forEach(log => {
+                            winHtml += `<div class="log-entry win-log">
+                                <span style="color: #ccc;">${log.timestamp}</span><br>
+                                <strong>${log.bot_name}</strong>
+                                <span style="color: #ff69b4;">(${log.hearts}♡)</span>
+                                won ${log.card_name}
+                            </div>`;
+                        });
+                    } else {
+                        winHtml = '<div style="padding: 10px; color: #666;">No wins yet</div>';
+                    }
+                    winContainer.innerHTML = winHtml;
                     
                     let activityHtml = '';
-                    data.recent_attempts.forEach(log => {
-                        const logClass = log.type === 'fruit' ? 'fruit-log' : 
-                                       log.type === 'error' ? 'error-log' : 'attempt-log';
-                        activityHtml += `<div class="log-entry ${logClass}">
-                            <span style="color: #ccc;">${log.timestamp}</span><br>
-                            <strong>${log.bot_name}</strong><br>
-                            ${log.message}
-                        </div>`;
-                    });
-                    activityContainer.innerHTML = activityHtml || '<div style="padding: 10px; color: #666;">No activity</div>';
+                    if (data.recent_attempts.length > 0) {
+                        data.recent_attempts.forEach(log => {
+                            const logClass = log.type === 'fruit' ? 'fruit-log' : 
+                                           log.type === 'error' ? 'error-log' : 'attempt-log';
+                            activityHtml += `<div class="log-entry ${logClass}">
+                                <span style="color: #ccc;">${log.timestamp}</span><br>
+                                <strong>${log.bot_name}</strong>: ${log.message}
+                            </div>`;
+                        });
+                    } else {
+                         activityHtml = '<div style="padding: 10px; color: #666;">No activity</div>';
+                    }
+                    activityContainer.innerHTML = activityHtml;
                 })
                 .catch(error => console.error('Error loading logs:', error));
         }
+
 
         setInterval(fetchStatus, 1000);
         setInterval(loadCardLogs, 3000);
