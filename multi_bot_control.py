@@ -267,16 +267,25 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
 
 # THAY THẾ TOÀN BỘ HÀM _monitor_success_message BẰNG PHIÊN BẢN NÀY
 
+# THAY THẾ TOÀN BỘ HÀM _monitor_success_message BẰNG PHIÊN BẢN NÀY
+
 def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, original_msg_id):
     start_time = time.time()
-    # Lấy ID của chính bot đang chạy để kiểm tra
-    my_user_id = bot.user.get('id')
     
+    try:
+        # --- SỬA LỖI TẠI ĐÂY ---
+        # Lấy ID của bot từ bot.gateway.user, không phải bot.user
+        my_user_id = bot.gateway.user.get('id')
+    except AttributeError:
+        # Xử lý trường hợp gateway chưa sẵn sàng và chưa có thông tin user
+        print(f"[Monitor] ⚠️ Gateway chưa sẵn sàng cho bot {bot_name}, không thể lấy user ID.", flush=True)
+        return
+
     if not my_user_id:
         print(f"[Monitor] ⚠️ Không thể lấy User ID cho bot {bot_name}, không thể xác nhận win.", flush=True)
         return
 
-    while time.time() - start_time < 5: # Tăng thời gian chờ lên 5 giây cho chắc chắn
+    while time.time() - start_time < 5:
         try:
             messages = bot.getMessages(channel_id, num=10).json()
             if not isinstance(messages, list):
@@ -284,17 +293,12 @@ def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, origi
                 continue
 
             for msg in messages:
-                # Chỉ xử lý tin nhắn từ Karuta
                 if msg.get("author", {}).get("id") != karuta_id:
                     continue
                 
                 content = msg.get("content", "")
 
-                # --- SỬA ĐỔI QUAN TRỌNG ---
-                # Kiểm tra xem ID của bot có được mention trong tin nhắn không.
-                # Đây là cách chính xác nhất để xác định bot đã thắng.
                 if f'<@{my_user_id}>' in content:
-                    # Nếu bot được mention, tiến hành tìm tên thẻ
                     match = re.search(
                         r'(?:fought off.*took the|took the)\s*\*\*(.+?)\*\*\s*card',
                         content,
@@ -303,7 +307,6 @@ def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, origi
                     
                     if match:
                         won_card = match.group(1).strip()
-                        # Ghi log chiến thắng
                         card_logger.add_log(
                             "win",
                             bot_name,
@@ -313,9 +316,9 @@ def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, origi
                             message=f"🎉 {content}"
                         )
                         print(f"[✅ WIN] {bot_name} won **{won_card}** with {hearts}♡", flush=True)
-                        return # Thoát khỏi hàm ngay khi tìm thấy tin nhắn thắng
+                        return
 
-            time.sleep(0.5) # Chờ 0.5s trước khi check lại
+            time.sleep(0.5)
         except Exception:
             time.sleep(1)
 
