@@ -1,4 +1,4 @@
-# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - TÍCH HỢP BOT MANAGER, LOGGING & CẢI TIẾN AN TOÀN
+# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - V4.2 - CLEAN LOG
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -23,7 +23,7 @@ bot_states = {
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
 
-# --- CARD GRAB LOGGING SYSTEM ---
+# --- CARD GRAB LOGGING SYSTEM (IMPROVED) ---
 class CardGrabLogger:
     def __init__(self, max_logs=200):
         self.logs = deque(maxlen=max_logs)
@@ -34,39 +34,35 @@ class CardGrabLogger:
         content_lower = message_content.lower()
         condition_map = {'poor': ['poor', 'tệ'], 'good': ['good', 'tốt'], 'excellent': ['excellent', 'tuyệt vời', 'xuất sắc'], 'mint': ['mint', 'hoàn hảo']}
         condition = next((cond for cond, patterns in condition_map.items() if any(p in content_lower for p in patterns)), 'unknown')
-        
         hearts_match = re.search(r'(\d+)\s*♡', message_content)
         hearts = int(hearts_match.group(1)) if hearts_match else 0
-        
-        name_match = re.search(r'(?:took the|lấy thẻ)\s+([^.!]+?)(?:\s+card|\.|!)', content_lower, re.IGNORECASE)
+        name_match = re.search(r'(?:took the|lấy thẻ|fought off.*?and took the)\s+([^.!]+?)(?:\s+card|\.|!)', content_lower, re.IGNORECASE)
         card_name = name_match.group(1).strip().title() if name_match else "Unknown Card"
-        
         return card_name, condition, hearts
 
     def log_event(self, bot_name, event_type, **kwargs):
         with self.lock:
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            log_entry = {'timestamp': timestamp, 'bot_name': bot_name, 'type': event_type, **kwargs}
-            self.logs.append(log_entry)
+            log_entry = {'timestamp': datetime.now().strftime("%H:%M:%S"), 'bot_name': bot_name, 'type': event_type, **kwargs}
+            self.logs.appendleft(log_entry)
             
             stats = self.stats[bot_name]
-            if event_type == 'success':
+            if event_type == 'card_success':
                 card_name, condition, hearts = self.parse_card_info(kwargs.get('message', ''))
-                if kwargs.get('hearts_override'): hearts = kwargs.get('hearts_override')
-                
                 stats['successful_grabs'] += 1
                 stats['cards_by_condition'][condition] += 1
                 stats['total_hearts_grabbed'] += hearts
                 if hearts > stats['highest_heart_grabbed']: stats['highest_heart_grabbed'] = hearts
-                
                 print(f"[GRAB LOG] ✅ {bot_name} got {card_name} ({condition}, {hearts}♡)", flush=True)
                 log_entry.update({'card_name': card_name, 'condition': condition, 'hearts': hearts})
+            elif event_type == 'item_success':
+                stats['successful_grabs'] += 1
+                print(f"[GRAB LOG] ✅ {bot_name} got item: {kwargs.get('item_name')}", flush=True)
             elif event_type == 'failed':
                 stats['failed_attempts'] += 1
                 print(f"[GRAB LOG] ⏳ {bot_name} failed: {kwargs.get('reason', 'Unknown')}", flush=True)
 
     def get_logs_for_web(self, limit=50):
-        with self.lock: return list(self.logs)[-limit:]
+        with self.lock: return list(self.logs)[:limit]
 
     def get_stats_for_web(self):
         with self.lock:
@@ -152,7 +148,6 @@ def load_settings():
         print("[Settings] ✅ Settings loaded.", flush=True)
     else: print("[Settings] ⚠️ Using default settings.", flush=True)
 
-
 # --- HÀM TRỢ GIÚP & LOGIC BOT ---
 def get_bot_name(bot_id_str):
     try:
@@ -168,13 +163,14 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
         try:
             messages = bot.getMessages(channel_id, num=5).json()
             if not isinstance(messages, list): continue
-
             for msg_item in messages:
                 if msg_item.get("author", {}).get("id") == karibbit_id and int(msg_item.get("id", 0)) > int(last_drop_msg_id):
                     if not (embeds := msg_item.get("embeds", [])) or '♡' not in (desc := embeds[0].get("description", "")): continue
                     
-                    lines = desc.split('\n')[:3]
-                    heart_numbers = [int(re.search(r'♡(\d+)', line).group(1)) if re.search(r'♡(\d+)', line) else 0 for line in lines]
+                    lines, heart_numbers = desc.split('\n')[:3], []
+                    for line in lines:
+                        match = re.search(r'♡(\d+)', line)
+                        heart_numbers.append(int(match.group(1)) if match else 0)
                     if not any(heart_numbers): break
 
                     max_num = max(heart_numbers)
@@ -184,25 +180,22 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                         bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
                         emoji, delay = ["1️⃣", "2️⃣", "3️⃣"][max_index], bot_delays[max_index]
                         
-                        bot_name = get_bot_name(f'main_{bot_num}')
-                        print(f"[{bot_name}] 🎯 Choosing line {max_index+1} ({max_num}♡) -> {emoji} in {delay}s", flush=True)
-                        
                         def grab_action():
                             try:
+                                print(f"[{get_bot_name(f'main_{bot_num}')}] 🎯 Reacting {emoji} for {max_num}♡ card...", flush=True)
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
                                 time.sleep(1.2)
                                 if ktb_channel_id: bot.sendMessage(ktb_channel_id, "kt b")
-                                card_logger.log_event(bot_name, 'success', message=f"Grabbed card with {max_num}♡", hearts_override=max_num)
                             except Exception as e:
-                                card_logger.log_event(bot_name, 'failed', reason=str(e))
+                                print(f"[GRAB ACTION] ❌ Error reacting: {e}", flush=True)
+                        
                         threading.Timer(delay, grab_action).start()
-                        return
-        except Exception as e: print(f"[CARD GRAB] ❌ Error finding card: {e}", flush=True)
+                        return # Exit after starting the grab action
+        except Exception as e: print(f"[CARD FIND] ❌ Error finding card: {e}", flush=True)
 
 def handle_card_drop(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
     bot_id_str = f'main_{bot_num}'
-    bot_name = get_bot_name(bot_id_str)
     
     # Clan Drop Logic
     clan_settings = bot_states["auto_clan_drop"]
@@ -213,35 +206,39 @@ def handle_card_drop(bot, msg, bot_num):
     # Server Grab Logic
     if not (target_server := next((s for s in servers if s.get('main_channel_id') == channel_id), None)): return
 
-    auto_grab = target_server.get(f'auto_grab_enabled_{bot_num}', False)
-    watermelon_grab = bot_states["watermelon_grab"].get(bot_id_str, False)
-
-    if auto_grab:
+    if target_server.get(f'auto_grab_enabled_{bot_num}', False):
         threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
         threading.Thread(target=_find_and_select_card, args=(bot, channel_id, msg["id"], threshold, bot_num, target_server.get('ktb_channel_id')), daemon=True).start()
 
-    if watermelon_grab:
+    if bot_states["watermelon_grab"].get(bot_id_str, False):
         def check_watermelon():
             time.sleep(5)
             try:
                 target_msg = bot.getMessage(channel_id, msg["id"]).json()[0]
                 if any('🍉' in r.get('emoji', {}).get('name', '') for r in target_msg.get('reactions', [])):
-                    print(f"[{bot_name}] 🎯 WATERMELON DETECTED!", flush=True)
+                    print(f"[{get_bot_name(bot_id_str)}] 🎯 WATERMELON DETECTED!", flush=True)
                     bot.addReaction(channel_id, msg["id"], "🍉")
-                    card_logger.log_event(bot_name, 'success', message="Nhặt được dưa hấu 🍉!")
+                    card_logger.log_event(get_bot_name(bot_id_str), 'item_success', item_name="Dưa Hấu 🍉")
             except Exception as e:
-                card_logger.log_event(bot_name, 'failed', reason=f"Watermelon check error: {e}")
+                # We don't log this failure as it's not critical and spams the log
+                pass
         threading.Thread(target=check_watermelon, daemon=True).start()
 
 def handle_karuta_response(msg, bot_identifier):
-    content = msg.get("content", "").lower()
+    """
+    Handles responses from Karuta.
+    This is the SOLE place for logging card grab success.
+    The "must wait" log has been REMOVED as requested to prevent spam.
+    """
+    content = msg.get("content", "")
+    content_lower = content.lower()
     bot_name = get_bot_name(f'main_{bot_identifier}')
     
-    if "must wait" in content and f"you must wait" in content:
-        card_logger.log_event(bot_name, 'failed', reason="Must wait cooldown", message=content)
-    elif ("took the" in content or "fought off" in content) and bot_name.lower() in content:
-        card_logger.log_event(bot_name, 'success', message=msg.get("content", ""))
-
+    bot_user_id = bot_manager.get_bot(f'main_{bot_identifier}').gateway.session.user['id']
+    mentioned = f'<@{bot_user_id}>' in content
+    
+    if (bot_name.lower() in content_lower or mentioned) and ("took the" in content_lower or "fought off" in content_lower):
+        card_logger.log_event(bot_name, 'card_success', message=content)
 
 # --- HỆ THỐNG REBOOT & HEALTH CHECK ---
 def check_bot_health(bot_instance, bot_id):
@@ -332,13 +329,11 @@ def spam_loop_manager():
     while True:
         try:
             current_ids = {s['id'] for s in servers}
-            # Stop threads for deleted servers
             for server_id in list(active_threads.keys()):
                 if server_id not in current_ids:
                     print(f"[Spam] 🛑 Stopping spam for deleted server: {server_id}", flush=True)
                     active_threads.pop(server_id)[1].set()
             
-            # Start/Stop threads based on current server settings
             for server in servers:
                 server_id = server.get('id')
                 spam_on = server.get('spam_enabled') and server.get('spam_message') and server.get('spam_channel_id')
@@ -389,13 +384,14 @@ def create_bot(token, bot_identifier, is_main=False):
                 if not resp.event.message: return
                 msg = resp.parsed.auto()
                 author_id = msg.get("author", {}).get("id")
-                content = msg.get("content", "").lower()
                 
                 try:
                     if author_id == karuta_id:
-                        if "dropping" in content:
+                        if "dropping" in msg.get("content", "").lower():
+                             # This is a drop, trigger the card finding logic
                              threading.Thread(target=handle_card_drop, args=(bot, msg, bot_identifier), daemon=True).start()
                         else:
+                             # This is a response from Karuta (grab result, etc.)
                              handle_karuta_response(msg, bot_identifier)
                 except Exception as e:
                     print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}\n{traceback.format_exc()}", flush=True)
@@ -454,8 +450,8 @@ HTML_TEMPLATE = """
         .health-good { background: var(--success-green); } .health-warning { background: var(--warning-orange); } .health-bad { background: var(--blood-red); }
         .log-panel-grid { display: grid; grid-template-columns: 3fr 1fr; gap: 15px; margin-top: 15px; }
         .log-list { max-height: 400px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 6px; padding: 5px; }
-        .log-entry { padding: 8px; border-bottom: 1px solid #222; display: flex; gap: 10px; font-size: 0.9em; }
-        .log-entry.success { color: #aaffaa; } .log-entry.failed { color: #ffaa88; }
+        .log-entry { padding: 8px; border-bottom: 1px solid #222; display: flex; gap: 10px; align-items: center; font-size: 0.9em; }
+        .log-entry.card_success { color: #aaffaa; } .log-entry.item_success { color: #aaddff; } .log-entry.failed { color: #ffaa88; }
         .log-bot-name { font-weight: bold; min-width: 80px; }
         .card-condition { padding: 2px 6px; border-radius: 3px; font-size: 0.8rem; text-transform: uppercase; color: black; }
         .condition-poor { background: #ff4444; } .condition-good { background: #ffaa00; } .condition-excellent { background: #44ff44; } .condition-mint { background: #00ffff; } .condition-unknown { background: #888888; color: white; }
@@ -558,7 +554,6 @@ document.addEventListener('DOMContentLoaded', function () {
     function updateUI(data) {
         document.getElementById('uptime-timer').textContent = formatTime((Date.now() / 1000) - data.server_start_time);
         
-        // Bot Status Grid
         const botGrid = document.getElementById('bot-control-grid');
         botGrid.innerHTML = '';
         const allBots = [...data.bot_statuses.main_bots, ...data.bot_statuses.sub_accounts];
@@ -583,7 +578,6 @@ document.addEventListener('DOMContentLoaded', function () {
             </div>`;
         });
         
-        // Watermelon Grid
         const wmGrid = document.getElementById('global-watermelon-grid');
         wmGrid.innerHTML = '';
         data.bot_statuses.main_bots.forEach(bot => {
@@ -591,7 +585,6 @@ document.addEventListener('DOMContentLoaded', function () {
             wmGrid.innerHTML += `<div class="flex-row"><span>${bot.name}</span><button class="btn btn-small watermelon-toggle" data-node="${bot.reboot_id}">${isEnabled ? 'DISABLE' : 'ENABLE'}</button></div>`;
         });
 
-        // Server Panels
         data.servers.forEach(server => {
             const panel = document.querySelector(`.server-panel[data-server-id="${server.id}"]`);
             if (!panel) return;
@@ -599,7 +592,6 @@ document.addEventListener('DOMContentLoaded', function () {
             panel.querySelector('.broadcast-toggle').textContent = server.spam_enabled ? 'DISABLE' : 'ENABLE';
         });
         
-        // Clan Drop
         if (data.auto_clan_drop_status) {
             document.getElementById('clan-drop-timer').textContent = formatTime(data.auto_clan_drop_status.countdown);
             document.getElementById('clan-drop-toggle-btn').textContent = data.auto_clan_drop_status.enabled ? 'DISABLE' : 'ENABLE';
@@ -608,21 +600,24 @@ document.addEventListener('DOMContentLoaded', function () {
     
     function updateLogs(data) {
         const logContainer = document.getElementById('log-container');
-        logContainer.innerHTML = '';
         if (!data.logs || data.logs.length === 0) {
             logContainer.innerHTML = '<div class="no-logs">No activity yet.</div>'; return;
         }
-        data.logs.reverse().forEach(log => {
+        let newHtml = '';
+        data.logs.forEach(log => {
             let content = '';
-            if (log.type === 'success') {
+            if (log.type === 'card_success') {
                 content = `<span class="card-name">${log.card_name}</span> <span class="card-condition condition-${log.condition}">${log.condition}</span> <span style="color:var(--mint-cyan);">${log.hearts}♡</span>`;
-            } else {
+            } else if (log.type === 'item_success') {
+                content = `<span>Got Item: <strong>${log.item_name}</strong></span>`;
+            } else { // Generic fail, though most are now hidden
                 content = `<span>Failed: ${log.reason}</span>`;
             }
-            logContainer.innerHTML += `<div class="log-entry ${log.type}">
+            newHtml += `<div class="log-entry ${log.type}">
                 <span>[${log.timestamp}]</span><span class="log-bot-name">${log.bot_name}</span>${content}
             </div>`;
         });
+        logContainer.innerHTML = newHtml;
     }
 
     function updateStats(data) {
@@ -833,7 +828,7 @@ def api_get_card_stats():
 
 # --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V4 Compact Version Starting...", flush=True)
+    print("🚀 Shadow Network Control - V4.2 Clean Log Starting...", flush=True)
     load_settings()
 
     print("🔌 Initializing bots...", flush=True)
