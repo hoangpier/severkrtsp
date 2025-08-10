@@ -254,19 +254,22 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
 def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, original_msg_id):
     start_time = time.time()
     
-    while time.time() - start_time < 30:
+    while time.time() - start_time < 7:  # ⬅️ Increased to 30 seconds
         try:
-            messages = bot.getMessages(channel_id, num=20).json()
+            print(f"[DEBUG] Monitoring for {bot_name} - scanning messages...")
+            messages = bot.getMessages(channel_id, num=20).json()  # ⬅️ Fetch more messages
             if not isinstance(messages, list):
-                time.sleep(1)
+                time.sleep(1)  # ⬅️ Slower polling
                 continue
 
             for msg in messages:
                 if msg.get("author", {}).get("id") != karuta_id:
                     continue
                 
+                print(f"[DEBUG] Karuta message: {msg.get('content')}")
                 content = msg.get("content", "")
                 
+                # ✅ Looser regex matching
                 patterns = [
                     rf"{re.escape(bot_name)}.*fought off.*took the (.+?) card",
                     rf"{re.escape(bot_name)}.*took the (.+?) card",
@@ -288,10 +291,11 @@ def _monitor_success_message(bot, channel_id, bot_name, hearts, card_name, origi
                             message=f"🎉 {content}"
                         )
                         print(f"[CARD WIN] 🏆 {bot_name} won **{won_card}** with {hearts}♡")
-                        return
+                        return  # ✅ Exit after finding winner
             time.sleep(1)
         except Exception as e:
             time.sleep(1)
+
 
 # --- LOGIC BOT ---
 def handle_clan_drop(bot, msg, bot_num):
