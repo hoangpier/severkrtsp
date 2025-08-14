@@ -306,20 +306,27 @@ def safe_reboot_bot(bot_id):
 
     print(f"[Safe Reboot] 🔄 Bắt đầu reboot bot {bot_id}...", flush=True)
     try:
-        match = re.match(r"main_(\d+)", bot_id)
+        is_main_bot = bot_id.startswith('main_')
+        match = re.match(r"(main|sub)_(\d+)", bot_id)
         if not match:
             raise ValueError("Định dạng bot_id không hợp lệ cho reboot.")
+
+        bot_type, bot_index_str = match.groups()
+        bot_index = int(bot_index_str)
         
-        bot_index = int(match.group(1)) - 1
-        if not (0 <= bot_index < len(main_tokens)):
+        token_list = main_tokens if is_main_bot else tokens
+        # For main bots, index is 1-based in ID, for sub is 0-based
+        token_array_index = bot_index -1 if is_main_bot else bot_index
+
+        if not (0 <= token_array_index < len(token_list)):
             raise IndexError("Bot index ngoài phạm vi danh sách token.")
 
-        token = main_tokens[bot_index].strip()
+        token = token_list[token_array_index].strip()
         bot_name = get_bot_name(bot_id)
 
         # Cleanup bot cũ
         print(f"[Safe Reboot] 🧹 Cleaning up old bot instance for {bot_name}", flush=True)
-        bot_manager.remove_bot(bot_id) # remove_bot đã bao gồm gateway.close()
+        bot_manager.remove_bot(bot_id)
 
         # Exponential backoff delay
         settings = bot_states["reboot_settings"].get(bot_id, {})
@@ -330,7 +337,7 @@ def safe_reboot_bot(bot_id):
 
         # Tạo bot mới với logic kết nối đáng tin cậy hơn
         print(f"[Safe Reboot] 🏗️ Creating new bot instance for {bot_name}", flush=True)
-        new_bot = create_bot(token, bot_identifier=(bot_index + 1), is_main=True)
+        new_bot = create_bot(token, bot_identifier=bot_index, is_main=is_main_bot)
         if not new_bot:
             raise Exception("Không thể tạo instance bot mới hoặc kết nối gateway thất bại.")
 
@@ -350,7 +357,7 @@ def safe_reboot_bot(bot_id):
         handle_reboot_failure(bot_id)
         return False
     finally:
-        bot_manager.end_reboot(bot_id) # Luôn đảm bảo cờ reboot được gỡ
+        bot_manager.end_reboot(bot_id)
 
 # --- VÒNG LẶP NỀN (IMPROVED) ---
 def auto_reboot_loop():
@@ -842,8 +849,10 @@ HTML_TEMPLATE = """
                            </button>
                         </div>`;
 
-                    if (bot.type === 'main') {
-                        const r_settings = data.bot_reboot_settings[botId] || { delay: 3600, enabled: false, failure_count: 0 };
+                    // *** MODIFICATION HERE ***
+                    // Display reboot controls for any bot that has reboot settings, not just main bots.
+                    const r_settings = data.bot_reboot_settings[botId];
+                    if (r_settings) {
                         const statusClass = r_settings.failure_count > 0 ? 'btn-warning' : (r_settings.enabled ? 'btn-rise' : 'btn-rest');
                         const statusText = r_settings.failure_count > 0 ? `FAIL(${r_settings.failure_count})` : (r_settings.enabled ? 'AUTO' : 'MANUAL');
                         const countdownText = formatTime(r_settings.countdown);
@@ -1052,7 +1061,7 @@ def api_broadcast_toggle():
 def api_bot_reboot_toggle():
     data = request.json
     bot_id, delay = data.get('bot_id'), int(data.get("delay", 3600))
-    if not re.match(r"main_\d+", bot_id):
+    if not re.match(r"(main|sub)_\d+", bot_id):
         return jsonify({'status': 'error', 'message': '❌ Invalid Bot ID Format.'}), 400
     settings = bot_states["reboot_settings"].get(bot_id)
     if not settings: return jsonify({'status': 'error', 'message': '❌ Invalid Bot ID.'}), 400
@@ -1151,6 +1160,10 @@ if __name__ == "__main__":
             bot_manager.add_bot(bot_id, bot)
         bot_states["active"].setdefault(bot_id, True)
         bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
+        # *** MODIFICATION HERE ***
+        # Add reboot settings for sub bots as well
+        bot_states["reboot_settings"].setdefault(bot_id, {'enabled': False, 'delay': 7200, 'next_reboot_time': 0, 'failure_count': 0})
+
 
     print("🔧 Starting background threads...", flush=True)
     threading.Thread(target=periodic_task, args=(1800, save_settings, "Save"), daemon=True).start()
