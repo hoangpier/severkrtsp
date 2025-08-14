@@ -469,7 +469,7 @@ def spam_message_worker(bot_id, bot_instance, stop_event):
             if bot_states["active"].get(bot_id, False):
                 try:
                     bot_instance.sendMessage(channel_id, message)
-                    print(f"[Spam Worker] 📤 {get_bot_name(bot_id)} -> #{channel_id}: '{message[:20]}...'", flush=True)
+                    #print(f"[Spam Worker] 📤 {get_bot_name(bot_id)} -> #{channel_id}: '{message[:20]}...'", flush=True)
                 except Exception as e:
                     print(f"[Spam Worker] ❌ Lỗi khi gửi tin nhắn từ {get_bot_name(bot_id)}: {e}", flush=True)
             
@@ -511,7 +511,7 @@ def spam_request_producer(server_config, stop_event):
             for bot_id, _ in active_bots:
                 message_queue.put((channel_id, message, bot_id))
 
-            print(f"[Spam Requester] 📥 Server '{server_name}' đã yêu cầu gửi tin.", flush=True)
+            #print(f"[Spam Requester] 📥 Server '{server_name}' đã yêu cầu gửi tin.", flush=True)
             stop_event.wait(random.uniform(delay * 0.9, delay * 1.1))
         except Exception as e:
             print(f"[Spam Requester] ❌ Lỗi trong luồng yêu cầu của server {server_name}: {e}", flush=True)
