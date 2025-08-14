@@ -449,11 +449,23 @@ def spam_message_worker(bot_id, bot_instance, stop_event):
     Luồng worker chuyên xử lý việc gửi tin nhắn cho một bot cụ thể.
     Nó lấy tin nhắn từ hàng đợi chung và gửi đi tuần tự.
     """
+    # Dòng print này vẫn giữ nguyên để bạn biết nó đã khởi động
     print(f"[Spam Worker] 🚀 Worker đã khởi động cho {get_bot_name(bot_id)}", flush=True)
+    
     while not stop_event.is_set():
         try:
-            channel_id, message = message_queue.get(timeout=1)
-            
+            # SỬA Ở ĐÂY: Nhận 3 giá trị thay vì 2
+            # Và thêm một biến mới là 'target_bot_id'
+            channel_id, message, target_bot_id = message_queue.get(timeout=1)
+
+            # THÊM ĐIỀU KIỆN: Chỉ xử lý nếu tin nhắn này được giao cho đúng bot này
+            if target_bot_id != bot_id:
+                # Nếu không phải, bỏ qua và để worker khác xử lý
+                message_queue.put((channel_id, message, target_bot_id)) # Trả lại hàng đợi
+                time.sleep(0.1) # Nghỉ một chút để tránh lặp quá nhanh
+                continue
+
+            # Đoạn code gửi tin nhắn bên dưới không thay đổi
             if bot_states["active"].get(bot_id, False):
                 try:
                     bot_instance.sendMessage(channel_id, message)
@@ -466,9 +478,19 @@ def spam_message_worker(bot_id, bot_instance, stop_event):
 
         except queue.Empty:
             continue
+        except ValueError:
+            # Xử lý trường hợp message_queue.get() không trả về đủ 3 giá trị
+            # Đây là một biện pháp an toàn bổ sung
+            print(f"[Spam Worker] ⚠️ Worker của {get_bot_name(bot_id)} nhận được item không hợp lệ từ hàng đợi.", flush=True)
+            try: 
+                message_queue.task_done() # Bỏ qua item lỗi
+            except Exception:
+                pass 
+            continue
         except Exception as e:
             print(f"[Spam Worker] ❌ Lỗi nghiêm trọng trong worker của {get_bot_name(bot_id)}: {e}", flush=True)
             time.sleep(5)
+            
     print(f"[Spam Worker] 🛑 Worker cho {get_bot_name(bot_id)} đã dừng.", flush=True)
 
 def spam_request_producer(server_config, stop_event):
