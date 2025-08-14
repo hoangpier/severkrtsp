@@ -779,7 +779,8 @@ HTML_TEMPLATE = """
                     fetch('/api/save_settings', { method: 'POST' });
                     if (result.reload) { setTimeout(() => window.location.reload(), 500); }
                 }
-                setTimeout(fetchStatus, 500);
+                // Don't fetch status immediately after a POST, let the interval handle it
+                // to avoid race conditions.
                 return result;
             } catch (error) {
                 console.error('Error:', error);
@@ -803,11 +804,13 @@ HTML_TEMPLATE = """
             if (value !== undefined) element.value = value;
             if (innerHTML !== undefined) element.innerHTML = innerHTML;
         }
-
+        
+        // *** SỬA LỖI INPUT BỊ LOAD LẠI ***
         async function fetchStatus() {
             try {
                 const response = await fetch('/status');
                 const data = await response.json();
+                const activeElement = document.activeElement;
 
                 const serverUptimeSeconds = (Date.now() / 1000) - data.server_start_time;
                 updateElement(document.getElementById('uptime-timer'), { textContent: formatTime(serverUptimeSeconds) });
@@ -825,8 +828,14 @@ HTML_TEMPLATE = """
                 allBots.forEach(bot => {
                     const botId = bot.reboot_id;
                     updatedBotIds.add(`bot-container-${botId}`);
-                    let itemContainer = document.getElementById(`bot-container-${botId}`);
 
+                    // Check if the user is currently typing in an input related to this bot.
+                    // If so, we skip re-rendering this specific bot's controls to avoid overwriting user input.
+                    if (activeElement && activeElement.dataset.botId === botId) {
+                        return; // Skip to the next bot
+                    }
+                    
+                    let itemContainer = document.getElementById(`bot-container-${botId}`);
                     if (!itemContainer) {
                         itemContainer = document.createElement('div');
                         itemContainer.id = `bot-container-${botId}`;
@@ -844,13 +853,11 @@ HTML_TEMPLATE = """
                     let controlHtml = `
                         <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                            <span style="font-weight: bold; ${bot.type === 'main' ? 'color: #FF4500;' : ''}">${bot.name}<span class="health-indicator ${healthClass}"></span>${rebootingIndicator}</span>
-                           <button type="button" id="toggle-state-${botId}" data-target="${botId}" class="btn-toggle-state ${bot.is_active ? 'btn-rise' : 'btn-rest'}">
+                           <button type="button" id="toggle-state-${botId}" data-target="${botId}" data-bot-id="${botId}" class="btn-toggle-state ${bot.is_active ? 'btn-rise' : 'btn-rest'}">
                                ${bot.is_active ? 'ONLINE' : 'OFFLINE'}
                            </button>
                         </div>`;
 
-                    // *** MODIFICATION HERE ***
-                    // Display reboot controls for any bot that has reboot settings, not just main bots.
                     const r_settings = data.bot_reboot_settings[botId];
                     if (r_settings) {
                         const statusClass = r_settings.failure_count > 0 ? 'btn-warning' : (r_settings.enabled ? 'btn-rise' : 'btn-rest');
@@ -877,32 +884,54 @@ HTML_TEMPLATE = """
 
 
                 const wmGrid = document.getElementById('global-watermelon-grid');
-                wmGrid.innerHTML = '';
-                if (data.watermelon_grab_states && data.bot_statuses) {
-                    data.bot_statuses.main_bots.forEach(bot => {
-                        const botNodeId = bot.reboot_id;
-                        const isEnabled = data.watermelon_grab_states[botNodeId];
-                        const item = document.createElement('div');
-                        item.className = 'bot-status-item';
-                        item.innerHTML = `<span>${bot.name}</span>
-                            <button type="button" class="btn btn-small watermelon-toggle" data-node="${botNodeId}">
-                                <i class="fas fa-seedling"></i>&nbsp;${isEnabled ? 'DISABLE' : 'ENABLE'}
-                            </button>`;
-                        wmGrid.appendChild(item);
-                    });
+                if (activeElement && activeElement.classList.contains('watermelon-toggle')) {
+                    // Skip update if a watermelon toggle is focused
+                } else {
+                    wmGrid.innerHTML = '';
+                    if (data.watermelon_grab_states && data.bot_statuses) {
+                        data.bot_statuses.main_bots.forEach(bot => {
+                            const botNodeId = bot.reboot_id;
+                            const isEnabled = data.watermelon_grab_states[botNodeId];
+                            const item = document.createElement('div');
+                            item.className = 'bot-status-item';
+                            item.innerHTML = `<span>${bot.name}</span>
+                                <button type="button" class="btn btn-small watermelon-toggle" data-node="${botNodeId}" data-bot-id="${botNodeId}">
+                                    <i class="fas fa-seedling"></i>&nbsp;${isEnabled ? 'DISABLE' : 'ENABLE'}
+                                </button>`;
+                            wmGrid.appendChild(item);
+                        });
+                    }
                 }
 
                 data.servers.forEach(serverData => {
                     const serverPanel = document.querySelector(`.server-panel[data-server-id="${serverData.id}"]`);
                     if (!serverPanel) return;
-                    serverPanel.querySelectorAll('.harvest-toggle').forEach(btn => {
-                        const node = btn.dataset.node;
-                        updateElement(btn, { textContent: serverData[`auto_grab_enabled_${node}`] ? 'DISABLE' : 'ENABLE' });
-                    });
-                    const spamToggleBtn = serverPanel.querySelector('.broadcast-toggle');
-                    updateElement(spamToggleBtn, { textContent: serverData.spam_enabled ? 'DISABLE' : 'ENABLE' });
-                    const spamTimer = serverPanel.querySelector('.spam-timer');
-                    updateElement(spamTimer, { textContent: formatTime(serverData.spam_countdown)});
+                    
+                    if (activeElement && activeElement.closest('.server-panel') === serverPanel) {
+                         // If focusing inside a server panel, perform more granular updates
+                         serverPanel.querySelectorAll('.harvest-toggle').forEach(btn => {
+                            if (activeElement !== btn) {
+                                const node = btn.dataset.node;
+                                updateElement(btn, { textContent: serverData[`auto_grab_enabled_${node}`] ? 'DISABLE' : 'ENABLE' });
+                            }
+                         });
+                         const spamToggleBtn = serverPanel.querySelector('.broadcast-toggle');
+                         if (activeElement !== spamToggleBtn) updateElement(spamToggleBtn, { textContent: serverData.spam_enabled ? 'DISABLE' : 'ENABLE' });
+                         
+                         const spamTimer = serverPanel.querySelector('.spam-timer');
+                         updateElement(spamTimer, { textContent: formatTime(serverData.spam_countdown)});
+
+                    } else {
+                        // Full update if not focused within
+                        serverPanel.querySelectorAll('.harvest-toggle').forEach(btn => {
+                            const node = btn.dataset.node;
+                            updateElement(btn, { textContent: serverData[`auto_grab_enabled_${node}`] ? 'DISABLE' : 'ENABLE' });
+                        });
+                        const spamToggleBtn = serverPanel.querySelector('.broadcast-toggle');
+                        updateElement(spamToggleBtn, { textContent: serverData.spam_enabled ? 'DISABLE' : 'ENABLE' });
+                        const spamTimer = serverPanel.querySelector('.spam-timer');
+                        updateElement(spamTimer, { textContent: formatTime(serverData.spam_countdown)});
+                    }
                 });
 
             } catch (error) { console.error('Error fetching status:', error); }
@@ -939,14 +968,15 @@ HTML_TEMPLATE = """
             }
         });
 
+        // Use event delegation for input changes to avoid re-binding after every update
         document.querySelector('.main-grid').addEventListener('change', e => {
             const target = e.target;
             const serverPanel = target.closest('.server-panel');
-            if (serverPanel && target.classList.contains('channel-input')) {
-                const payload = { server_id: serverPanel.dataset.serverId };
-                payload[target.dataset.field] = target.value;
-                postData('/api/update_server_channels', payload);
-            }
+            if (!serverPanel || !target.classList.contains('channel-input')) return;
+            
+            const payload = { server_id: serverPanel.dataset.serverId };
+            payload[target.dataset.field] = target.value;
+            postData('/api/update_server_channels', payload);
         });
 
         document.getElementById('add-server-btn').addEventListener('click', () => {
