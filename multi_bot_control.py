@@ -440,7 +440,7 @@ def master_spam_sequencer(stop_event):
     # === CÀI ĐẶT CỦA BẠN ===
     # Delay giữa mỗi nhiệm vụ spam. Đây là thông số quan trọng nhất để điều khiển tốc độ.
     # 0.2 giây là khá nhanh. Bạn có thể tăng lên 0.5 hoặc 1.0 để an toàn hơn.
-    delay_between_tasks = 0.5
+    delay_between_tasks = 1
     # ========================
 
     while not stop_event.is_set():
