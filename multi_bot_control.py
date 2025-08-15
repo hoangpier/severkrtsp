@@ -495,26 +495,65 @@ def spam_message_worker(bot_id, bot_instance, stop_event):
 
 def spam_request_producer(server_config, stop_event):
     """
-    Luồng này chỉ có nhiệm vụ TẠO YÊU CẦU và đưa vào hàng đợi, không trực tiếp gửi tin.
+    Luồng này tạo yêu cầu spam một cách TUẦN TỰ cho từng bot.
+    (Phiên bản nâng cấp để đảm bảo thứ tự)
     """
     server_name = server_config.get('name')
     channel_id = server_config.get('spam_channel_id')
     message = server_config.get('spam_message')
-    delay = server_config.get('spam_delay', 10)
+    
+    # Delay tổng của cả chu trình (bạn chỉnh trên web)
+    cycle_delay = server_config.get('spam_delay', 30) 
+    
+    # Delay giữa từng con bot trong một chu trình, nên để thấp
+    # Ví dụ: 16 bot * 1.8 giây/bot ≈ 28.8 giây.
+    # Bạn có thể thêm một cài đặt mới trên web cho cái này nếu muốn.
+    bot_delay = 1.8 
 
     while not stop_event.is_set():
         try:
-            # Sửa đổi: Đặt yêu cầu vào hàng đợi cho từng bot đang hoạt động
+            # Lấy danh sách bot và sắp xếp chúng theo thứ tự
+            all_bots = bot_manager.get_all_bots()
             active_bots = [
-                (bot_id, bot) for bot_id, bot in bot_manager.get_all_bots() if bot_states["active"].get(bot_id)
+                (bot_id, bot) for bot_id, bot in all_bots if bot_states["active"].get(bot_id)
             ]
-            for bot_id, _ in active_bots:
-                message_queue.put((channel_id, message, bot_id))
+            
+            # Sắp xếp để đảm bảo thứ tự: main_1, main_2, ..., sub_1, sub_2...
+            def sort_key(bot_tuple):
+                bot_id = bot_tuple[0]
+                parts = bot_id.split('_')
+                type_order = 0 if parts[0] == 'main' else 1
+                index = int(parts[1])
+                return (type_order, index)
 
-            #print(f"[Spam Requester] 📥 Server '{server_name}' đã yêu cầu gửi tin.", flush=True)
-            stop_event.wait(random.uniform(delay * 0.9, delay * 1.1))
+            active_bots.sort(key=sort_key)
+            
+            print(f"[Spam Sequencer] ▶️ Bắt đầu chu trình spam tuần tự cho server '{server_name}'.")
+
+            # Vòng lặp tuần tự qua từng bot
+            for bot_id, _ in active_bots:
+                # Nếu nhận lệnh dừng giữa chu trình thì thoát ngay
+                if stop_event.is_set():
+                    break
+                
+                # Đặt yêu cầu cho duy nhất 1 bot vào hàng đợi
+                message_queue.put((channel_id, message, bot_id))
+                # print(f"-> Đã yêu cầu {get_bot_name(bot_id)} nhắn tin.") # Bỏ comment nếu muốn debug chi tiết
+                
+                # Chờ một khoảng thời gian ngắn trước khi yêu cầu bot tiếp theo
+                time.sleep(bot_delay)
+
+            # Sau khi hoàn thành một chu trình (gửi yêu cầu cho tất cả các bot),
+            # chờ một khoảng delay dài (lấy từ web) trước khi bắt đầu chu trình mới.
+            actual_cycle_duration = len(active_bots) * bot_delay
+            wait_time = max(0, cycle_delay - actual_cycle_duration)
+            
+            # print(f"[Spam Sequencer] ⏹️ Hoàn thành chu trình. Chờ {wait_time:.1f}s.", flush=True)
+            stop_event.wait(wait_time)
+
         except Exception as e:
-            print(f"[Spam Requester] ❌ Lỗi trong luồng yêu cầu của server {server_name}: {e}", flush=True)
+            print(f"[Spam Sequencer] ❌ Lỗi trong luồng tuần tự của server {server_name}: {e}", flush=True)
+            traceback.print_exc()
             stop_event.wait(10)
 
 def spam_loop_manager():
