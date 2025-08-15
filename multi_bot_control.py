@@ -1,5 +1,5 @@
-# PHIÊN BẢN NÂNG CẤP TOÀN DIỆN - TÍCH HỢP BOT MANAGER & CẢI TIẾN AN TOÀN VÀ ĐỘ ỔN ĐỊNH
-import discum, threading, time, os, re, requests, json, random, traceback, uuid, queue
+# PHIÊN BẢN CUỐI CÙNG - SHUFFLED DISPATCHER
+import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
@@ -22,12 +22,7 @@ bot_states = {
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
 
-# --- HÀNG ĐỢI SPAM TẬP TRUNG (GIẢI PHÁP MỚI) ---
-message_queue = queue.Queue()
-spam_worker_locks = {} # Để đảm bảo mỗi bot chỉ có 1 worker
-stop_spam_worker_events = {} # Để dừng các worker khi cần
-
-# --- QUẢN LÝ BOT THREAD-SAFE (IMPROVED) ---
+# --- QUẢN LÝ BOT THREAD-SAFE ---
 class ThreadSafeBotManager:
     def __init__(self):
         self._bots = {}
@@ -187,14 +182,11 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                         emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
                         delay = bot_delays[max_index]
                         
-                        print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
-                        
                         def grab_action():
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
                                 time.sleep(1.2)
                                 if ktb_channel_id: bot.sendMessage(ktb_channel_id, "kt b")
-                                print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
                             except Exception as e:
                                 print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
 
@@ -234,7 +226,6 @@ def handle_grab(bot, msg, bot_num):
 
         if watermelon_grab_enabled:
             def check_for_watermelon_patiently():
-                print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu canh dưa (chờ 5 giây)...", flush=True)
                 time.sleep(5) 
                 try:
                     target_message = bot.getMessage(channel_id, last_drop_msg_id).json()[0]
@@ -242,21 +233,18 @@ def handle_grab(bot, msg, bot_num):
                     for reaction in reactions:
                         emoji_name = reaction.get('emoji', {}).get('name', '')
                         if '🍉' in emoji_name or 'watermelon' in emoji_name.lower() or 'dua' in emoji_name.lower():
-                            print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU!", flush=True)
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, "🍉")
-                                print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DỰA THÀNH CÔNG!", flush=True)
                             except Exception as e:
                                 print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
                             return
-                    print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau khi chờ.", flush=True)
                 except Exception as e:
                     print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi lấy tin nhắn để check dưa: {e}", flush=True)
             threading.Thread(target=check_for_watermelon_patiently, daemon=True).start()
 
     threading.Thread(target=grab_logic_thread, daemon=True).start()
 
-# --- HỆ THỐNG REBOOT & HEALTH CHECK (IMPROVED) ---
+# --- HỆ THỐNG REBOOT & HEALTH CHECK ---
 def check_bot_health(bot_instance, bot_id):
     try:
         stats = bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0, 'last_check': 0})
@@ -272,11 +260,9 @@ def check_bot_health(bot_instance, bot_id):
             stats['consecutive_failures'] = 0
         else:
             stats['consecutive_failures'] += 1
-            print(f"[Health Check] ⚠️ Bot {bot_id} not connected - failures: {stats['consecutive_failures']}", flush=True)
             
         return is_connected
     except Exception as e:
-        print(f"[Health Check] ❌ Exception in health check for {bot_id}: {e}", flush=True)
         bot_states["health_stats"].setdefault(bot_id, {})['consecutive_failures'] = \
             bot_states["health_stats"][bot_id].get('consecutive_failures', 0) + 1
         return False
@@ -299,7 +285,6 @@ def handle_reboot_failure(bot_id):
 
 def safe_reboot_bot(bot_id):
     if not bot_manager.start_reboot(bot_id):
-        print(f"[Safe Reboot] ⚠️ Bot {bot_id} đã đang trong quá trình reboot. Bỏ qua.", flush=True)
         return False
 
     print(f"[Safe Reboot] 🔄 Bắt đầu reboot bot {bot_id}...", flush=True)
@@ -315,16 +300,13 @@ def safe_reboot_bot(bot_id):
         token = main_tokens[bot_index].strip()
         bot_name = get_bot_name(bot_id)
 
-        print(f"[Safe Reboot] 🧹 Cleaning up old bot instance for {bot_name}", flush=True)
         bot_manager.remove_bot(bot_id)
 
         settings = bot_states["reboot_settings"].get(bot_id, {})
         failure_count = settings.get('failure_count', 0)
         wait_time = random.uniform(20, 40) + min(failure_count * 30, 300)
-        print(f"[Safe Reboot] ⏳ Chờ {wait_time:.1f}s để cleanup và tránh rate limit...", flush=True)
         time.sleep(wait_time)
 
-        print(f"[Safe Reboot] 🏗️ Creating new bot instance for {bot_name}", flush=True)
         new_bot = create_bot(token, bot_identifier=(bot_index + 1), is_main=True)
         if not new_bot:
             raise Exception("Không thể tạo instance bot mới hoặc kết nối gateway thất bại.")
@@ -347,9 +329,8 @@ def safe_reboot_bot(bot_id):
     finally:
         bot_manager.end_reboot(bot_id)
 
-# --- VÒNG LẶP NỀN (IMPROVED) ---
+# --- VÒNG LẶP NỀN ---
 def auto_reboot_loop():
-    print("[Safe Reboot] 🚀 Khởi động luồng tự động reboot với cải tiến.", flush=True)
     last_global_reboot_time = 0
     consecutive_system_failures = 0
     
@@ -386,18 +367,14 @@ def auto_reboot_loop():
                     bot_to_reboot = bot_id
             
             if bot_to_reboot:
-                print(f"[Safe Reboot] 🎯 Chọn reboot bot: {bot_to_reboot} (priority: {highest_priority_score:.1f})", flush=True)
-                
                 if safe_reboot_bot(bot_to_reboot):
                     last_global_reboot_time = now
                     consecutive_system_failures = 0
                     wait_time = random.uniform(300, 600)
-                    print(f"[Safe Reboot] ⏳ Chờ {wait_time:.0f}s trước khi tìm bot reboot tiếp theo.", flush=True)
                     stop_events["reboot"].wait(wait_time)
                 else:
                     consecutive_system_failures += 1
                     backoff_time = min(120 * (2 ** consecutive_system_failures), 1800)
-                    print(f"[Safe Reboot] ❌ Reboot thất bại. Hệ thống backoff: {backoff_time}s", flush=True)
                     stop_events["reboot"].wait(backoff_time)
             else:
                 stop_events["reboot"].wait(60)
@@ -407,7 +384,6 @@ def auto_reboot_loop():
             stop_events["reboot"].wait(120)
 
 def run_clan_drop_cycle():
-    print("[Clan Drop] 🚀 Bắt đầu chu kỳ drop clan.", flush=True)
     settings = bot_states["auto_clan_drop"]
     channel_id = settings.get("channel_id")
     
@@ -418,13 +394,11 @@ def run_clan_drop_cycle():
     ]
 
     if not active_main_bots:
-        print("[Clan Drop] ⚠️ Không có bot chính nào hoạt động.", flush=True)
         return
 
     for bot, bot_num in active_main_bots:
         if stop_events["clan_drop"].is_set(): break
         try:
-            print(f"[Clan Drop] 📤 Bot {get_bot_name(f'main_{bot_num}')} đang gửi 'kd'...", flush=True)
             bot.sendMessage(channel_id, "kd")
             time.sleep(random.uniform(settings["bot_delay"] * 0.8, settings["bot_delay"] * 1.2))
         except Exception as e:
@@ -440,144 +414,8 @@ def auto_clan_drop_loop():
             (time.time() - settings.get("last_cycle_start_time", 0)) >= settings.get("cycle_interval", 1800)):
             run_clan_drop_cycle()
         stop_events["clan_drop"].wait(60)
-    print("[Clan Drop] 🛑 Luồng tự động drop clan đã dừng.", flush=True)
-
-
-# --- HỆ THỐNG SPAM TẬP TRUNG (FIXED) ---
-def spam_message_worker(bot_id, bot_instance, stop_event):
-    """
-    Luồng worker chuyên xử lý việc gửi tin nhắn cho một bot cụ thể.
-    Nó lấy tin nhắn từ hàng đợi chung và gửi đi tuần tự.
-    """
-    # Dòng print này vẫn giữ nguyên để bạn biết nó đã khởi động
-    print(f"[Spam Worker] 🚀 Worker đã khởi động cho {get_bot_name(bot_id)}", flush=True)
-    
-    while not stop_event.is_set():
-        try:
-            # SỬA Ở ĐÂY: Nhận 3 giá trị thay vì 2
-            # Và thêm một biến mới là 'target_bot_id'
-            channel_id, message, target_bot_id = message_queue.get(timeout=1)
-
-            # THÊM ĐIỀU KIỆN: Chỉ xử lý nếu tin nhắn này được giao cho đúng bot này
-            if target_bot_id != bot_id:
-                # Nếu không phải, bỏ qua và để worker khác xử lý
-                message_queue.put((channel_id, message, target_bot_id)) # Trả lại hàng đợi
-                time.sleep(0.1) # Nghỉ một chút để tránh lặp quá nhanh
-                continue
-
-            # Đoạn code gửi tin nhắn bên dưới không thay đổi
-            if bot_states["active"].get(bot_id, False):
-                try:
-                    bot_instance.sendMessage(channel_id, message)
-                    #print(f"[Spam Worker] 📤 {get_bot_name(bot_id)} -> #{channel_id}: '{message[:20]}...'", flush=True)
-                except Exception as e:
-                    print(f"[Spam Worker] ❌ Lỗi khi gửi tin nhắn từ {get_bot_name(bot_id)}: {e}", flush=True)
-            
-            message_queue.task_done()
-            time.sleep(random.uniform(1.2, 1.8)) 
-
-        except queue.Empty:
-            continue
-        except ValueError:
-            # Xử lý trường hợp message_queue.get() không trả về đủ 3 giá trị
-            # Đây là một biện pháp an toàn bổ sung
-            print(f"[Spam Worker] ⚠️ Worker của {get_bot_name(bot_id)} nhận được item không hợp lệ từ hàng đợi.", flush=True)
-            try: 
-                message_queue.task_done() # Bỏ qua item lỗi
-            except Exception:
-                pass 
-            continue
-        except Exception as e:
-            print(f"[Spam Worker] ❌ Lỗi nghiêm trọng trong worker của {get_bot_name(bot_id)}: {e}", flush=True)
-            time.sleep(5)
-            
-    print(f"[Spam Worker] 🛑 Worker cho {get_bot_name(bot_id)} đã dừng.", flush=True)
-
-def spam_request_producer(server_config, stop_event):
-    """
-    Luồng này chỉ có nhiệm vụ TẠO YÊU CẦU và đưa vào hàng đợi, không trực tiếp gửi tin.
-    """
-    server_name = server_config.get('name')
-    channel_id = server_config.get('spam_channel_id')
-    message = server_config.get('spam_message')
-    delay = server_config.get('spam_delay', 10)
-
-    while not stop_event.is_set():
-        try:
-            # Sửa đổi: Đặt yêu cầu vào hàng đợi cho từng bot đang hoạt động
-            active_bots = [
-                (bot_id, bot) for bot_id, bot in bot_manager.get_all_bots() if bot_states["active"].get(bot_id)
-            ]
-            for bot_id, _ in active_bots:
-                message_queue.put((channel_id, message, bot_id))
-
-            #print(f"[Spam Requester] 📥 Server '{server_name}' đã yêu cầu gửi tin.", flush=True)
-            stop_event.wait(random.uniform(delay * 0.9, delay * 1.1))
-        except Exception as e:
-            print(f"[Spam Requester] ❌ Lỗi trong luồng yêu cầu của server {server_name}: {e}", flush=True)
-            stop_event.wait(10)
-
-def spam_loop_manager():
-    """
-    Quản lý cả luồng tạo yêu cầu (producer) và luồng gửi tin (worker).
-    """
-    active_producers = {} 
-    
-    while True:
-        try:
-            # --- QUẢN LÝ LUỒNG "PRODUCER" (Tạo yêu cầu từ server) ---
-            current_server_ids = {s['id'] for s in servers}
-            for server_id in list(active_producers.keys()):
-                if server_id not in current_server_ids:
-                    print(f"[Spam Manager] 🛑 Dừng luồng yêu cầu cho server đã xóa: {server_id}", flush=True)
-                    active_producers.pop(server_id)[1].set()
-
-            for server in servers:
-                server_id = server.get('id')
-                spam_on = server.get('spam_enabled') and server.get('spam_message') and server.get('spam_channel_id')
-                if spam_on and server_id not in active_producers:
-                    print(f"[Spam Manager] ▶️ Bắt đầu luồng yêu cầu cho server: {server.get('name')}", flush=True)
-                    stop_event = threading.Event()
-                    thread = threading.Thread(target=spam_request_producer, args=(server, stop_event), daemon=True)
-                    thread.start()
-                    active_producers[server_id] = (thread, stop_event)
-                elif not spam_on and server_id in active_producers:
-                    print(f"[Spam Manager] ⏹️ Dừng luồng yêu cầu cho server: {server.get('name')}", flush=True)
-                    active_producers.pop(server_id)[1].set()
-
-            # --- QUẢN LÝ LUỒNG "WORKER" (Gửi tin cho mỗi bot) ---
-            all_bots = bot_manager.get_all_bots()
-            
-            # Lấy danh sách ID các bot đang active
-            active_bot_ids = {bot_id for bot_id, _ in all_bots if bot_states["active"].get(bot_id)}
-
-            # Dừng các worker của bot không còn active hoặc đã bị xóa
-            for bot_id in list(spam_worker_locks.keys()):
-                if bot_id not in active_bot_ids:
-                    print(f"[Spam Manager] 🛑 Dừng worker cho bot không hoạt động: {get_bot_name(bot_id)}", flush=True)
-                    stop_spam_worker_events[bot_id].set()
-                    del spam_worker_locks[bot_id]
-                    del stop_spam_worker_events[bot_id]
-
-            # Khởi động worker cho các bot active mà chưa có worker
-            for bot_id, bot_instance in all_bots:
-                if bot_id in active_bot_ids and bot_id not in spam_worker_locks:
-                    print(f"[Spam Manager] ▶️ Khởi động worker cho bot: {get_bot_name(bot_id)}", flush=True)
-                    stop_event = threading.Event()
-                    worker_thread = threading.Thread(target=spam_message_worker, args=(bot_id, bot_instance, stop_event), daemon=True)
-                    worker_thread.start()
-                    spam_worker_locks[bot_id] = worker_thread
-                    stop_spam_worker_events[bot_id] = stop_event
-            
-            time.sleep(5)
-        except Exception as e:
-            print(f"[Spam Manager] ❌ Lỗi nghiêm trọng trong spam_loop_manager: {e}", flush=True)
-            traceback.print_exc()
-            time.sleep(10)
-
 
 def periodic_task(interval, task_func, task_name):
-    print(f"[{task_name}] 🚀 Khởi động luồng định kỳ.", flush=True)
     while True:
         time.sleep(interval)
         try:
@@ -590,7 +428,86 @@ def health_monitoring_check():
     for bot_id, bot in all_bots:
         check_bot_health(bot, bot_id)
 
-# --- KHỞI TẠO BOT (IMPROVED) ---
+# --- HỆ THỐNG SPAM "SHUFFLED DISPATCHER" (PHIÊN BẢN CUỐI CÙNG) ---
+def master_spam_sequencer(stop_event):
+    """
+    Luồng "nhạc trưởng" phiên bản Shuffled Dispatcher.
+    Tạo ra một danh sách tất cả các công việc có thể, xáo trộn và thực hiện tuần tự.
+    Đây là mô hình cân bằng và hiệu quả nhất.
+    """
+    print("[Shuffled Dispatcher] 🚀 Nhà điều phối Xáo trộn đã khởi động.", flush=True)
+    
+    # === CÀI ĐẶT CỦA BẠN ===
+    # Delay giữa mỗi nhiệm vụ spam. Đây là thông số quan trọng nhất để điều khiển tốc độ.
+    # 0.2 giây là khá nhanh. Bạn có thể tăng lên 0.5 hoặc 1.0 để an toàn hơn.
+    delay_between_tasks = 0.5
+    # ========================
+
+    while not stop_event.is_set():
+        try:
+            active_servers = [s for s in servers if s.get('spam_enabled') and s.get('spam_channel_id') and s.get('spam_message')]
+            active_bots = [(bot_id, bot) for bot_id, bot in bot_manager.get_all_bots() if bot_states["active"].get(bot_id)]
+
+            if not active_servers or not active_bots:
+                time.sleep(5)
+                continue
+
+            # --- Logic điều khiển Shuffled Dispatcher ---
+            
+            # 1. Tạo ra danh sách tất cả các "nhiệm vụ" (job)
+            all_jobs = []
+            for server in active_servers:
+                for bot_id, bot_instance in active_bots:
+                    job = {
+                        "server_name": server.get('name'),
+                        "channel_id": server.get('spam_channel_id'),
+                        "message": server.get('spam_message'),
+                        "bot_id": bot_id,
+                        "bot_instance": bot_instance
+                    }
+                    all_jobs.append(job)
+
+            # 2. Xáo trộn toàn bộ danh sách nhiệm vụ
+            random.shuffle(all_jobs)
+            
+            print(f"[Shuffled Dispatcher] ▶️ Bắt đầu chu trình mới với {len(all_jobs)} nhiệm vụ đã được xáo trộn.")
+
+            # 3. Thực hiện từng nhiệm vụ một
+            for job in all_jobs:
+                if stop_event.is_set():
+                    break
+                
+                try:
+                    job["bot_instance"].sendMessage(job["channel_id"], job["message"])
+                except Exception as e:
+                    print(f"[Shuffled Dispatcher] ❌ Lỗi khi {get_bot_name(job['bot_id'])} spam cho '{job['server_name']}': {e}", flush=True)
+
+                time.sleep(delay_between_tasks)
+            
+            print(f"[Shuffled Dispatcher] ⏹️ Hoàn thành chu trình. Bắt đầu lại sau giây lát.")
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"[Shuffled Dispatcher] ❌ Lỗi nghiêm trọng: {e}", flush=True)
+            traceback.print_exc()
+            time.sleep(10)
+
+def spam_loop_manager():
+    """
+    Hàm này giờ đây chỉ có nhiệm vụ khởi động và giám sát Master Sequencer.
+    """
+    master_thread = threading.Thread(target=master_spam_sequencer, args=(threading.Event(),), daemon=True)
+    master_thread.start()
+    print("[Spam Manager] ✅ Đã giao toàn quyền điều khiển spam cho Master Sequencer.", flush=True)
+    
+    while True:
+        if not master_thread.is_alive():
+            print("[Spam Manager] ⚠️ Master Sequencer đã dừng! Khởi động lại...", flush=True)
+            master_thread = threading.Thread(target=master_spam_sequencer, args=(threading.Event(),), daemon=True)
+            master_thread.start()
+        time.sleep(60)
+
+# --- KHỞI TẠO BOT ---
 def create_bot(token, bot_identifier, is_main=False):
     try:
         bot = discum.Client(token=token, log=False)
@@ -804,7 +721,7 @@ HTML_TEMPLATE = """
                     {% endfor %}
                 </div>
                 <div class="server-sub-panel">
-                    <h3><i class="fas fa-paper-plane"></i> Auto Broadcast (Centralized)</h3>
+                    <h3><i class="fas fa-paper-plane"></i> Auto Broadcast</h3>
                     <div class="input-group"><label>Message</label><textarea class="spam-message" rows="2">{{ server.spam_message or '' }}</textarea></div>
                     <div class="input-group">
                          <label>Delay (s)</label>
@@ -963,9 +880,8 @@ HTML_TEMPLATE = """
                     });
                     const spamToggleBtn = serverPanel.querySelector('.broadcast-toggle');
                     updateElement(spamToggleBtn, { textContent: serverData.spam_enabled ? 'DISABLE' : 'ENABLE' });
-                    // Countdown cho spam không cần thiết với hệ thống mới, có thể bỏ
                     const spamTimer = serverPanel.querySelector('.spam-timer');
-                    updateElement(spamTimer, { textContent: '--:--:--'});
+                    updateElement(spamTimer, { textContent: formatTime(serverData.spam_countdown)});
                 });
 
             } catch (error) { console.error('Error fetching status:', error); }
@@ -1059,7 +975,7 @@ def api_clan_drop_update():
 def api_add_server():
     name = request.json.get('name')
     if not name: return jsonify({'status': 'error', 'message': 'Tên server là bắt buộc.'}), 400
-    new_server = {"id": f"server_{uuid.uuid4().hex}", "name": name, "spam_delay": 10}
+    new_server = {"id": f"server_{uuid.uuid4().hex}", "name": name, "spam_delay": 10, "last_spam_time": 0}
     main_bots_count = len([t for t in main_tokens if t.strip()])
     for i in range(main_bots_count):
         new_server[f'auto_grab_enabled_{i+1}'] = False
@@ -1117,6 +1033,8 @@ def api_broadcast_toggle():
     if server['spam_enabled'] and (not server['spam_message'] or not server['spam_channel_id']):
         server['spam_enabled'] = False
         return jsonify({'status': 'error', 'message': f'❌ Cần có message/channel spam cho {server["name"]}.'})
+    # Khởi tạo last_spam_time nếu chưa có
+    if 'last_spam_time' not in server: server['last_spam_time'] = 0
     status_msg = 'ENABLED' if server['spam_enabled'] else 'DISABLED'
     return jsonify({'status': 'success', 'message': f"📢 Auto Broadcast đã {status_msg} cho {server['name']}."})
 
@@ -1169,6 +1087,10 @@ def status_endpoint():
                 "is_rebooting": bot_manager.is_rebooting(bot_id)
             })
         return sorted(status_list, key=lambda x: int(x['reboot_id'].split('_')[1]))
+
+    # Cập nhật spam_countdown cho mỗi server
+    for server in servers:
+        server['spam_countdown'] = max(0, (server.get('last_spam_time', 0) + server.get('spam_delay', 10)) - now) if server.get('spam_enabled') else 0
 
     bot_statuses = {
         "main_bots": get_bot_status_list(bot_manager.get_main_bots_info(), "main"),
@@ -1225,8 +1147,6 @@ if __name__ == "__main__":
     print("🔧 Starting background threads...", flush=True)
     threading.Thread(target=periodic_task, args=(1800, save_settings, "Save"), daemon=True).start()
     threading.Thread(target=periodic_task, args=(300, health_monitoring_check, "Health"), daemon=True).start()
-    
-    # Bắt đầu luồng quản lý spam tập trung MỚI
     threading.Thread(target=spam_loop_manager, daemon=True).start()
     
     auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
