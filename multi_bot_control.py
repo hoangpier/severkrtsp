@@ -1,4 +1,4 @@
-# PHIÊN BẢN CUỐI CÙNG - SHUFFLED DISPATCHER
+# PHIÊN BẢN CUỐI - PARALLEL GROUP SEQUENCER
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -428,84 +428,115 @@ def health_monitoring_check():
     for bot_id, bot in all_bots:
         check_bot_health(bot, bot_id)
 
-# --- HỆ THỐNG SPAM "SHUFFLED DISPATCHER" (PHIÊN BẢN CUỐI CÙNG) ---
-def master_spam_sequencer(stop_event):
+# --- HỆ THỐNG SPAM SONG SONG THEO NHÓM (PHIÊN BẢN PRO) ---
+def group_spam_sequencer(server_group, group_id, stop_event):
     """
-    Luồng "nhạc trưởng" phiên bản Shuffled Dispatcher.
-    Tạo ra một danh sách tất cả các công việc có thể, xáo trộn và thực hiện tuần tự.
-    Đây là mô hình cân bằng và hiệu quả nhất.
+    Luồng "nhạc trưởng" cho một nhóm server cụ thể.
+    Mỗi nhóm sẽ có một luồng này chạy song song.
     """
-    print("[Shuffled Dispatcher] 🚀 Nhà điều phối Xáo trộn đã khởi động.", flush=True)
+    print(f"[Group Sequencer #{group_id}] 🚀 Đã khởi động cho {len(server_group)} server.", flush=True)
     
     # === CÀI ĐẶT CỦA BẠN ===
-    # Delay giữa mỗi nhiệm vụ spam. Đây là thông số quan trọng nhất để điều khiển tốc độ.
-    # 0.2 giây là khá nhanh. Bạn có thể tăng lên 0.5 hoặc 1.0 để an toàn hơn.
-    delay_between_tasks = 1
+    # Delay giữa các lần chuyển server TRONG CÙNG MỘT NHÓM.
+    delay_within_group = 1.5
     # ========================
+
+    server_index = 0
 
     while not stop_event.is_set():
         try:
-            active_servers = [s for s in servers if s.get('spam_enabled') and s.get('spam_channel_id') and s.get('spam_message')]
+            # Chỉ làm việc với các server được giao trong nhóm này
+            # Lọc lại danh sách server active ngay trong vòng lặp để cập nhật thay đổi từ web
+            active_servers_in_group = [s for s in server_group if s.get('id') in {srv['id'] for srv in servers} and s.get('spam_enabled') and s.get('spam_channel_id') and s.get('spam_message')]
             active_bots = [(bot_id, bot) for bot_id, bot in bot_manager.get_all_bots() if bot_states["active"].get(bot_id)]
 
-            if not active_servers or not active_bots:
+            if not active_servers_in_group or not active_bots:
                 time.sleep(5)
                 continue
 
-            # --- Logic điều khiển Shuffled Dispatcher ---
+            # --- Logic xoay vòng server trong nhóm ---
             
-            # 1. Tạo ra danh sách tất cả các "nhiệm vụ" (job)
-            all_jobs = []
-            for server in active_servers:
-                for bot_id, bot_instance in active_bots:
-                    job = {
-                        "server_name": server.get('name'),
-                        "channel_id": server.get('spam_channel_id'),
-                        "message": server.get('spam_message'),
-                        "bot_id": bot_id,
-                        "bot_instance": bot_instance
-                    }
-                    all_jobs.append(job)
+            if server_index >= len(active_servers_in_group):
+                server_index = 0
 
-            # 2. Xáo trộn toàn bộ danh sách nhiệm vụ
-            random.shuffle(all_jobs)
-            
-            print(f"[Shuffled Dispatcher] ▶️ Bắt đầu chu trình mới với {len(all_jobs)} nhiệm vụ đã được xáo trộn.")
+            current_server = active_servers_in_group[server_index]
+            channel_id = current_server.get('spam_channel_id')
+            message = current_server.get('spam_message')
 
-            # 3. Thực hiện từng nhiệm vụ một
-            for job in all_jobs:
-                if stop_event.is_set():
-                    break
-                
+            # Ra lệnh cho TẤT CẢ các bot đang hoạt động cùng spam vào server này
+            for bot_id, bot_instance in active_bots:
+                if stop_event.is_set(): break
                 try:
-                    job["bot_instance"].sendMessage(job["channel_id"], job["message"])
+                    bot_instance.sendMessage(channel_id, message)
+                    time.sleep(0.05) 
                 except Exception as e:
-                    print(f"[Shuffled Dispatcher] ❌ Lỗi khi {get_bot_name(job['bot_id'])} spam cho '{job['server_name']}': {e}", flush=True)
+                    print(f"[Group #{group_id}] ❌ Lỗi từ {get_bot_name(bot_id)} khi spam cho '{current_server.get('name')}': {e}", flush=True)
 
-                time.sleep(delay_between_tasks)
+            server_index += 1
             
-            print(f"[Shuffled Dispatcher] ⏹️ Hoàn thành chu trình. Bắt đầu lại sau giây lát.")
-            time.sleep(1)
+            stop_event.wait(delay_within_group)
 
         except Exception as e:
-            print(f"[Shuffled Dispatcher] ❌ Lỗi nghiêm trọng: {e}", flush=True)
+            print(f"[Group Sequencer #{group_id}] ❌ Lỗi nghiêm trọng: {e}", flush=True)
             traceback.print_exc()
-            time.sleep(10)
+            stop_event.wait(10)
 
 def spam_loop_manager():
     """
-    Hàm này giờ đây chỉ có nhiệm vụ khởi động và giám sát Master Sequencer.
+    Hàm quản lý việc chia nhóm server và khởi động các luồng sequencer song song.
     """
-    master_thread = threading.Thread(target=master_spam_sequencer, args=(threading.Event(),), daemon=True)
-    master_thread.start()
-    print("[Spam Manager] ✅ Đã giao toàn quyền điều khiển spam cho Master Sequencer.", flush=True)
     
+    # === CÀI ĐẶT CHÍNH ===
+    # Số lượng nhóm bạn muốn chia. Ví dụ: 20 server chia 4 nhóm -> mỗi nhóm 5 server.
+    server_group_count = 4
+    # ====================
+
+    active_threads = {} # {group_id: (thread, stop_event, server_ids)}
+
     while True:
-        if not master_thread.is_alive():
-            print("[Spam Manager] ⚠️ Master Sequencer đã dừng! Khởi động lại...", flush=True)
-            master_thread = threading.Thread(target=master_spam_sequencer, args=(threading.Event(),), daemon=True)
-            master_thread.start()
-        time.sleep(60)
+        try:
+            all_spam_server_configs = {s['id']: s for s in servers if s.get('spam_enabled')}
+            
+            # Chia server thành các nhóm dựa trên ID
+            groups = [[] for _ in range(server_group_count)]
+            sorted_server_ids = sorted(all_spam_server_configs.keys())
+            
+            for i, server_id in enumerate(sorted_server_ids):
+                groups[i % server_group_count].append(all_spam_server_configs[server_id])
+
+            current_grouped_ids = {s['id'] for g in groups for s in g}
+
+            # Dừng các luồng không còn server
+            for group_id, (thread, stop_event, server_ids) in list(active_threads.items()):
+                if not any(sid in current_grouped_ids for sid in server_ids):
+                    print(f"[Spam Manager] ⏹️ Dừng luồng cho nhóm không còn hoạt động {group_id}.", flush=True)
+                    stop_event.set()
+                    active_threads.pop(group_id)
+
+            # Khởi động hoặc cập nhật luồng cho mỗi nhóm
+            for i, group_servers in enumerate(groups):
+                group_id = f"group_{i}"
+                group_server_ids = {s['id'] for s in group_servers}
+                
+                if not group_servers:
+                    if group_id in active_threads:
+                        active_threads[group_id][1].set()
+                        active_threads.pop(group_id)
+                    continue
+
+                # Nếu luồng cho nhóm này chưa tồn tại, hãy tạo nó
+                if group_id not in active_threads or not active_threads[group_id][0].is_alive():
+                    print(f"[Spam Manager] ▶️ Bắt đầu luồng cho nhóm {group_id} với {len(group_servers)} server.", flush=True)
+                    stop_event = threading.Event()
+                    thread = threading.Thread(target=group_spam_sequencer, args=(group_servers, group_id, stop_event), daemon=True)
+                    thread.start()
+                    active_threads[group_id] = (thread, stop_event, group_server_ids)
+
+        except Exception as e:
+            print(f"[Spam Manager] ❌ Lỗi nghiêm trọng: {e}", flush=True)
+            traceback.print_exc()
+        
+        time.sleep(10) # Kiểm tra lại trạng thái mỗi 10 giây
 
 # --- KHỞI TẠO BOT ---
 def create_bot(token, bot_identifier, is_main=False):
@@ -572,6 +603,7 @@ def create_bot(token, bot_identifier, is_main=False):
 
 # --- FLASK APP & GIAO DIỆN ---
 app = Flask(__name__)
+# Giao diện HTML giữ nguyên như file gốc, không thay đổi
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -762,7 +794,7 @@ HTML_TEMPLATE = """
                 }
                 setTimeout(fetchStatus, 500);
                 return result;
-            } catch (error) {
+            } catch (error)
                 console.error('Error:', error);
                 showStatusMessage('Server communication error.', 'error');
             }
@@ -975,7 +1007,7 @@ def api_clan_drop_update():
 def api_add_server():
     name = request.json.get('name')
     if not name: return jsonify({'status': 'error', 'message': 'Tên server là bắt buộc.'}), 400
-    new_server = {"id": f"server_{uuid.uuid4().hex}", "name": name, "spam_delay": 10, "last_spam_time": 0}
+    new_server = {"id": f"server_{uuid.uuid4().hex}", "name": name, "spam_delay": 10}
     main_bots_count = len([t for t in main_tokens if t.strip()])
     for i in range(main_bots_count):
         new_server[f'auto_grab_enabled_{i+1}'] = False
@@ -1033,8 +1065,6 @@ def api_broadcast_toggle():
     if server['spam_enabled'] and (not server['spam_message'] or not server['spam_channel_id']):
         server['spam_enabled'] = False
         return jsonify({'status': 'error', 'message': f'❌ Cần có message/channel spam cho {server["name"]}.'})
-    # Khởi tạo last_spam_time nếu chưa có
-    if 'last_spam_time' not in server: server['last_spam_time'] = 0
     status_msg = 'ENABLED' if server['spam_enabled'] else 'DISABLED'
     return jsonify({'status': 'success', 'message': f"📢 Auto Broadcast đã {status_msg} cho {server['name']}."})
 
@@ -1123,6 +1153,7 @@ if __name__ == "__main__":
 
     print("🔌 Initializing bots using Bot Manager...", flush=True)
     
+    # Khởi tạo bot chính
     for i, token in enumerate(t for t in main_tokens if t.strip()):
         bot_num = i + 1
         bot_id = f"main_{bot_num}"
@@ -1136,6 +1167,7 @@ if __name__ == "__main__":
         bot_states["reboot_settings"].setdefault(bot_id, {'enabled': False, 'delay': 3600, 'next_reboot_time': 0, 'failure_count': 0})
         bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
 
+    # Khởi tạo bot phụ
     for i, token in enumerate(t for t in tokens if t.strip()):
         bot_id = f"sub_{i}"
         bot = create_bot(token.strip(), bot_identifier=i, is_main=False)
