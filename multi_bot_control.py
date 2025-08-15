@@ -1,4 +1,4 @@
-# PHIÊN BẢN CUỐI - PARALLEL GROUP SEQUENCER
+# PHIÊN BẢN CUỐI - PARALLEL GROUP SEQUENCER (TÍCH HỢP LOG & UI TỪ VIP)
 import discum, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -156,7 +156,7 @@ def safe_message_handler_wrapper(handler_func, bot, msg, *args):
         print(f"[Message Handler] 🐛 Traceback: {traceback.format_exc()}", flush=True)
         return None
 
-# --- LOGIC GRAB CARD ---
+# --- LOGIC GRAB CARD (CÓ LOG) ---
 def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id):
     for _ in range(7):
         time.sleep(0.5)
@@ -182,11 +182,16 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                         emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
                         delay = bot_delays[max_index]
                         
+                        # === LOG THÊM VÀO ===
+                        print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
+                        
                         def grab_action():
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, emoji)
                                 time.sleep(1.2)
                                 if ktb_channel_id: bot.sendMessage(ktb_channel_id, "kt b")
+                                # === LOG THÊM VÀO ===
+                                print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
                             except Exception as e:
                                 print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
 
@@ -226,6 +231,8 @@ def handle_grab(bot, msg, bot_num):
 
         if watermelon_grab_enabled:
             def check_for_watermelon_patiently():
+                # === LOG THÊM VÀO ===
+                print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu canh dưa (chờ 5 giây)...", flush=True)
                 time.sleep(5) 
                 try:
                     target_message = bot.getMessage(channel_id, last_drop_msg_id).json()[0]
@@ -233,11 +240,17 @@ def handle_grab(bot, msg, bot_num):
                     for reaction in reactions:
                         emoji_name = reaction.get('emoji', {}).get('name', '')
                         if '🍉' in emoji_name or 'watermelon' in emoji_name.lower() or 'dua' in emoji_name.lower():
+                            # === LOG THÊM VÀO ===
+                            print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU!", flush=True)
                             try:
                                 bot.addReaction(channel_id, last_drop_msg_id, "🍉")
+                                # === LOG THÊM VÀO ===
+                                print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DỰA THÀNH CÔNG!", flush=True)
                             except Exception as e:
                                 print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
                             return
+                    # === LOG THÊM VÀO ===
+                    print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau khi chờ.", flush=True)
                 except Exception as e:
                     print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi lấy tin nhắn để check dưa: {e}", flush=True)
             threading.Thread(target=check_for_watermelon_patiently, daemon=True).start()
@@ -428,7 +441,7 @@ def health_monitoring_check():
     for bot_id, bot in all_bots:
         check_bot_health(bot, bot_id)
 
-# --- HỆ THỐNG SPAM SONG SONG THEO NHÓM (PHIÊN BẢN PRO) ---
+# --- HỆ THỐNG SPAM SONG SONG THEO NHÓM (GIỮ NGUYÊN) ---
 def group_spam_sequencer(server_group, group_id, stop_event):
     """
     Luồng "nhạc trưởng" cho một nhóm server cụ thể.
@@ -603,7 +616,7 @@ def create_bot(token, bot_identifier, is_main=False):
 
 # --- FLASK APP & GIAO DIỆN ---
 app = Flask(__name__)
-# Giao diện HTML giữ nguyên như file gốc, không thay đổi
+# Giao diện HTML với script được cập nhật từ file VIP
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -794,7 +807,7 @@ HTML_TEMPLATE = """
                 }
                 setTimeout(fetchStatus, 500);
                 return result;
-            } catch (error)
+            } catch (error) {
                 console.error('Error:', error);
                 showStatusMessage('Server communication error.', 'error');
             }
@@ -1120,7 +1133,7 @@ def status_endpoint():
 
     # Cập nhật spam_countdown cho mỗi server
     for server in servers:
-        server['spam_countdown'] = max(0, (server.get('last_spam_time', 0) + server.get('spam_delay', 10)) - now) if server.get('spam_enabled') else 0
+        server['spam_countdown'] = 0 # Hệ thống spam mới không cần timer này ở giao diện
 
     bot_statuses = {
         "main_bots": get_bot_status_list(bot_manager.get_main_bots_info(), "main"),
