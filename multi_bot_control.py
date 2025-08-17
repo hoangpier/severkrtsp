@@ -463,6 +463,7 @@ def enhanced_spam_loop():
     
     server_pair_index = 0
     delay_between_pairs = 1.5
+    delay_within_pair = 0.8 # <-- DELAY MỚI GIỮA 2 SERVER TRONG CẶP
     
     # === CÀI ĐẶT TỐI ƯU ===
     max_threads = 4  # Số luồng tối đa (thay vì 17 luồng)
@@ -470,7 +471,6 @@ def enhanced_spam_loop():
     
     while True:
         try:
-            # Lấy danh sách server và bot active
             active_spam_servers = [s for s in servers if s.get('spam_enabled') and s.get('spam_channel_id') and s.get('spam_message')]
             active_bots = [(bot_id, bot) for bot_id, bot in bot_manager.get_all_bots() if bot_states["active"].get(bot_id)]
             
@@ -478,7 +478,6 @@ def enhanced_spam_loop():
                 time.sleep(5)
                 continue
             
-            # Tính cặp server hiện tại
             start_index = server_pair_index * 2
             current_server_pair = active_spam_servers[start_index:start_index + 2]
             
@@ -488,7 +487,6 @@ def enhanced_spam_loop():
             
             print(f"[Enhanced Spam] 📤 Spam cặp #{server_pair_index + 1}: {[s.get('name', 'Unknown') for s in current_server_pair]}", flush=True)
             
-            # CHIA BOT THÀNH NHÓM
             bot_groups = []
             bots_per_group = max(1, len(active_bots) // max_threads)
             
@@ -496,29 +494,38 @@ def enhanced_spam_loop():
                 bot_group = active_bots[i:i + bots_per_group]
                 bot_groups.append(bot_group)
             
-            # TẠO LUỒNG CHO MỖI NHÓM BOT
             spam_threads = []
             for group_index, bot_group in enumerate(bot_groups):
-                def group_spam_action(bots_in_group=bot_group, servers=current_server_pair, group_id=group_index):
+                # --- THAY ĐỔI LOGIC TẠI ĐÂY ---
+                def group_spam_action(bots_in_group=bot_group, servers_pair=current_server_pair, group_id=group_index):
                     try:
-                        # Mỗi luồng xử lý nhiều bot
-                        for bot_id, bot_instance in bots_in_group:
-                            for server in servers:
-                                bot_instance.sendMessage(server['spam_channel_id'], server['spam_message'])
-                                time.sleep(0.02)  # Delay nhỏ giữa các bot
+                        # 1. Spam vào server đầu tiên trong cặp
+                        if servers_pair:
+                            server1 = servers_pair[0]
+                            for bot_id, bot_instance in bots_in_group:
+                                bot_instance.sendMessage(server1['spam_channel_id'], server1['spam_message'])
+                                time.sleep(0.02)
+
+                        # 2. Nếu có server thứ hai, đợi 0.8s rồi mới spam
+                        if len(servers_pair) > 1:
+                            time.sleep(delay_within_pair) # Đợi 0.8 giây
+                            server2 = servers_pair[1]
+                            for bot_id, bot_instance in bots_in_group:
+                                bot_instance.sendMessage(server2['spam_channel_id'], server2['spam_message'])
+                                time.sleep(0.02)
                     except Exception as e:
                         print(f"[Enhanced Spam] ❌ Lỗi nhóm {group_id}: {e}", flush=True)
+                # --- KẾT THÚC THAY ĐỔI ---
                 
                 thread = threading.Thread(target=group_spam_action, daemon=True)
                 spam_threads.append(thread)
                 thread.start()
             
-            # Đợi tất cả nhóm hoàn thành
             for thread in spam_threads:
-                thread.join(timeout=5)
+                thread.join(timeout=10)
             
             server_pair_index += 1
-            time.sleep(delay_between_pairs)
+            time.sleep(delay_between_pairs) # Vẫn giữ delay 1.5s giữa các cặp
             
         except Exception as e:
             print(f"[Enhanced Spam] ❌ Lỗi nghiêm trọng: {e}", flush=True)
@@ -534,6 +541,7 @@ def ultra_optimized_spam_loop():
     
     server_pair_index = 0
     delay_between_pairs = 1.5
+    delay_within_pair = 0.8 # <-- DELAY MỚI GIỮA 2 SERVER TRONG CẶP
     
     while True:
         try:
@@ -553,23 +561,35 @@ def ultra_optimized_spam_loop():
             
             print(f"[Ultra Spam] 📤 Spam cặp #{server_pair_index + 1}: {[s.get('name', 'Unknown') for s in current_server_pair]}", flush=True)
             
-            # TẤT CẢ BOT SPAM TUẦN TỰ TRONG 1 LUỒNG
+            # --- THAY ĐỔI LOGIC TẠI ĐÂY ---
+            # 1. Spam vào server đầu tiên
+            server1 = current_server_pair[0]
             for bot_id, bot_instance in active_bots:
                 try:
-                    for server in current_server_pair:
-                        bot_instance.sendMessage(server['spam_channel_id'], server['spam_message'])
-                        time.sleep(0.01)  # Delay cực nhỏ
+                    bot_instance.sendMessage(server1['spam_channel_id'], server1['spam_message'])
+                    time.sleep(0.01)
                 except Exception as e:
                     print(f"[Ultra Spam] ❌ Lỗi từ {get_bot_name(bot_id)}: {e}", flush=True)
-            
+
+            # 2. Nếu có server thứ hai, đợi 0.8s rồi spam
+            if len(current_server_pair) > 1:
+                time.sleep(delay_within_pair) # Đợi 0.8 giây
+                server2 = current_server_pair[1]
+                for bot_id, bot_instance in active_bots:
+                    try:
+                        bot_instance.sendMessage(server2['spam_channel_id'], server2['spam_message'])
+                        time.sleep(0.01)
+                    except Exception as e:
+                        print(f"[Ultra Spam] ❌ Lỗi từ {get_bot_name(bot_id)}: {e}", flush=True)
+            # --- KẾT THÚC THAY ĐỔI ---
+
             server_pair_index += 1
-            time.sleep(delay_between_pairs)
+            time.sleep(delay_between_pairs) # Vẫn giữ delay 1.5s giữa các cặp
             
         except Exception as e:
             print(f"[Ultra Spam] ❌ Lỗi nghiêm trọng: {e}", flush=True)
             traceback.print_exc()
             time.sleep(10)
-
 def start_optimized_spam_system(mode="optimized"):
     """
     mode options:
