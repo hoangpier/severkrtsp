@@ -451,115 +451,140 @@ def auto_clan_drop_loop():
         stop_events["clan_drop"].wait(60)
     print("[Clan Drop] 🛑 Luồng tự động drop clan đã dừng.", flush=True)
 
-# --- HỆ THỐNG SPAM SONG SONG THEO NHÓM (PHIÊN BẢN PRO) ---
-def group_spam_sequencer(server_group, group_id, stop_event):
+# --- HỆ THỐNG SPAM TỐI ƯU ---
+def enhanced_spam_loop():
     """
-    Luồng "nhạc trưởng" cho một nhóm server cụ thể.
-    Mỗi nhóm sẽ có một luồng này chạy song song.
+    Logic spam tối ưu:
+    - Chia 17 bot thành các nhóm (ví dụ: 4 nhóm)
+    - Mỗi nhóm 1 luồng xử lý nhiều bot
+    - Giảm từ 17 luồng xuống 4 luồng
     """
-    print(f"[Group Sequencer #{group_id}] 🚀 Đã khởi động cho {len(server_group)} server.", flush=True)
+    print("[Enhanced Spam] 🚀 Khởi động hệ thống spam tối ưu...", flush=True)
     
-    # === CÀI ĐẶT CỦA BẠN ===
-    # Delay giữa các lần chuyển server TRONG CÙNG MỘT NHÓM.
-    delay_within_group = 1.5
-    # ========================
-
-    server_index = 0
-
-    while not stop_event.is_set():
-        try:
-            # Chỉ làm việc với các server được giao trong nhóm này
-            # Lọc lại danh sách server active ngay trong vòng lặp để cập nhật thay đổi từ web
-            active_servers_in_group = [s for s in server_group if s.get('id') in {srv['id'] for srv in servers} and s.get('spam_enabled') and s.get('spam_channel_id') and s.get('spam_message')]
-            active_bots = [(bot_id, bot) for bot_id, bot in bot_manager.get_all_bots() if bot_states["active"].get(bot_id)]
-
-            if not active_servers_in_group or not active_bots:
-                time.sleep(5)
-                continue
-
-            # --- Logic xoay vòng server trong nhóm ---
-            
-            if server_index >= len(active_servers_in_group):
-                server_index = 0
-
-            current_server = active_servers_in_group[server_index]
-            channel_id = current_server.get('spam_channel_id')
-            message = current_server.get('spam_message')
-
-            # Ra lệnh cho TẤT CẢ các bot đang hoạt động cùng spam vào server này
-            for bot_id, bot_instance in active_bots:
-                if stop_event.is_set(): break
-                try:
-                    bot_instance.sendMessage(channel_id, message)
-                    time.sleep(0.05) 
-                except Exception as e:
-                    print(f"[Group #{group_id}] ❌ Lỗi từ {get_bot_name(bot_id)} khi spam cho '{current_server.get('name')}': {e}", flush=True)
-
-            server_index += 1
-            
-            stop_event.wait(delay_within_group)
-
-        except Exception as e:
-            print(f"[Group Sequencer #{group_id}] ❌ Lỗi nghiêm trọng: {e}", flush=True)
-            traceback.print_exc()
-            stop_event.wait(10)
-
-def spam_loop_manager():
-    """
-    Hàm quản lý việc chia nhóm server và khởi động các luồng sequencer song song.
-    """
+    server_pair_index = 0
+    delay_between_pairs = 1.5
     
-    # === CÀI ĐẶT CHÍNH ===
-    # Số lượng nhóm bạn muốn chia. Ví dụ: 20 server chia 4 nhóm -> mỗi nhóm 5 server.
-    server_group_count = 4
+    # === CÀI ĐẶT TỐI ƯU ===
+    max_threads = 4  # Số luồng tối đa (thay vì 17 luồng)
     # ====================
-
-    active_threads = {} # {group_id: (thread, stop_event, server_ids)}
-
+    
     while True:
         try:
-            all_spam_server_configs = {s['id']: s for s in servers if s.get('spam_enabled')}
+            # Lấy danh sách server và bot active
+            active_spam_servers = [s for s in servers if s.get('spam_enabled') and s.get('spam_channel_id') and s.get('spam_message')]
+            active_bots = [(bot_id, bot) for bot_id, bot in bot_manager.get_all_bots() if bot_states["active"].get(bot_id)]
             
-            # Chia server thành các nhóm dựa trên ID
-            groups = [[] for _ in range(server_group_count)]
-            sorted_server_ids = sorted(all_spam_server_configs.keys())
+            if not active_spam_servers or not active_bots:
+                time.sleep(5)
+                continue
             
-            for i, server_id in enumerate(sorted_server_ids):
-                groups[i % server_group_count].append(all_spam_server_configs[server_id])
-
-            current_grouped_ids = {s['id'] for g in groups for s in g}
-
-            # Dừng các luồng không còn server
-            for group_id, (thread, stop_event, server_ids) in list(active_threads.items()):
-                if not any(sid in current_grouped_ids for sid in server_ids):
-                    print(f"[Spam Manager] ⏹️ Dừng luồng cho nhóm không còn hoạt động {group_id}.", flush=True)
-                    stop_event.set()
-                    active_threads.pop(group_id)
-
-            # Khởi động hoặc cập nhật luồng cho mỗi nhóm
-            for i, group_servers in enumerate(groups):
-                group_id = f"group_{i}"
-                group_server_ids = {s['id'] for s in group_servers}
+            # Tính cặp server hiện tại
+            start_index = server_pair_index * 2
+            current_server_pair = active_spam_servers[start_index:start_index + 2]
+            
+            if not current_server_pair:
+                server_pair_index = 0
+                continue
+            
+            print(f"[Enhanced Spam] 📤 Spam cặp #{server_pair_index + 1}: {[s.get('name', 'Unknown') for s in current_server_pair]}", flush=True)
+            
+            # CHIA BOT THÀNH NHÓM
+            bot_groups = []
+            bots_per_group = max(1, len(active_bots) // max_threads)
+            
+            for i in range(0, len(active_bots), bots_per_group):
+                bot_group = active_bots[i:i + bots_per_group]
+                bot_groups.append(bot_group)
+            
+            # TẠO LUỒNG CHO MỖI NHÓM BOT
+            spam_threads = []
+            for group_index, bot_group in enumerate(bot_groups):
+                def group_spam_action(bots_in_group=bot_group, servers=current_server_pair, group_id=group_index):
+                    try:
+                        # Mỗi luồng xử lý nhiều bot
+                        for bot_id, bot_instance in bots_in_group:
+                            for server in servers:
+                                bot_instance.sendMessage(server['spam_channel_id'], server['spam_message'])
+                                time.sleep(0.02)  # Delay nhỏ giữa các bot
+                    except Exception as e:
+                        print(f"[Enhanced Spam] ❌ Lỗi nhóm {group_id}: {e}", flush=True)
                 
-                if not group_servers:
-                    if group_id in active_threads:
-                        active_threads[group_id][1].set()
-                        active_threads.pop(group_id)
-                    continue
-
-                # Nếu luồng cho nhóm này chưa tồn tại, hãy tạo nó
-                if group_id not in active_threads or not active_threads[group_id][0].is_alive():
-                    print(f"[Spam Manager] ▶️ Bắt đầu luồng cho nhóm {group_id} với {len(group_servers)} server.", flush=True)
-                    stop_event = threading.Event()
-                    thread = threading.Thread(target=group_spam_sequencer, args=(group_servers, group_id, stop_event), daemon=True)
-                    thread.start()
-                    active_threads[group_id] = (thread, stop_event, group_server_ids)
-
+                thread = threading.Thread(target=group_spam_action, daemon=True)
+                spam_threads.append(thread)
+                thread.start()
+            
+            # Đợi tất cả nhóm hoàn thành
+            for thread in spam_threads:
+                thread.join(timeout=5)
+            
+            server_pair_index += 1
+            time.sleep(delay_between_pairs)
+            
         except Exception as e:
-            print(f"[Spam Manager] ❌ Lỗi nghiêm trọng: {e}", flush=True)
+            print(f"[Enhanced Spam] ❌ Lỗi nghiêm trọng: {e}", flush=True)
             traceback.print_exc()
-        
-        time.sleep(10) # Kiểm tra lại trạng thái mỗi 10 giây
+            time.sleep(10)
+
+def ultra_optimized_spam_loop():
+    """
+    Phiên bản siêu tối ưu: CHỈ 1 LUỒNG duy nhất
+    Xử lý tuần tự nhưng vẫn đảm bảo logic spam đồng thời
+    """
+    print("[Ultra Spam] 🚀 Khởi động spam siêu tối ưu - 1 luồng duy nhất...", flush=True)
+    
+    server_pair_index = 0
+    delay_between_pairs = 1.5
+    
+    while True:
+        try:
+            active_spam_servers = [s for s in servers if s.get('spam_enabled') and s.get('spam_channel_id') and s.get('spam_message')]
+            active_bots = [(bot_id, bot) for bot_id, bot in bot_manager.get_all_bots() if bot_states["active"].get(bot_id)]
+            
+            if not active_spam_servers or not active_bots:
+                time.sleep(5)
+                continue
+            
+            start_index = server_pair_index * 2
+            current_server_pair = active_spam_servers[start_index:start_index + 2]
+            
+            if not current_server_pair:
+                server_pair_index = 0
+                continue
+            
+            print(f"[Ultra Spam] 📤 Spam cặp #{server_pair_index + 1}: {[s.get('name', 'Unknown') for s in current_server_pair]}", flush=True)
+            
+            # TẤT CẢ BOT SPAM TUẦN TỰ TRONG 1 LUỒNG
+            for bot_id, bot_instance in active_bots:
+                try:
+                    for server in current_server_pair:
+                        bot_instance.sendMessage(server['spam_channel_id'], server['spam_message'])
+                        time.sleep(0.01)  # Delay cực nhỏ
+                except Exception as e:
+                    print(f"[Ultra Spam] ❌ Lỗi từ {get_bot_name(bot_id)}: {e}", flush=True)
+            
+            server_pair_index += 1
+            time.sleep(delay_between_pairs)
+            
+        except Exception as e:
+            print(f"[Ultra Spam] ❌ Lỗi nghiêm trọng: {e}", flush=True)
+            traceback.print_exc()
+            time.sleep(10)
+
+def start_optimized_spam_system(mode="optimized"):
+    """
+    mode options:
+    - "optimized": 4 luồng (17 bot chia 4 nhóm)  
+    - "ultra": 1 luồng duy nhất
+    """
+    print(f"[Spam System] 🔄 Khởi động hệ thống spam {mode}...", flush=True)
+    
+    if mode == "ultra":
+        spam_thread = threading.Thread(target=ultra_optimized_spam_loop, daemon=True)
+    else:
+        spam_thread = threading.Thread(target=enhanced_spam_loop, daemon=True)
+    
+    spam_thread.start()
+    print(f"[Spam System] ✅ Hệ thống spam {mode} đã khởi động!", flush=True)
 
 
 def periodic_task(interval, task_func, task_name):
@@ -1219,7 +1244,9 @@ if __name__ == "__main__":
     print("🔧 Starting background threads...", flush=True)
     threading.Thread(target=periodic_task, args=(1800, save_settings, "Save"), daemon=True).start()
     threading.Thread(target=periodic_task, args=(300, health_monitoring_check, "Health"), daemon=True).start()
-    threading.Thread(target=spam_loop_manager, daemon=True).start()
+    
+    # Khởi động hệ thống spam mới
+    start_optimized_spam_system(mode="optimized") # <-- THAY ĐỔI TẠI ĐÂY
     
     auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
     auto_reboot_thread.start()
