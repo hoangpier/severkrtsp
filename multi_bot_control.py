@@ -17,7 +17,7 @@ acc_names = [f"Bot-{i:02d}" for i in range(1, 21)]
 servers = []
 bot_states = {
     "reboot_settings": {}, "active": {}, "watermelon_grab": {}, "health_stats": {},
-    "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}}
+    "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}, "max_heart_thresholds": {}}
 }
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
@@ -159,9 +159,9 @@ def safe_message_handler_wrapper(handler_func, bot, msg, *args):
         print(f"[Message Handler] 🐛 Traceback: {traceback.format_exc()}", flush=True)
         return None
 
-# --- LOGIC GRAB CARD ---
-def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id):
-    """Hàm chung để tìm và chọn card dựa trên số heart."""
+# --- LOGIC GRAB CARD (UPDATED) ---
+def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id, max_heart_threshold=99999):
+    """Hàm chung để tìm và chọn card dựa trên khoảng số heart."""
     for _ in range(7):
         time.sleep(0.5)
         try:
@@ -177,41 +177,50 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                     lines = desc.split('\n')[:3]
                     heart_numbers = [int(re.search(r'♡(\d+)', line).group(1)) if re.search(r'♡(\d+)', line) else 0 for line in lines]
                     if not any(heart_numbers): break
+                    
+                    # Tìm card phù hợp trong khoảng min-max
+                    valid_cards = []
+                    for idx, hearts in enumerate(heart_numbers):
+                        if heart_threshold <= hearts <= max_heart_threshold:
+                            valid_cards.append((idx, hearts))
+                    
+                    if not valid_cards: continue
+                    
+                    # Chọn card có số tim cao nhất trong khoảng cho phép
+                    max_index, max_num = max(valid_cards, key=lambda x: x[1])
 
-                    max_num = max(heart_numbers)
-                    if max_num >= heart_threshold:
-                        max_index = heart_numbers.index(max_num)
-                        delays = {1: [0.35, 1.35, 2.05], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]}
-                        bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
-                        emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
-                        delay = bot_delays[max_index]
-                        
-                        print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
-                        
-                        def grab_action():
-                            try:
-                                bot.addReaction(channel_id, last_drop_msg_id, emoji)
-                                time.sleep(1.2)
-                                if ktb_channel_id: bot.sendMessage(ktb_channel_id, "kt b")
-                                print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
-                            except Exception as e:
-                                print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
+                    delays = {1: [0.35, 1.35, 2.05], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]}
+                    bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
+                    emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
+                    delay = bot_delays[max_index]
+                    
+                    print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ (range: {heart_threshold}-{max_heart_threshold}) -> {emoji} sau {delay}s", flush=True)
+                    
+                    def grab_action():
+                        try:
+                            bot.addReaction(channel_id, last_drop_msg_id, emoji)
+                            time.sleep(1.2)
+                            if ktb_channel_id: bot.sendMessage(ktb_channel_id, "kt b")
+                            print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
+                        except Exception as e:
+                            print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
 
-                        threading.Timer(delay, grab_action).start()
-                        return True
+                    threading.Timer(delay, grab_action).start()
+                    return True
             return False
         except Exception as e:
             print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi đọc messages: {e}", flush=True)
     return False
 
-# --- LOGIC BOT ---
+# --- LOGIC BOT (UPDATED) ---
 def handle_clan_drop(bot, msg, bot_num):
     clan_settings = bot_states["auto_clan_drop"]
     if not (clan_settings.get("enabled") and msg.get("channel_id") == clan_settings.get("channel_id")):
         return
     bot_id_str = f'main_{bot_num}'
     threshold = clan_settings.get("heart_thresholds", {}).get(bot_id_str, 50)
-    threading.Thread(target=_find_and_select_card, args=(bot, clan_settings["channel_id"], msg["id"], threshold, bot_num, clan_settings["ktb_channel_id"]), daemon=True).start()
+    max_threshold = clan_settings.get("max_heart_thresholds", {}).get(bot_id_str, 99999)
+    threading.Thread(target=_find_and_select_card, args=(bot, clan_settings["channel_id"], msg["id"], threshold, bot_num, clan_settings["ktb_channel_id"], max_threshold), daemon=True).start()
 
 def handle_grab(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
@@ -229,7 +238,8 @@ def handle_grab(bot, msg, bot_num):
     def grab_logic_thread():
         if auto_grab_enabled and target_server.get('ktb_channel_id'):
             threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
-            threading.Thread(target=_find_and_select_card, args=(bot, channel_id, last_drop_msg_id, threshold, bot_num, target_server.get('ktb_channel_id')), daemon=True).start()
+            max_threshold = target_server.get(f'max_heart_threshold_{bot_num}', 99999)
+            threading.Thread(target=_find_and_select_card, args=(bot, channel_id, last_drop_msg_id, threshold, bot_num, target_server.get('ktb_channel_id'), max_threshold), daemon=True).start()
 
         if watermelon_grab_enabled:
             def check_for_watermelon_patiently():
@@ -686,7 +696,7 @@ def create_bot(token, bot_identifier, is_main=False):
         traceback.print_exc()
         return None
 
-# --- FLASK APP & GIAO DIỆN ---
+# --- FLASK APP & GIAO DIỆN (UPDATED) ---
 app = Flask(__name__)
 # Giao diện HTML giữ nguyên như file gốc, không thay đổi
 HTML_TEMPLATE = """
@@ -796,7 +806,8 @@ HTML_TEMPLATE = """
                     <div class="grab-section">
                         <h3>{{ bot.name }}</h3>
                         <div class="input-group">
-                            <input type="number" class="clan-drop-threshold" data-node="main_{{ bot.id }}" value="{{ auto_clan_drop.heart_thresholds[('main_' + bot.id|string)]|default(50) }}" min="0">
+                            <input type="number" class="clan-drop-threshold" data-node="main_{{ bot.id }}" value="{{ auto_clan_drop.heart_thresholds[('main_' + bot.id|string)]|default(50) }}" min="0" max="99999" placeholder="Min ♡">
+                            <input type="number" class="clan-drop-max-threshold" data-node="main_{{ bot.id }}" value="{{ auto_clan_drop.max_heart_thresholds[('main_' + bot.id|string)]|default(99999) }}" min="0" max="99999" placeholder="Max ♡">
                         </div>
                     </div>
                     {% endfor %}
@@ -829,7 +840,8 @@ HTML_TEMPLATE = """
                     <div class="grab-section">
                         <h3>{{ bot.name }}</h3>
                         <div class="input-group">
-                            <input type="number" class="harvest-threshold" data-node="{{ bot.id }}" value="{{ server['heart_threshold_' + bot.id|string] or 50 }}" min="0">
+                            <input type="number" class="harvest-threshold" data-node="{{ bot.id }}" value="{{ server['heart_threshold_' + bot.id|string] or 50 }}" min="0" placeholder="Min ♡">
+                            <input type="number" class="harvest-max-threshold" data-node="{{ bot.id }}" value="{{ server['max_heart_threshold_' + bot.id|string]|default(99999) }}" min="0" placeholder="Max ♡">
                             <button type="button" class="btn harvest-toggle" data-node="{{ bot.id }}">
                                 {{ 'DISABLE' if server['auto_grab_enabled_' + bot.id|string] else 'ENABLE' }}
                             </button>
@@ -1017,12 +1029,23 @@ HTML_TEMPLATE = """
                 'btn-toggle-state': () => postData('/api/toggle_bot_state', { target: button.dataset.target }),
                 'clan-drop-toggle-btn': () => postData('/api/clan_drop_toggle'),
                 'clan-drop-save-btn': () => {
-                    const thresholds = {};
+                    const thresholds = {}, maxThresholds = {};
                     document.querySelectorAll('.clan-drop-threshold').forEach(i => { thresholds[i.dataset.node] = parseInt(i.value, 10); });
-                    postData('/api/clan_drop_update', { channel_id: document.getElementById('clan-drop-channel-id').value, ktb_channel_id: document.getElementById('clan-drop-ktb-channel-id').value, heart_thresholds: thresholds });
+                    document.querySelectorAll('.clan-drop-max-threshold').forEach(i => { maxThresholds[i.dataset.node] = parseInt(i.value, 10); });
+                    postData('/api/clan_drop_update', { 
+                        channel_id: document.getElementById('clan-drop-channel-id').value, 
+                        ktb_channel_id: document.getElementById('clan-drop-ktb-channel-id').value, 
+                        heart_thresholds: thresholds,
+                        max_heart_thresholds: maxThresholds
+                    });
                 },
                 'watermelon-toggle': () => postData('/api/watermelon_toggle', { node: button.dataset.node }),
-                'harvest-toggle': () => serverId && postData('/api/harvest_toggle', { server_id: serverId, node: button.dataset.node, threshold: serverPanel.querySelector(`.harvest-threshold[data-node="${button.dataset.node}"]`).value }),
+                'harvest-toggle': () => serverId && postData('/api/harvest_toggle', { 
+                    server_id: serverId, 
+                    node: button.dataset.node, 
+                    threshold: serverPanel.querySelector(`.harvest-threshold[data-node="${button.dataset.node}"]`).value,
+                    max_threshold: serverPanel.querySelector(`.harvest-max-threshold[data-node="${button.dataset.node}"]`).value 
+                }),
                 'broadcast-toggle': () => serverId && postData('/api/broadcast_toggle', { server_id: serverId, message: serverPanel.querySelector('.spam-message').value, delay: serverPanel.querySelector('.spam-delay').value }),
                 'btn-delete-server': () => serverId && confirm('Are you sure?') && postData('/api/delete_server', { server_id: serverId })
             };
@@ -1055,11 +1078,14 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- FLASK ROUTES ---
+# --- FLASK ROUTES (UPDATED) ---
 @app.route("/")
 def index():
     main_bots_info = [{"id": int(bot_id.split('_')[1]), "name": get_bot_name(bot_id)} for bot_id, _ in bot_manager.get_main_bots_info()]
     main_bots_info.sort(key=lambda x: x['id'])
+    # Ensure max_heart_thresholds exists for rendering
+    if "max_heart_thresholds" not in bot_states["auto_clan_drop"]:
+        bot_states["auto_clan_drop"]["max_heart_thresholds"] = {}
     return render_template_string(HTML_TEMPLATE, servers=sorted(servers, key=lambda s: s.get('name', '')), main_bots_info=main_bots_info, auto_clan_drop=bot_states["auto_clan_drop"])
 
 @app.route("/api/clan_drop_toggle", methods=['POST'])
@@ -1080,8 +1106,13 @@ def api_clan_drop_toggle():
 def api_clan_drop_update():
     data = request.get_json()
     thresholds = bot_states["auto_clan_drop"].setdefault('heart_thresholds', {})
+    max_thresholds = bot_states["auto_clan_drop"].setdefault('max_heart_thresholds', {})
+    
     for key, value in data.get('heart_thresholds', {}).items():
         if isinstance(value, int): thresholds[key] = value
+    for key, value in data.get('max_heart_thresholds', {}).items():
+        if isinstance(value, int): max_thresholds[key] = value
+        
     bot_states["auto_clan_drop"].update({
         'channel_id': data.get('channel_id', '').strip(),
         'ktb_channel_id': data.get('ktb_channel_id', '').strip()
@@ -1097,6 +1128,7 @@ def api_add_server():
     for i in range(main_bots_count):
         new_server[f'auto_grab_enabled_{i+1}'] = False
         new_server[f'heart_threshold_{i+1}'] = 50
+        new_server[f'max_heart_threshold_{i+1}'] = 99999
     servers.append(new_server)
     return jsonify({'status': 'success', 'message': f'✅ Server "{name}" đã được thêm.', 'reload': True})
 
@@ -1124,9 +1156,14 @@ def api_harvest_toggle():
     server, node_str = find_server(data.get('server_id')), data.get('node')
     if not server or not node_str: return jsonify({'status': 'error', 'message': 'Yêu cầu không hợp lệ.'}), 400
     node = str(node_str)
-    grab_key, threshold_key = f'auto_grab_enabled_{node}', f'heart_threshold_{node}'
+    grab_key = f'auto_grab_enabled_{node}'
+    threshold_key = f'heart_threshold_{node}'
+    max_threshold_key = f'max_heart_threshold_{node}'
+    
     server[grab_key] = not server.get(grab_key, False)
     server[threshold_key] = int(data.get('threshold', 50))
+    server[max_threshold_key] = int(data.get('max_threshold', 99999))
+    
     status_msg = 'ENABLED' if server[grab_key] else 'DISABLED'
     bot_id = f'main_{node}'
     return jsonify({'status': 'success', 'message': f"🎯 Card Grab cho {get_bot_name(bot_id)} đã {status_msg}."})
@@ -1231,7 +1268,7 @@ def status_endpoint():
         'auto_clan_drop_status': clan_drop_status
     })
 
-# --- MAIN EXECUTION ---
+# --- MAIN EXECUTION (UPDATED) ---
 if __name__ == "__main__":
     print("🚀 Shadow Network Control - V3 Stable Version Starting...", flush=True)
     load_settings()
@@ -1249,6 +1286,7 @@ if __name__ == "__main__":
         bot_states["active"].setdefault(bot_id, True)
         bot_states["watermelon_grab"].setdefault(bot_id, False)
         bot_states["auto_clan_drop"]["heart_thresholds"].setdefault(bot_id, 50)
+        bot_states["auto_clan_drop"].setdefault("max_heart_thresholds", {}).setdefault(bot_id, 99999) # Thêm dòng này
         bot_states["reboot_settings"].setdefault(bot_id, {'enabled': False, 'delay': 3600, 'next_reboot_time': 0, 'failure_count': 0})
         bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
 
