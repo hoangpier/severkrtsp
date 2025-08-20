@@ -550,8 +550,8 @@ def ultra_optimized_spam_loop():
     print("[Ultra Spam] 🚀 Khởi động spam siêu tối ưu - 1 luồng duy nhất...", flush=True)
     
     server_pair_index = 0
-    delay_between_pairs = 1.5
-    delay_within_pair = 0.8 # <-- DELAY MỚI GIỮA 2 SERVER TRONG CẶP
+    delay_between_pairs = 2
+    delay_within_pair = 2 # <-- DELAY MỚI GIỮA 2 SERVER TRONG CẶP
     
     while True:
         try:
@@ -577,7 +577,7 @@ def ultra_optimized_spam_loop():
             for bot_id, bot_instance in active_bots:
                 try:
                     bot_instance.sendMessage(server1['spam_channel_id'], server1['spam_message'])
-                    time.sleep(0.01)
+                    time.sleep(0.5)
                 except Exception as e:
                     print(f"[Ultra Spam] ❌ Lỗi từ {get_bot_name(bot_id)}: {e}", flush=True)
 
@@ -1310,7 +1310,7 @@ if __name__ == "__main__":
     threading.Thread(target=periodic_task, args=(300, health_monitoring_check, "Health"), daemon=True).start()
     
     # Khởi động hệ thống spam mới
-    start_optimized_spam_system(mode="optimized") # <-- THAY ĐỔI TẠI ĐÂY
+    start_optimized_spam_system(mode="ultra") # <-- THAY ĐỔI TẠI ĐÂY
     
     auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
     auto_reboot_thread.start()
