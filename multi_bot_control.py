@@ -17,7 +17,7 @@ acc_names = [f"Bot-{i:02d}" for i in range(1, 21)]
 servers = []
 bot_states = {
     "reboot_settings": {}, "active": {}, "watermelon_grab": {}, "health_stats": {},
-    "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}, "max_heart_thresholds": {}}
+    "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}}
 }
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
@@ -159,9 +159,9 @@ def safe_message_handler_wrapper(handler_func, bot, msg, *args):
         print(f"[Message Handler] 🐛 Traceback: {traceback.format_exc()}", flush=True)
         return None
 
-# --- LOGIC GRAB CARD (UPDATED) ---
-def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id, max_heart_threshold=99999):
-    """Hàm chung để tìm và chọn card dựa trên khoảng số heart."""
+# --- LOGIC GRAB CARD ---
+def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id):
+    """Hàm chung để tìm và chọn card dựa trên số heart."""
     for _ in range(7):
         time.sleep(0.5)
         try:
@@ -177,50 +177,41 @@ def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bo
                     lines = desc.split('\n')[:3]
                     heart_numbers = [int(re.search(r'♡(\d+)', line).group(1)) if re.search(r'♡(\d+)', line) else 0 for line in lines]
                     if not any(heart_numbers): break
-                    
-                    # Tìm card phù hợp trong khoảng min-max
-                    valid_cards = []
-                    for idx, hearts in enumerate(heart_numbers):
-                        if heart_threshold <= hearts <= max_heart_threshold:
-                            valid_cards.append((idx, hearts))
-                    
-                    if not valid_cards: continue
-                    
-                    # Chọn card có số tim cao nhất trong khoảng cho phép
-                    max_index, max_num = max(valid_cards, key=lambda x: x[1])
 
-                    delays = {1: [0.35, 1.35, 2.05], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]}
-                    bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
-                    emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
-                    delay = bot_delays[max_index]
-                    
-                    print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ (range: {heart_threshold}-{max_heart_threshold}) -> {emoji} sau {delay}s", flush=True)
-                    
-                    def grab_action():
-                        try:
-                            bot.addReaction(channel_id, last_drop_msg_id, emoji)
-                            time.sleep(1.2)
-                            if ktb_channel_id: bot.sendMessage(ktb_channel_id, "kt b")
-                            print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
-                        except Exception as e:
-                            print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
+                    max_num = max(heart_numbers)
+                    if max_num >= heart_threshold:
+                        max_index = heart_numbers.index(max_num)
+                        delays = {1: [0.4, 1.4, 2.1], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]}
+                        bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
+                        emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
+                        delay = bot_delays[max_index]
+                        
+                        print(f"[CARD GRAB | Bot {bot_num}] Chọn dòng {max_index+1} với {max_num}♡ -> {emoji} sau {delay}s", flush=True)
+                        
+                        def grab_action():
+                            try:
+                                bot.addReaction(channel_id, last_drop_msg_id, emoji)
+                                time.sleep(1.2)
+                                if ktb_channel_id: bot.sendMessage(ktb_channel_id, "kt b")
+                                print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
+                            except Exception as e:
+                                print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
 
-                    threading.Timer(delay, grab_action).start()
-                    return True
+                        threading.Timer(delay, grab_action).start()
+                        return True
             return False
         except Exception as e:
             print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi đọc messages: {e}", flush=True)
     return False
 
-# --- LOGIC BOT (UPDATED) ---
+# --- LOGIC BOT ---
 def handle_clan_drop(bot, msg, bot_num):
     clan_settings = bot_states["auto_clan_drop"]
     if not (clan_settings.get("enabled") and msg.get("channel_id") == clan_settings.get("channel_id")):
         return
     bot_id_str = f'main_{bot_num}'
     threshold = clan_settings.get("heart_thresholds", {}).get(bot_id_str, 50)
-    max_threshold = clan_settings.get("max_heart_thresholds", {}).get(bot_id_str, 99999)
-    threading.Thread(target=_find_and_select_card, args=(bot, clan_settings["channel_id"], msg["id"], threshold, bot_num, clan_settings["ktb_channel_id"], max_threshold), daemon=True).start()
+    threading.Thread(target=_find_and_select_card, args=(bot, clan_settings["channel_id"], msg["id"], threshold, bot_num, clan_settings["ktb_channel_id"]), daemon=True).start()
 
 def handle_grab(bot, msg, bot_num):
     channel_id = msg.get("channel_id")
@@ -238,8 +229,7 @@ def handle_grab(bot, msg, bot_num):
     def grab_logic_thread():
         if auto_grab_enabled and target_server.get('ktb_channel_id'):
             threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
-            max_threshold = target_server.get(f'max_heart_threshold_{bot_num}', 99999)
-            threading.Thread(target=_find_and_select_card, args=(bot, channel_id, last_drop_msg_id, threshold, bot_num, target_server.get('ktb_channel_id'), max_threshold), daemon=True).start()
+            threading.Thread(target=_find_and_select_card, args=(bot, channel_id, last_drop_msg_id, threshold, bot_num, target_server.get('ktb_channel_id')), daemon=True).start()
 
         if watermelon_grab_enabled:
             def check_for_watermelon_patiently():
@@ -461,161 +451,56 @@ def auto_clan_drop_loop():
         stop_events["clan_drop"].wait(60)
     print("[Clan Drop] 🛑 Luồng tự động drop clan đã dừng.", flush=True)
 
-# --- HỆ THỐNG SPAM TỐI ƯU ---
-def enhanced_spam_loop():
-    """
-    Logic spam tối ưu:
-    - Chia 17 bot thành các nhóm (ví dụ: 4 nhóm)
-    - Mỗi nhóm 1 luồng xử lý nhiều bot
-    - Giảm từ 17 luồng xuống 4 luồng
-    """
-    print("[Enhanced Spam] 🚀 Khởi động hệ thống spam tối ưu...", flush=True)
+def spam_for_server(server_config, stop_event):
+    server_name = server_config.get('name')
+    channel_id = server_config.get('spam_channel_id')
+    message = server_config.get('spam_message')
     
-    server_pair_index = 0
-    delay_between_pairs = 1.9
-    delay_within_pair = 1.4 # <-- DELAY MỚI GIỮA 2 SERVER TRONG CẶP
-    
-    # === CÀI ĐẶT TỐI ƯU ===
-    max_threads = 6  # Số luồng tối đa (thay vì 17 luồng)
-    # ====================
-    
-    while True:
+    while not stop_event.is_set():
         try:
-            active_spam_servers = [s for s in servers if s.get('spam_enabled') and s.get('spam_channel_id') and s.get('spam_message')]
-            active_bots = [(bot_id, bot) for bot_id, bot in bot_manager.get_all_bots() if bot_states["active"].get(bot_id)]
-            
-            if not active_spam_servers or not active_bots:
-                time.sleep(5)
-                continue
-            
-            start_index = server_pair_index * 2
-            current_server_pair = active_spam_servers[start_index:start_index + 2]
-            
-            if not current_server_pair:
-                server_pair_index = 0
-                continue
-            
-            print(f"[Enhanced Spam] 📤 Spam cặp #{server_pair_index + 1}: {[s.get('name', 'Unknown') for s in current_server_pair]}", flush=True)
-            
-            bot_groups = []
-            bots_per_group = max(1, len(active_bots) // max_threads)
-            
-            for i in range(0, len(active_bots), bots_per_group):
-                bot_group = active_bots[i:i + bots_per_group]
-                bot_groups.append(bot_group)
-            
-            spam_threads = []
-            for group_index, bot_group in enumerate(bot_groups):
-                # --- THAY ĐỔI LOGIC TẠI ĐÂY ---
-                def group_spam_action(bots_in_group=bot_group, servers_pair=current_server_pair, group_id=group_index):
-                    try:
-                        # 1. Spam vào server đầu tiên trong cặp
-                        if servers_pair:
-                            server1 = servers_pair[0]
-                            for bot_id, bot_instance in bots_in_group:
-                                bot_instance.sendMessage(server1['spam_channel_id'], server1['spam_message'])
-                                time.sleep(0.5)
+            all_bots = bot_manager.get_all_bots()
+            bots_to_spam = [
+                bot for bot_id, bot in all_bots if bot and bot_states["active"].get(bot_id)
+            ]
 
-                        # 2. Nếu có server thứ hai, đợi 0.8s rồi mới spam
-                        if len(servers_pair) > 1:
-                            time.sleep(delay_within_pair) # Đợi 0.8 giây
-                            server2 = servers_pair[1]
-                            for bot_id, bot_instance in bots_in_group:
-                                bot_instance.sendMessage(server2['spam_channel_id'], server2['spam_message'])
-                                time.sleep(0.02)
-                    except Exception as e:
-                        print(f"[Enhanced Spam] ❌ Lỗi nhóm {group_id}: {e}", flush=True)
-                # --- KẾT THÚC THAY ĐỔI ---
-                
-                thread = threading.Thread(target=group_spam_action, daemon=True)
-                spam_threads.append(thread)
-                thread.start()
-            
-            for thread in spam_threads:
-                thread.join(timeout=10)
-            
-            server_pair_index += 1
-            time.sleep(delay_between_pairs) # Vẫn giữ delay 1.5s giữa các cặp
-            
-        except Exception as e:
-            print(f"[Enhanced Spam] ❌ Lỗi nghiêm trọng: {e}", flush=True)
-            traceback.print_exc()
-            time.sleep(10)
-
-def ultra_optimized_spam_loop():
-    """
-    Phiên bản siêu tối ưu: CHỈ 1 LUỒNG duy nhất
-    Xử lý tuần tự nhưng vẫn đảm bảo logic spam đồng thời
-    """
-    print("[Ultra Spam] 🚀 Khởi động spam siêu tối ưu - 1 luồng duy nhất...", flush=True)
-    
-    server_pair_index = 0
-    delay_between_pairs = 1.5
-    delay_within_pair = 0.8 # <-- DELAY MỚI GIỮA 2 SERVER TRONG CẶP
-    
-    while True:
-        try:
-            active_spam_servers = [s for s in servers if s.get('spam_enabled') and s.get('spam_channel_id') and s.get('spam_message')]
-            active_bots = [(bot_id, bot) for bot_id, bot in bot_manager.get_all_bots() if bot_states["active"].get(bot_id)]
-            
-            if not active_spam_servers or not active_bots:
-                time.sleep(5)
-                continue
-            
-            start_index = server_pair_index * 2
-            current_server_pair = active_spam_servers[start_index:start_index + 2]
-            
-            if not current_server_pair:
-                server_pair_index = 0
-                continue
-            
-            print(f"[Ultra Spam] 📤 Spam cặp #{server_pair_index + 1}: {[s.get('name', 'Unknown') for s in current_server_pair]}", flush=True)
-            
-            # --- THAY ĐỔI LOGIC TẠI ĐÂY ---
-            # 1. Spam vào server đầu tiên
-            server1 = current_server_pair[0]
-            for bot_id, bot_instance in active_bots:
+            delay = server_config.get('spam_delay', 10)
+            for bot in bots_to_spam:
+                if stop_event.is_set(): break
                 try:
-                    bot_instance.sendMessage(server1['spam_channel_id'], server1['spam_message'])
-                    time.sleep(0.01)
+                    bot.sendMessage(channel_id, message)
+                    time.sleep(random.uniform(1.5, 2.5))
                 except Exception as e:
-                    print(f"[Ultra Spam] ❌ Lỗi từ {get_bot_name(bot_id)}: {e}", flush=True)
-
-            # 2. Nếu có server thứ hai, đợi 0.8s rồi spam
-            if len(current_server_pair) > 1:
-                time.sleep(delay_within_pair) # Đợi 0.8 giây
-                server2 = current_server_pair[1]
-                for bot_id, bot_instance in active_bots:
-                    try:
-                        bot_instance.sendMessage(server2['spam_channel_id'], server2['spam_message'])
-                        time.sleep(0.01)
-                    except Exception as e:
-                        print(f"[Ultra Spam] ❌ Lỗi từ {get_bot_name(bot_id)}: {e}", flush=True)
-            # --- KẾT THÚC THAY ĐỔI ---
-
-            server_pair_index += 1
-            time.sleep(delay_between_pairs) # Vẫn giữ delay 1.5s giữa các cặp
-            
+                    print(f"[Spam] ❌ Lỗi gửi spam từ bot tới server {server_name}: {e}", flush=True)
+            stop_event.wait(random.uniform(delay * 0.9, delay * 1.1))
         except Exception as e:
-            print(f"[Ultra Spam] ❌ Lỗi nghiêm trọng: {e}", flush=True)
-            traceback.print_exc()
-            time.sleep(10)
-def start_optimized_spam_system(mode="optimized"):
-    """
-    mode options:
-    - "optimized": 4 luồng (17 bot chia 4 nhóm)  
-    - "ultra": 1 luồng duy nhất
-    """
-    print(f"[Spam System] 🔄 Khởi động hệ thống spam {mode}...", flush=True)
-    
-    if mode == "ultra":
-        spam_thread = threading.Thread(target=ultra_optimized_spam_loop, daemon=True)
-    else:
-        spam_thread = threading.Thread(target=enhanced_spam_loop, daemon=True)
-    
-    spam_thread.start()
-    print(f"[Spam System] ✅ Hệ thống spam {mode} đã khởi động!", flush=True)
+            print(f"[Spam] ❌ ERROR in spam_for_server {server_name}: {e}", flush=True)
+            stop_event.wait(10)
 
+def spam_loop_manager():
+    active_threads = {}
+    while True:
+        try:
+            current_ids = {s['id'] for s in servers}
+            for server_id in list(active_threads.keys()):
+                if server_id not in current_ids:
+                    print(f"[Spam] 🛑 Dừng luồng cho server đã xóa: {server_id}", flush=True)
+                    active_threads.pop(server_id)[1].set()
+            for server in servers:
+                server_id = server.get('id')
+                spam_on = server.get('spam_enabled') and server.get('spam_message') and server.get('spam_channel_id')
+                if spam_on and server_id not in active_threads:
+                    print(f"[Spam] 🚀 Bắt đầu luồng cho server: {server.get('name')}", flush=True)
+                    stop_event = threading.Event()
+                    thread = threading.Thread(target=spam_for_server, args=(server, stop_event), daemon=True)
+                    thread.start()
+                    active_threads[server_id] = (thread, stop_event)
+                elif not spam_on and server_id in active_threads:
+                    print(f"[Spam] 🛑 Dừng luồng cho server: {server.get('name')}", flush=True)
+                    active_threads.pop(server_id)[1].set()
+            time.sleep(5)
+        except Exception as e:
+            print(f"[Spam] ❌ ERROR in spam_loop_manager: {e}", flush=True)
+            time.sleep(5)
 
 def periodic_task(interval, task_func, task_name):
     print(f"[{task_name}] 🚀 Khởi động luồng định kỳ.", flush=True)
@@ -696,7 +581,7 @@ def create_bot(token, bot_identifier, is_main=False):
         traceback.print_exc()
         return None
 
-# --- FLASK APP & GIAO DIỆN (UPDATED) ---
+# --- FLASK APP & GIAO DIỆN ---
 app = Flask(__name__)
 # Giao diện HTML giữ nguyên như file gốc, không thay đổi
 HTML_TEMPLATE = """
@@ -752,12 +637,6 @@ HTML_TEMPLATE = """
         .health-warning { background-color: var(--warning-orange); }
         .health-bad { background-color: var(--blood-red); }
         .system-stats { font-size: 0.9em; color: var(--text-secondary); margin-top: 10px; }
-        /* === STYLE MỚI ĐƯỢC THÊM VÀO === */
-        .heart-input {
-            flex-grow: 0 !important; /* Không cho phép tự động dãn ra */
-            width: 100px; /* Chiều rộng cố định */
-            text-align: center; /* Căn giữa số */
-        }
     </style>
 </head>
 <body>
@@ -812,8 +691,7 @@ HTML_TEMPLATE = """
                     <div class="grab-section">
                         <h3>{{ bot.name }}</h3>
                         <div class="input-group">
-                            <input type="number" class="clan-drop-threshold heart-input" data-node="main_{{ bot.id }}" value="{{ auto_clan_drop.heart_thresholds[('main_' + bot.id|string)]|default(50) }}" min="0" max="99999" placeholder="Min ♡">
-                            <input type="number" class="clan-drop-max-threshold heart-input" data-node="main_{{ bot.id }}" value="{{ auto_clan_drop.max_heart_thresholds[('main_' + bot.id|string)]|default(99999) }}" min="0" max="99999" placeholder="Max ♡">
+                            <input type="number" class="clan-drop-threshold" data-node="main_{{ bot.id }}" value="{{ auto_clan_drop.heart_thresholds[('main_' + bot.id|string)]|default(50) }}" min="0">
                         </div>
                     </div>
                     {% endfor %}
@@ -846,8 +724,7 @@ HTML_TEMPLATE = """
                     <div class="grab-section">
                         <h3>{{ bot.name }}</h3>
                         <div class="input-group">
-                             <input type="number" class="harvest-threshold heart-input" data-node="{{ bot.id }}" value="{{ server['heart_threshold_' + bot.id|string] or 50 }}" min="0" placeholder="Min ♡">
-                            <input type="number" class="harvest-max-threshold heart-input" data-node="{{ bot.id }}" value="{{ server['max_heart_threshold_' + bot.id|string]|default(99999) }}" min="0" placeholder="Max ♡">
+                            <input type="number" class="harvest-threshold" data-node="{{ bot.id }}" value="{{ server['heart_threshold_' + bot.id|string] or 50 }}" min="0">
                             <button type="button" class="btn harvest-toggle" data-node="{{ bot.id }}">
                                 {{ 'DISABLE' if server['auto_grab_enabled_' + bot.id|string] else 'ENABLE' }}
                             </button>
@@ -1035,23 +912,12 @@ HTML_TEMPLATE = """
                 'btn-toggle-state': () => postData('/api/toggle_bot_state', { target: button.dataset.target }),
                 'clan-drop-toggle-btn': () => postData('/api/clan_drop_toggle'),
                 'clan-drop-save-btn': () => {
-                    const thresholds = {}, maxThresholds = {};
+                    const thresholds = {};
                     document.querySelectorAll('.clan-drop-threshold').forEach(i => { thresholds[i.dataset.node] = parseInt(i.value, 10); });
-                    document.querySelectorAll('.clan-drop-max-threshold').forEach(i => { maxThresholds[i.dataset.node] = parseInt(i.value, 10); });
-                    postData('/api/clan_drop_update', { 
-                        channel_id: document.getElementById('clan-drop-channel-id').value, 
-                        ktb_channel_id: document.getElementById('clan-drop-ktb-channel-id').value, 
-                        heart_thresholds: thresholds,
-                        max_heart_thresholds: maxThresholds
-                    });
+                    postData('/api/clan_drop_update', { channel_id: document.getElementById('clan-drop-channel-id').value, ktb_channel_id: document.getElementById('clan-drop-ktb-channel-id').value, heart_thresholds: thresholds });
                 },
                 'watermelon-toggle': () => postData('/api/watermelon_toggle', { node: button.dataset.node }),
-                'harvest-toggle': () => serverId && postData('/api/harvest_toggle', { 
-                    server_id: serverId, 
-                    node: button.dataset.node, 
-                    threshold: serverPanel.querySelector(`.harvest-threshold[data-node="${button.dataset.node}"]`).value,
-                    max_threshold: serverPanel.querySelector(`.harvest-max-threshold[data-node="${button.dataset.node}"]`).value 
-                }),
+                'harvest-toggle': () => serverId && postData('/api/harvest_toggle', { server_id: serverId, node: button.dataset.node, threshold: serverPanel.querySelector(`.harvest-threshold[data-node="${button.dataset.node}"]`).value }),
                 'broadcast-toggle': () => serverId && postData('/api/broadcast_toggle', { server_id: serverId, message: serverPanel.querySelector('.spam-message').value, delay: serverPanel.querySelector('.spam-delay').value }),
                 'btn-delete-server': () => serverId && confirm('Are you sure?') && postData('/api/delete_server', { server_id: serverId })
             };
@@ -1084,14 +950,11 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- FLASK ROUTES (UPDATED) ---
+# --- FLASK ROUTES ---
 @app.route("/")
 def index():
     main_bots_info = [{"id": int(bot_id.split('_')[1]), "name": get_bot_name(bot_id)} for bot_id, _ in bot_manager.get_main_bots_info()]
     main_bots_info.sort(key=lambda x: x['id'])
-    # Ensure max_heart_thresholds exists for rendering
-    if "max_heart_thresholds" not in bot_states["auto_clan_drop"]:
-        bot_states["auto_clan_drop"]["max_heart_thresholds"] = {}
     return render_template_string(HTML_TEMPLATE, servers=sorted(servers, key=lambda s: s.get('name', '')), main_bots_info=main_bots_info, auto_clan_drop=bot_states["auto_clan_drop"])
 
 @app.route("/api/clan_drop_toggle", methods=['POST'])
@@ -1112,13 +975,8 @@ def api_clan_drop_toggle():
 def api_clan_drop_update():
     data = request.get_json()
     thresholds = bot_states["auto_clan_drop"].setdefault('heart_thresholds', {})
-    max_thresholds = bot_states["auto_clan_drop"].setdefault('max_heart_thresholds', {})
-    
     for key, value in data.get('heart_thresholds', {}).items():
         if isinstance(value, int): thresholds[key] = value
-    for key, value in data.get('max_heart_thresholds', {}).items():
-        if isinstance(value, int): max_thresholds[key] = value
-        
     bot_states["auto_clan_drop"].update({
         'channel_id': data.get('channel_id', '').strip(),
         'ktb_channel_id': data.get('ktb_channel_id', '').strip()
@@ -1134,7 +992,6 @@ def api_add_server():
     for i in range(main_bots_count):
         new_server[f'auto_grab_enabled_{i+1}'] = False
         new_server[f'heart_threshold_{i+1}'] = 50
-        new_server[f'max_heart_threshold_{i+1}'] = 99999
     servers.append(new_server)
     return jsonify({'status': 'success', 'message': f'✅ Server "{name}" đã được thêm.', 'reload': True})
 
@@ -1162,14 +1019,9 @@ def api_harvest_toggle():
     server, node_str = find_server(data.get('server_id')), data.get('node')
     if not server or not node_str: return jsonify({'status': 'error', 'message': 'Yêu cầu không hợp lệ.'}), 400
     node = str(node_str)
-    grab_key = f'auto_grab_enabled_{node}'
-    threshold_key = f'heart_threshold_{node}'
-    max_threshold_key = f'max_heart_threshold_{node}'
-    
+    grab_key, threshold_key = f'auto_grab_enabled_{node}', f'heart_threshold_{node}'
     server[grab_key] = not server.get(grab_key, False)
     server[threshold_key] = int(data.get('threshold', 50))
-    server[max_threshold_key] = int(data.get('max_threshold', 99999))
-    
     status_msg = 'ENABLED' if server[grab_key] else 'DISABLED'
     bot_id = f'main_{node}'
     return jsonify({'status': 'success', 'message': f"🎯 Card Grab cho {get_bot_name(bot_id)} đã {status_msg}."})
@@ -1260,10 +1112,6 @@ def status_endpoint():
     reboot_settings_copy = bot_states["reboot_settings"].copy()
     for bot_id, settings in reboot_settings_copy.items():
         settings['countdown'] = max(0, settings.get('next_reboot_time', 0) - now) if settings.get('enabled') else 0
-    
-    # This part of the UI may not be fully representative of the new spam logic, but we keep it for compatibility.
-    for server in servers:
-        server['spam_countdown'] = 0
 
     return jsonify({
         'bot_reboot_settings': reboot_settings_copy,
@@ -1274,7 +1122,7 @@ def status_endpoint():
         'auto_clan_drop_status': clan_drop_status
     })
 
-# --- MAIN EXECUTION (UPDATED) ---
+# --- MAIN EXECUTION ---
 if __name__ == "__main__":
     print("🚀 Shadow Network Control - V3 Stable Version Starting...", flush=True)
     load_settings()
@@ -1292,7 +1140,6 @@ if __name__ == "__main__":
         bot_states["active"].setdefault(bot_id, True)
         bot_states["watermelon_grab"].setdefault(bot_id, False)
         bot_states["auto_clan_drop"]["heart_thresholds"].setdefault(bot_id, 50)
-        bot_states["auto_clan_drop"].setdefault("max_heart_thresholds", {}).setdefault(bot_id, 99999) # Thêm dòng này
         bot_states["reboot_settings"].setdefault(bot_id, {'enabled': False, 'delay': 3600, 'next_reboot_time': 0, 'failure_count': 0})
         bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
 
@@ -1308,9 +1155,7 @@ if __name__ == "__main__":
     print("🔧 Starting background threads...", flush=True)
     threading.Thread(target=periodic_task, args=(1800, save_settings, "Save"), daemon=True).start()
     threading.Thread(target=periodic_task, args=(300, health_monitoring_check, "Health"), daemon=True).start()
-    
-    # Khởi động hệ thống spam mới
-    start_optimized_spam_system(mode="optimized") # <-- THAY ĐỔI TẠI ĐÂY
+    threading.Thread(target=spam_loop_manager, daemon=True).start()
     
     auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
     auto_reboot_thread.start()
