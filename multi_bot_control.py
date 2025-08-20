@@ -20,7 +20,7 @@ bot_states = {
     "reboot_settings": {}, "active": {}, "watermelon_grab": {}, "health_stats": {},
     "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}, "max_heart_thresholds": {}},
     # Cài đặt cho hệ thống reboot đơn giản mới
-    "reboot_settings_simple": {"enabled": False, "delay": 1800, "last_reboot_time": 0}
+    "reboot_settings_simple": {"enabled": True, "delay": 1800, "last_reboot_time": 0}
 }
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
