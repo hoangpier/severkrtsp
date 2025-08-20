@@ -21,7 +21,6 @@ bot_states = {
 }
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
-spam_tasks_running = set()
 
 # --- QUẢN LÝ BOT THREAD-SAFE (IMPROVED) ---
 class ThreadSafeBotManager:
@@ -462,71 +461,82 @@ def auto_clan_drop_loop():
         stop_events["clan_drop"].wait(60)
     print("[Clan Drop] 🛑 Luồng tự động drop clan đã dừng.", flush=True)
 
-# --- HỆ THỐNG SPAM ĐA LUỒNG THEO TÁC VỤ (TASK-BASED) ---
-def spam_loop():
+# --- HỆ THỐNG SPAM PIPELINE (TỐI ƯU CHO DELAY) ---
+def pipeline_spam_loop():
     """
-    Hệ thống spam mới, quản lý từng server như một tác vụ (task) riêng biệt.
-    - Mỗi server có đồng hồ đếm ngược riêng.
-    - Sử dụng một bộ `spam_tasks_running` để ngăn chặn việc spam lặp lại trên cùng một server nếu chu kỳ trước chưa hoàn thành.
-    - Lấy danh sách bot đang hoạt động từ Bot Manager một cách an toàn.
+    Hệ thống spam kiểu "Pipeline" (gối đầu) - phiên bản không nghỉ.
+    - Mỗi bot trên CÙNG MỘT server sẽ nhắn cách nhau `delay_between_bots`.
+    - Các bot sẽ nhắn đồng thời trên CÁC server KHÁC NHAU.
+    - Chu kỳ mới bắt đầu ngay lập tức sau khi chu kỳ cũ kết thúc.
     """
-    global spam_tasks_running
+    print("[Pipeline Spam] 🚀 Khởi động hệ thống spam gối đầu (không nghỉ)...", flush=True)
+    
+    delay_between_bots = 2.0  # Delay 2 giây giữa các bot trên cùng một server
 
-    # Hàm này là một "chuyên viên spam", nhận một nhiệm vụ và thực hiện tuần tự
-    def run_spam_cycle(task_id, channel_id, message, bots_to_use):
-        global spam_tasks_running
-        try:
-            print(f"[Spam Cycle] ▶️ Bắt đầu nhiệm vụ '{task_id}' với {len(bots_to_use)} bot.", flush=True)
-            for bot_id, bot_instance in bots_to_use:
-                try:
-                    bot_instance.sendMessage(channel_id, message)
-                    time.sleep(2) # Delay nhỏ giữa mỗi bot để tránh rate limit
-                except Exception as e:
-                    print(f"[Spam Cycle] ⚠️  Lỗi khi bot {get_bot_name(bot_id)} gửi spam (Nhiệm vụ: {task_id}): {e}", flush=True)
-        finally:
-            # Rất quan trọng: Sau khi làm xong (kể cả khi có lỗi), phải gỡ bỏ cờ báo hiệu đang bận
-            spam_tasks_running.remove(task_id)
-            print(f"[Spam Cycle] ✅ Hoàn thành nhiệm vụ '{task_id}'.", flush=True)
-
-    print("[Spam System] 🚀 Khởi động hệ thống spam đa tác vụ.", flush=True)
     while True:
         try:
-            now = time.time()
-            # Lấy danh sách bot đang hoạt động (ONLINE) từ bot manager
+            active_spam_servers = [s for s in servers if s.get('spam_enabled') and s.get('spam_channel_id') and s.get('spam_message')]
             active_bots = [(bot_id, bot) for bot_id, bot in bot_manager.get_all_bots() if bot_states["active"].get(bot_id)]
-
-            if not active_bots:
+            
+            if not active_spam_servers or not active_bots:
                 time.sleep(5)
                 continue
 
-            # Điều phối spam cho từng server trong danh sách
-            for server in servers:
-                server_id = server.get('id', 'unknown_server')
-                
-                # Chỉ xử lý các server được bật spam và có đủ thông tin
-                if server.get('spam_enabled') and server.get('spam_message') and server.get('spam_channel_id'):
-                    last_farm_spam_time = server.get('last_spam_time', 0)
-                    farm_spam_delay = server.get('spam_delay', 10)
-
-                    # Kiểm tra xem đã đến lúc spam cho server này chưa
-                    if (now - last_farm_spam_time) >= farm_spam_delay:
-                        # Chỉ bắt đầu nếu không có nhiệm vụ của server này đang chạy
-                        if server_id not in spam_tasks_running:
-                            spam_tasks_running.add(server_id)  # Đánh dấu là đang bận
-                            server['last_spam_time'] = now     # Reset đồng hồ của server
-                            
-                            # Bắt đầu một luồng mới cho chu kỳ spam của server này
-                            threading.Thread(
-                                target=run_spam_cycle, 
-                                args=(server_id, server['spam_channel_id'], server['spam_message'], active_bots),
-                                daemon=True
-                            ).start()
+            num_bots = len(active_bots)
+            num_servers = len(active_spam_servers)
             
-            time.sleep(1) # Nghỉ 1 giây trước khi kiểm tra lại
+            total_time_slots = num_bots + num_servers - 1
+
+            print(f"[Pipeline Spam] Bắt đầu chu kỳ mới với {num_bots} bot và {num_servers} server.", flush=True)
+
+            for time_slot in range(total_time_slots):
+                start_time = time.time()
+                threads = []
+
+                for bot_index in range(num_bots):
+                    server_index = time_slot - bot_index
+
+                    if 0 <= server_index < num_servers:
+                        bot_id, bot_instance = active_bots[bot_index]
+                        server = active_spam_servers[server_index]
+                        
+                        def send_message_action(b_instance, s_config, b_id_str):
+                            try:
+                                b_instance.sendMessage(s_config['spam_channel_id'], s_config['spam_message'])
+                            except Exception as e:
+                                print(f"[Pipeline Spam] ❌ Lỗi từ {get_bot_name(b_id_str)} tới server {s_config.get('name', 'Unknown')}: {e}", flush=True)
+
+                        thread = threading.Thread(target=send_message_action, args=(bot_instance, server, bot_id))
+                        threads.append(thread)
+                        thread.start()
+                
+                for thread in threads:
+                    thread.join()
+
+                elapsed_time = time.time() - start_time
+                sleep_time = max(0, delay_between_bots - elapsed_time)
+                time.sleep(sleep_time)
+            
+            print(f"[Pipeline Spam] ✅ Hoàn thành chu kỳ. Bắt đầu ngay chu kỳ mới.", flush=True)
+            # time.sleep(5) # <- ĐÃ XÓA DÒNG NÀY ĐỂ CHU KỲ LÀ 0 GIÂY
+
         except Exception as e:
-            print(f"[Spam System] ❌ Lỗi nghiêm trọng trong spam_loop: {e}", flush=True)
+            print(f"[Pipeline Spam] ❌ Lỗi nghiêm trọng: {e}", flush=True)
             traceback.print_exc()
             time.sleep(10)
+
+
+def start_optimized_spam_system():
+    """
+    Khởi động hệ thống spam Pipeline.
+    """
+    print(f"[Spam System] 🔄 Khởi động hệ thống spam Pipeline...", flush=True)
+    
+    spam_thread = threading.Thread(target=pipeline_spam_loop, daemon=True)
+    
+    spam_thread.start()
+    print(f"[Spam System] ✅ Hệ thống spam Pipeline đã khởi động!", flush=True)
+
 
 def periodic_task(interval, task_func, task_name):
     print(f"[{task_name}] 🚀 Khởi động luồng định kỳ.", flush=True)
@@ -1098,21 +1108,13 @@ def api_broadcast_toggle():
     data = request.json
     server = find_server(data.get('server_id'))
     if not server: return jsonify({'status': 'error', 'message': 'Không tìm thấy server.'}), 404
-    
     server['spam_enabled'] = not server.get('spam_enabled', False)
     server['spam_message'] = data.get("message", "").strip()
     server['spam_delay'] = int(data.get("delay", 10))
-
-    if server['spam_enabled']:
-        if not server['spam_message'] or not server['spam_channel_id']:
-            server['spam_enabled'] = False
-            return jsonify({'status': 'error', 'message': f'❌ Cần có message/channel spam cho {server["name"]}.'})
-        # Đặt thời gian spam lần cuối để bắt đầu chu kỳ ngay lập tức
-        server['last_spam_time'] = time.time()
-        status_msg = 'ENABLED'
-    else:
-        status_msg = 'DISABLED'
-        
+    if server['spam_enabled'] and (not server['spam_message'] or not server['spam_channel_id']):
+        server['spam_enabled'] = False
+        return jsonify({'status': 'error', 'message': f'❌ Cần có message/channel spam cho {server["name"]}.'})
+    status_msg = 'ENABLED' if server['spam_enabled'] else 'DISABLED'
     return jsonify({'status': 'success', 'message': f"📢 Auto Broadcast đã {status_msg} cho {server['name']}."})
 
 @app.route("/api/bot_reboot_toggle", methods=['POST'])
@@ -1180,14 +1182,8 @@ def status_endpoint():
     for bot_id, settings in reboot_settings_copy.items():
         settings['countdown'] = max(0, settings.get('next_reboot_time', 0) - now) if settings.get('enabled') else 0
     
-    # --- THIS IS THE UPDATED PART ---
     for server in servers:
-        if server.get('spam_enabled'):
-            countdown = (server.get('last_spam_time', 0) + server.get('spam_delay', 10)) - now
-            server['spam_countdown'] = max(0, countdown)
-        else:
-            server['spam_countdown'] = 0
-    # --- END OF UPDATE ---
+        server['spam_countdown'] = 0
 
     return jsonify({
         'bot_reboot_settings': reboot_settings_copy,
@@ -1234,8 +1230,7 @@ if __name__ == "__main__":
     threading.Thread(target=periodic_task, args=(300, health_monitoring_check, "Health"), daemon=True).start()
     
     # Khởi động hệ thống spam mới
-    spam_thread = threading.Thread(target=spam_loop, daemon=True)
-    spam_thread.start()
+    start_optimized_spam_system() # <-- THAY ĐỔI TẠI ĐÂY
     
     auto_reboot_thread = threading.Thread(target=auto_reboot_loop, daemon=True)
     auto_reboot_thread.start()
