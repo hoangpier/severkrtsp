@@ -472,11 +472,11 @@ def enhanced_spam_loop():
     print("[Enhanced Spam] 🚀 Khởi động hệ thống spam tối ưu...", flush=True)
     
     server_pair_index = 0
-    delay_between_pairs = 2
-    delay_within_pair = 2 # <-- DELAY MỚI GIỮA 2 SERVER TRONG CẶP
+    delay_between_pairs = 1.5
+    delay_within_pair = 1 # <-- DELAY MỚI GIỮA 2 SERVER TRONG CẶP
     
     # === CÀI ĐẶT TỐI ƯU ===
-    max_threads = 4  # Số luồng tối đa (thay vì 17 luồng)
+    max_threads = 6  # Số luồng tối đa (thay vì 17 luồng)
     # ====================
     
     while True:
@@ -514,7 +514,7 @@ def enhanced_spam_loop():
                             server1 = servers_pair[0]
                             for bot_id, bot_instance in bots_in_group:
                                 bot_instance.sendMessage(server1['spam_channel_id'], server1['spam_message'])
-                                time.sleep(1)
+                                time.sleep(0.5)
 
                         # 2. Nếu có server thứ hai, đợi 0.8s rồi mới spam
                         if len(servers_pair) > 1:
