@@ -472,8 +472,8 @@ def enhanced_spam_loop():
     print("[Enhanced Spam] 🚀 Khởi động hệ thống spam tối ưu...", flush=True)
     
     server_pair_index = 0
-    delay_between_pairs = 1.7
-    delay_within_pair = 1.4 # <-- DELAY MỚI GIỮA 2 SERVER TRONG CẶP
+    delay_between_pairs = 2
+    delay_within_pair = 2 # <-- DELAY MỚI GIỮA 2 SERVER TRONG CẶP
     
     # === CÀI ĐẶT TỐI ƯU ===
     max_threads = 4  # Số luồng tối đa (thay vì 17 luồng)
