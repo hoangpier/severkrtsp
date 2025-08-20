@@ -480,7 +480,7 @@ def spam_loop():
             for bot_id, bot_instance in bots_to_use:
                 try:
                     bot_instance.sendMessage(channel_id, message)
-                    time.sleep(0.05) # Delay nhỏ giữa mỗi bot để tránh rate limit
+                    time.sleep(2) # Delay nhỏ giữa mỗi bot để tránh rate limit
                 except Exception as e:
                     print(f"[Spam Cycle] ⚠️  Lỗi khi bot {get_bot_name(bot_id)} gửi spam (Nhiệm vụ: {task_id}): {e}", flush=True)
         finally:
