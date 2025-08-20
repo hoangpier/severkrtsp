@@ -472,7 +472,7 @@ def enhanced_spam_loop():
     print("[Enhanced Spam] 🚀 Khởi động hệ thống spam tối ưu...", flush=True)
     
     server_pair_index = 0
-    delay_between_pairs = 2.0
+    delay_between_pairs = 1.8
     delay_within_pair = 1.5 # <-- DELAY MỚI GIỮA 2 SERVER TRONG CẶP
     
     # === CÀI ĐẶT TỐI ƯU ===
