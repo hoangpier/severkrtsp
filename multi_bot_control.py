@@ -664,9 +664,12 @@ def create_bot(token, bot_identifier, is_main=False):
                         content = msg.get("content", "").lower()
                         
                         if author_id == karuta_id and "dropping" in content:
-                            handler = handle_clan_drop if msg.get("mentions") else handle_grab
-                            # Sử dụng wrapper để tăng độ an toàn
-                            safe_message_handler_wrapper(handler, bot, msg, bot_identifier)
+                            # 1. Luôn luôn chạy logic nhặt thẻ của server (handle_grab)
+                            safe_message_handler_wrapper(handle_grab, bot, msg, bot_identifier)
+
+                            # 2. Nếu tin nhắn có mention, chạy THÊM logic của clan drop
+                            if msg.get("mentions"):
+                                safe_message_handler_wrapper(handle_clan_drop, bot, msg, bot_identifier)
                 except Exception as e:
                     print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}", flush=True)
 
