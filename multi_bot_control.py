@@ -597,16 +597,16 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
-    # Giữ nguyên phiên bản không có intents để tương thích với thư viện của bạn
-    bot = discord.Client(self_bot=True)
+    bot = discord.Client(self_bot=True) # Giữ nguyên phiên bản không có intents
     
     try:
+        # SỬA LỖI: Lấy số thứ tự bot một cách chính xác.
+        # KHÔNG cộng thêm 1 nữa.
+        # Ví dụ: 'main_1' -> bot_num = 1. 'sub_0' -> bot_num = 0.
         bot_num = int(bot_id_str.split('_')[1])
-        # Cộng 1 cho bot chính để phù hợp với logic grab card
-        if is_main:
-            bot_num += 1
+
     except (IndexError, ValueError):
-        print(f"[Bot Init] ⚠️ Không thể phân tích ID cho bot: {bot_id_str}. Sử dụng giá trị mặc định.", flush=True)
+        print(f"[Bot Init] ⚠️ Không thể phân tích ID cho bot: {bot_id_str}. Dùng giá trị mặc định.", flush=True)
         bot_num = 99
     
     @bot.event
@@ -623,11 +623,13 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
         @bot.event
         async def on_message(msg):
             try:
-                # Sửa lỗi logic trigger, chỉ chạy khi có embeds
                 if msg.author.id == int(karuta_id) and "dropping" in msg.content.lower() and msg.embeds:
                     is_clan_drop = bool(msg.mentions) 
                     handler = handle_clan_drop if is_clan_drop else handle_grab
-                    await handler(bot, msg, bot_num)
+                    
+                    # Truyền con số chính xác (ví dụ: 1, 2, 3...) vào hàm xử lý
+                    # Lưu ý: Cần +1 ở đây để phù hợp với logic grab card cũ
+                    await handler(bot, msg, bot_num + 1)
             except Exception as e:
                 print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}\n{traceback.format_exc()}", flush=True)
     
