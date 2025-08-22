@@ -238,65 +238,33 @@ async def handle_grab(bot, msg, bot_num):
     watermelon_grab_enabled = bot_states["watermelon_grab"].get(bot_id_str, False)
 
     if not auto_grab_enabled and not watermelon_grab_enabled: return
-        
-    # CARD GRAB LOGIC (giữ nguyên)
+    
     if auto_grab_enabled and target_server.get('ktb_channel_id'):
         threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
         max_threshold = target_server.get(f'max_heart_threshold_{bot_num}', 99999)
         asyncio.create_task(_find_and_select_card(bot, str(channel_id), msg.id, threshold, bot_num, target_server.get('ktb_channel_id'), max_threshold))
 
-    # WATERMELON GRAB LOGIC - SỬA LẠI CHO discord.py-self
     if watermelon_grab_enabled:
         async def check_for_watermelon_patiently():
             print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu canh dưa (chờ 5 giây)...", flush=True)
-            await asyncio.sleep(5)  # PHẢI DÙNG await asyncio.sleep() thay vì time.sleep()
+            await asyncio.sleep(5) 
             try:
-                # SỬA: Dùng bot.get_channel() và fetch_message() của discord.py-self
-                channel = bot.get_channel(channel_id)
-                if not channel:
-                    print(f"[WATERMELON | Bot {bot_num}] ❌ Không tìm thấy channel {channel_id}", flush=True)
-                    return
-                
-                target_message = await channel.fetch_message(msg.id)  # Fetch message từ Discord API
-                
-                # SỬA: Kiểm tra reactions theo cách của discord.py-self
+                target_message = await msg.channel.fetch_message(msg.id)
                 for reaction in target_message.reactions:
-                    # reaction.emoji có thể là string (custom emoji) hoặc object (unicode emoji)
-                    emoji_str = str(reaction.emoji)
-                    emoji_name = getattr(reaction.emoji, 'name', emoji_str).lower() if hasattr(reaction.emoji, 'name') else emoji_str.lower()
-                    
-                    # Kiểm tra emoji dưa hấu
-                    if ('🍉' in emoji_str or 'watermelon' in emoji_name or 'dua' in emoji_name):
-                        print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU: {emoji_str}", flush=True)
+                    emoji_name = str(reaction.emoji).lower()
+                    if '🍉' in emoji_name or 'watermelon' in emoji_name or 'dua' in emoji_name:
+                        print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU!", flush=True)
                         try:
-                            # SỬA: Dùng add_reaction() của discord.py-self
                             await target_message.add_reaction("🍉")
                             print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DƯA THÀNH CÔNG!", flush=True)
                         except Exception as e:
                             print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
                         return
-                
                 print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau khi chờ.", flush=True)
             except Exception as e:
-                print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi fetch message để check dưa: {e}", flush=True)
-                import traceback
-                traceback.print_exc()
-
-        # SỬA: Dùng asyncio.create_task() thay vì threading.Thread()
+                print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi lấy tin nhắn để check dưa: {e}", flush=True)
         asyncio.create_task(check_for_watermelon_patiently())
 
-# THÊM: Nếu muốn có thêm debug, có thể thêm hàm check reaction chi tiết hơn
-async def debug_reactions(bot, message):
-    """Hàm debug để xem tất cả reactions của message"""
-    try:
-        fresh_message = await message.channel.fetch_message(message.id)
-        print(f"[DEBUG] Message có {len(fresh_message.reactions)} reactions:")
-        for i, reaction in enumerate(fresh_message.reactions):
-            emoji_str = str(reaction.emoji)
-            emoji_name = getattr(reaction.emoji, 'name', 'No name') if hasattr(reaction.emoji, 'name') else 'Unicode emoji'
-            print(f"[DEBUG] Reaction {i+1}: '{emoji_str}' (name: {emoji_name}, count: {reaction.count})")
-    except Exception as e:
-        print(f"[DEBUG] Lỗi debug reactions: {e}")
 
 # --- HỆ THỐNG REBOOT & HEALTH CHECK (Cập nhật cho discord.py-self) ---
 def check_bot_health(bot_data, bot_id):
