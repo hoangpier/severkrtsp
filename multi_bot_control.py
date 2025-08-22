@@ -234,11 +234,11 @@ async def handle_grab(bot, msg, bot_num):
     if not target_server: return
 
     bot_id_str = f'main_{bot_num}'
-    auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
+    auto_grab_enabled = bot_states["auto_grab"].get(bot_id_str, False)
     watermelon_grab_enabled = bot_states["watermelon_grab"].get(bot_id_str, False)
 
     if not auto_grab_enabled and not watermelon_grab_enabled:
-    return
+        return # <-- DÒNG NÀY PHẢI THỤT VÀO
 
 # Các logic khác cho auto grab (nếu có) sẽ nằm ở đây...
 
