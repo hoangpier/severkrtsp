@@ -253,7 +253,7 @@ async def handle_grab(bot, msg, bot_num):
 
     # --- Giai đoạn 1: Tìm kiếm thông tin thẻ (chạy trong khoảng 3.5 giây) ---
     if auto_grab_enabled:
-        print(f"[GRAB CTRL | Bot {bot_num}] Bắt đầu tìm kiếm thẻ giá trị cao...", flush=True)
+        #print(f"[GRAB CTRL | Bot {bot_num}] Bắt đầu tìm kiếm thẻ giá trị cao...", flush=True)
         start_time = time.monotonic()
         try:
             channel = bot.get_channel(int(channel_id))
@@ -308,7 +308,7 @@ async def handle_grab(bot, msg, bot_num):
             for reaction in target_message.reactions:
                 emoji_name = reaction.emoji if isinstance(reaction.emoji, str) else reaction.emoji.name
                 if '🍉' in emoji_name:
-                    print(f"[GRAB CTRL | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU! Tiến hành nhặt.", flush=True)
+                    #print(f"[GRAB CTRL | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU! Tiến hành nhặt.", flush=True)
                     await target_message.add_reaction("🍉")
                     print(f"[GRAB CTRL | Bot {bot_num}] ✅ NHẶT DƯA THÀNH CÔNG!", flush=True)
                     break 
