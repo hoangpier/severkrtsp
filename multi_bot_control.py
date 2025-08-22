@@ -234,34 +234,37 @@ async def handle_grab(bot, msg, bot_num):
     if not target_server: return
 
     bot_id_str = f'main_{bot_num}'
-    auto_grab_enabled = bot_states["auto_grab"].get(bot_id_str, False)
+    auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
     watermelon_grab_enabled = bot_states["watermelon_grab"].get(bot_id_str, False)
 
-    if not auto_grab_enabled and not watermelon_grab_enabled:
-        return # <-- DÒNG NÀY PHẢI THỤT VÀO
+    if not auto_grab_enabled and not watermelon_grab_enabled: return
+    
+    if auto_grab_enabled and target_server.get('ktb_channel_id'):
+        threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
+        max_threshold = target_server.get(f'max_heart_threshold_{bot_num}', 99999)
+        asyncio.create_task(_find_and_select_card(bot, str(channel_id), msg.id, threshold, bot_num, target_server.get('ktb_channel_id'), max_threshold))
 
-# Các logic khác cho auto grab (nếu có) sẽ nằm ở đây...
+    if watermelon_grab_enabled:
+        async def check_for_watermelon_patiently():
+            print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu canh dưa (chờ 5 giây)...", flush=True)
+            await asyncio.sleep(5) 
+            try:
+                target_message = await msg.channel.fetch_message(msg.id)
+                for reaction in target_message.reactions:
+                    emoji_name = str(reaction.emoji).lower()
+                    if '🍉' in emoji_name or 'watermelon' in emoji_name or 'dua' in emoji_name:
+                        print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU!", flush=True)
+                        try:
+                            await target_message.add_reaction("🍉")
+                            print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DƯA THÀNH CÔNG!", flush=True)
+                        except Exception as e:
+                            print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
+                        return
+                print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau khi chờ.", flush=True)
+            except Exception as e:
+                print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi lấy tin nhắn để check dưa: {e}", flush=True)
+        asyncio.create_task(check_for_watermelon_patiently())
 
-if watermelon_grab_enabled:
-    async def check_for_watermelon_patiently():
-        print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu canh dưa (chờ 5 giây)...", flush=True)
-        await asyncio.sleep(5) 
-        try:
-            target_message = await msg.channel.fetch_message(msg.id)
-            for reaction in target_message.reactions:
-                emoji_name = str(reaction.emoji).lower()
-                if '🍉' in emoji_name or 'watermelon' in emoji_name or 'dua' in emoji_name:
-                    print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU!", flush=True)
-                    try:
-                        await target_message.add_reaction("🍉")
-                        print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DƯA THÀNH CÔNG!", flush=True)
-                    except Exception as e:
-                        print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
-                    return
-            print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau khi chờ.", flush=True)
-        except Exception as e:
-            print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi lấy tin nhắn để check dưa: {e}", flush=True)
-    asyncio.create_task(check_for_watermelon_patiently())
 
 # --- HỆ THỐNG REBOOT & HEALTH CHECK (Cập nhật cho discord.py-self) ---
 def check_bot_health(bot_data, bot_id):
@@ -449,7 +452,7 @@ def auto_clan_drop_loop():
 
 # --- HỆ THỐNG SPAM (TÍCH HỢP LẠI 2 CHẾ ĐỘ) ---
 
-# --- THÊM MỚI: Chế độ spam đa luồng - ĐÃ SỬA LỖI ---
+# --- SỬA LỖI 1: Chế độ spam đa luồng đã được đồng bộ hóa ---
 def enhanced_spam_loop():
     print("[Enhanced Spam] 🚀 Khởi động hệ thống spam tối ưu (đa luồng)...", flush=True)
     
@@ -467,34 +470,30 @@ def enhanced_spam_loop():
                 time.sleep(5)
                 continue
             
-            # *** SỬA LỖI: Đơn giản hóa logic xoay vòng server pair ***
             start_index = server_pair_index * 2
             current_server_pair = active_spam_servers[start_index:start_index + 2]
             
             if not current_server_pair:
                 server_pair_index = 0
+                time.sleep(delay_between_pairs) 
                 continue
             
             print(f"[Enhanced Spam] 📤 Spam cặp #{server_pair_index + 1}: {[s.get('name', 'Unknown') for s in current_server_pair]}", flush=True)
             
-            # Chia bot thành các nhóm
             bot_groups = []
             bots_per_group = max(1, len(active_bots) // max_threads)
             for i in range(0, len(active_bots), bots_per_group):
                 bot_groups.append(active_bots[i:i + bots_per_group])
             
-            # Tạo và chạy các luồng spam
             spam_threads = []
             for group_index, bot_group in enumerate(bot_groups):
                 def group_spam_action(bots_in_group=bot_group, servers_pair=current_server_pair, group_id=group_index):
                     try:
-                        # Spam vào server đầu tiên
                         server1 = servers_pair[0]
                         for bot_id in bots_in_group:
                             send_message_from_sync(bot_id, server1['spam_channel_id'], server1['spam_message'])
                             time.sleep(0.1)
 
-                        # Nếu có server thứ hai, đợi và spam
                         if len(servers_pair) > 1:
                             time.sleep(delay_within_pair)
                             server2 = servers_pair[1]
@@ -508,10 +507,14 @@ def enhanced_spam_loop():
                 spam_threads.append(thread)
                 thread.start()
             
-            # Chờ một khoảng thời gian ngắn cho các luồng hoàn thành (không bắt buộc join)
-            time.sleep(1.0)
+            # PHẦN SỬA LỖI QUAN TRỌNG: Chờ cho tất cả các luồng spam hoàn thành
+            for thread in spam_threads:
+                thread.join()
             
             server_pair_index += 1
+            if server_pair_index * 2 >= len(active_spam_servers):
+                server_pair_index = 0
+
             time.sleep(delay_between_pairs)
             
         except Exception as e:
@@ -533,7 +536,6 @@ def ultra_optimized_spam_loop():
             if not active_spam_servers or not active_bots:
                 time.sleep(5); continue
             
-            # *** SỬA LỖI: Đơn giản hóa logic xoay vòng server pair ***
             start_index = server_pair_index * 2
             current_server_pair = active_spam_servers[start_index:start_index + 2]
             
@@ -599,15 +601,13 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
     asyncio.set_event_loop(loop)
     
     bot = discord.Client(self_bot=True)
-    # Tách số định danh bot từ bot_id_str
     try:
         bot_identifier_str = bot_id_str.split('_')[1]
         bot_identifier = int(bot_identifier_str)
-        # Cộng 1 cho bot chính để phù hợp với logic grab card cũ
         effective_bot_num = bot_identifier + 1 if is_main else bot_identifier
     except (IndexError, ValueError):
         print(f"[Bot Init] ⚠️ Không thể phân tích ID cho bot: {bot_id_str}. Sử dụng giá trị mặc định.", flush=True)
-        effective_bot_num = 99 # Giá trị mặc định nếu có lỗi
+        effective_bot_num = 99
     
     @bot.event
     async def on_ready():
@@ -623,9 +623,8 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
         @bot.event
         async def on_message(msg):
             try:
-                if msg.author.id == int(karuta_id) and "dropping" in msg.content.lower():
-                    # *** SỬA LỖI: Logic kiểm tra clan drop đã được sửa ***
-                    # Kiểm tra xem danh sách mentions có rỗng hay không. Nếu có bất kỳ mention nào, đó là clan drop.
+                # --- SỬA LỖI 2: Thêm `and msg.embeds` để đảm bảo chỉ xử lý tin nhắn drop thẻ ---
+                if msg.author.id == int(karuta_id) and "dropping" in msg.content.lower() and msg.embeds:
                     is_clan_drop = bool(msg.mentions) 
                     handler = handle_clan_drop if is_clan_drop else handle_grab
                     await handler(bot, msg, effective_bot_num)
@@ -633,12 +632,11 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
                 print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}\n{traceback.format_exc()}", flush=True)
     
     try:
-        # Lưu trữ bot và loop vào manager TRƯỚC khi chạy
         bot_manager.add_bot(bot_id_str, {'instance': bot, 'loop': loop, 'thread': threading.current_thread()})
         loop.run_until_complete(bot.start(token))
     except discord.LoginFailure:
         print(f"[Bot] ❌ Login thất bại cho {get_bot_name(bot_id_str)}. Token có thể không hợp lệ.", flush=True)
-        if ready_event: ready_event.set() # Báo hiệu để reboot không bị treo
+        if ready_event: ready_event.set()
         bot_manager.remove_bot(bot_id_str)
     except Exception as e:
         print(f"[Bot] ❌ Lỗi khi chạy bot {bot_id_str}: {e}", flush=True)
@@ -1168,8 +1166,6 @@ if __name__ == "__main__":
     threading.Thread(target=periodic_task, args=(1800, save_settings, "Save"), daemon=True).start()
     threading.Thread(target=periodic_task, args=(300, health_monitoring_check, "Health"), daemon=True).start()
     
-    # --- CHỈNH SỬA: Khởi động hệ thống spam có lựa chọn chế độ ---
-    # Thay đổi mode="optimized" (4 luồng) hoặc mode="ultra" (1 luồng) tại đây
     start_optimized_spam_system(mode="optimized") 
     
     threading.Thread(target=auto_reboot_loop, daemon=True).start()
