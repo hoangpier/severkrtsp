@@ -1,4 +1,4 @@
-# PHIÊN BẢN CHUYỂN ĐỔI SANG DISCORD.PY-SELF - DUY TRÌ TÍNH NĂNG, TỐI ƯU HÓA ASYNC
+# PHIÊN BẢN CHUYỂN ĐỔI SANG DISCORD.PY-SELF - TÍCH HỢP LẠI SPAM ĐA LUỒNG
 import discord, asyncio, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -450,7 +450,83 @@ def auto_clan_drop_loop():
         stop_events["clan_drop"].wait(60)
     print("[Clan Drop] 🛑 Luồng tự động drop clan đã dừng.", flush=True)
 
-# --- HỆ THỐNG SPAM (Cập nhật cho async) ---
+# --- HỆ THỐNG SPAM (Tích hợp lại 2 chế độ) ---
+
+# --- THÊM MỚI: Chế độ spam đa luồng ---
+def enhanced_spam_loop():
+    print("[Enhanced Spam] 🚀 Khởi động hệ thống spam tối ưu (đa luồng)...", flush=True)
+    
+    server_pair_index = 0
+    delay_between_pairs = 1.5
+    delay_within_pair = 1.3
+    max_threads = 4
+    
+    while True:
+        try:
+            active_spam_servers = [s for s in servers if s.get('spam_enabled') and s.get('spam_channel_id') and s.get('spam_message')]
+            active_bots = [bot_id for bot_id, data in bot_manager.get_all_bots_data() if bot_states["active"].get(bot_id) and data.get('instance')]
+            
+            if not active_spam_servers or not active_bots:
+                time.sleep(5)
+                continue
+            
+            # Xoay vòng server pair
+            start_index = server_pair_index * 2
+            if start_index >= len(active_spam_servers):
+                server_pair_index = 0
+                start_index = 0
+            
+            current_server_pair = active_spam_servers[start_index:start_index + 2]
+            
+            if not current_server_pair:
+                server_pair_index = 0
+                continue
+            
+            print(f"[Enhanced Spam] 📤 Spam cặp #{server_pair_index + 1}: {[s.get('name', 'Unknown') for s in current_server_pair]}", flush=True)
+            
+            # Chia bot thành các nhóm
+            bot_groups = []
+            bots_per_group = max(1, len(active_bots) // max_threads)
+            for i in range(0, len(active_bots), bots_per_group):
+                bot_groups.append(active_bots[i:i + bots_per_group])
+            
+            # Tạo và chạy các luồng spam
+            spam_threads = []
+            for group_index, bot_group in enumerate(bot_groups):
+                def group_spam_action(bots_in_group=bot_group, servers_pair=current_server_pair, group_id=group_index):
+                    try:
+                        # Spam vào server đầu tiên
+                        server1 = servers_pair[0]
+                        for bot_id in bots_in_group:
+                            send_message_from_sync(bot_id, server1['spam_channel_id'], server1['spam_message'])
+                            time.sleep(0.1)
+
+                        # Nếu có server thứ hai, đợi và spam
+                        if len(servers_pair) > 1:
+                            time.sleep(delay_within_pair)
+                            server2 = servers_pair[1]
+                            for bot_id in bots_in_group:
+                                send_message_from_sync(bot_id, server2['spam_channel_id'], server2['spam_message'])
+                                time.sleep(0.02)
+                    except Exception as e:
+                        print(f"[Enhanced Spam] ❌ Lỗi nhóm {group_id}: {e}", flush=True)
+                
+                thread = threading.Thread(target=group_spam_action, daemon=True)
+                spam_threads.append(thread)
+                thread.start()
+            
+            # Chờ một khoảng thời gian ngắn cho các luồng hoàn thành (không bắt buộc join)
+            time.sleep(1.0)
+            
+            server_pair_index += 1
+            time.sleep(delay_between_pairs)
+            
+        except Exception as e:
+            print(f"[Enhanced Spam] ❌ Lỗi nghiêm trọng: {e}", flush=True)
+            traceback.print_exc()
+            time.sleep(10)
+
+
 def ultra_optimized_spam_loop():
     print("[Ultra Spam] 🚀 Khởi động spam siêu tối ưu - 1 luồng duy nhất...", flush=True)
     server_pair_index = 0
@@ -464,7 +540,12 @@ def ultra_optimized_spam_loop():
             if not active_spam_servers or not active_bots:
                 time.sleep(5); continue
             
+            # Xoay vòng server pair
             start_index = server_pair_index * 2
+            if start_index >= len(active_spam_servers):
+                server_pair_index = 0
+                start_index = 0
+            
             current_server_pair = active_spam_servers[start_index:start_index + 2]
             
             if not current_server_pair:
@@ -484,13 +565,31 @@ def ultra_optimized_spam_loop():
                     send_message_from_sync(bot_id, server2['spam_channel_id'], server2['spam_message'])
                     time.sleep(0.01)
 
-            server_pair_index = (server_pair_index + 1) % ((len(active_spam_servers) + 1) // 2)
+            server_pair_index += 1
             time.sleep(delay_between_pairs)
             
         except Exception as e:
             print(f"[Ultra Spam] ❌ Lỗi nghiêm trọng: {e}", flush=True)
             traceback.print_exc()
             time.sleep(10)
+
+# --- THÊM MỚI: Hàm chọn chế độ spam ---
+def start_optimized_spam_system(mode="optimized"):
+    """
+    Khởi động hệ thống spam với chế độ được chọn.
+    - "optimized": 4 luồng (mặc định)
+    - "ultra": 1 luồng duy nhất
+    """
+    print(f"[Spam System] 🔄 Khởi động hệ thống spam ở chế độ '{mode}'...", flush=True)
+    
+    if mode == "ultra":
+        spam_thread = threading.Thread(target=ultra_optimized_spam_loop, daemon=True)
+    else: # Mặc định là 'optimized'
+        spam_thread = threading.Thread(target=enhanced_spam_loop, daemon=True)
+    
+    spam_thread.start()
+    print(f"[Spam System] ✅ Hệ thống spam '{mode}' đã khởi động!", flush=True)
+
 
 def periodic_task(interval, task_func, task_name):
     print(f"[{task_name}] 🚀 Khởi động luồng định kỳ.", flush=True)
@@ -510,7 +609,15 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
     asyncio.set_event_loop(loop)
     
     bot = discord.Client(self_bot=True)
-    bot_identifier = int(bot_id_str.split('_')[1])
+    # Tách số định danh bot từ bot_id_str
+    try:
+        bot_identifier_str = bot_id_str.split('_')[1]
+        bot_identifier = int(bot_identifier_str)
+        # Cộng 1 cho bot chính để phù hợp với logic grab card cũ
+        effective_bot_num = bot_identifier + 1 if is_main else bot_identifier
+    except (IndexError, ValueError):
+        print(f"[Bot Init] ⚠️ Không thể phân tích ID cho bot: {bot_id_str}. Sử dụng giá trị mặc định.", flush=True)
+        effective_bot_num = 99 # Giá trị mặc định nếu có lỗi
     
     @bot.event
     async def on_ready():
@@ -530,7 +637,7 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
                     # Check for mentions to differentiate between clan and regular drops
                     is_clan_drop = any(user.id == bot.user.id for user in msg.mentions)
                     handler = handle_clan_drop if is_clan_drop else handle_grab
-                    await handler(bot, msg, bot_identifier + 1)
+                    await handler(bot, msg, effective_bot_num)
             except Exception as e:
                 print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}\n{traceback.format_exc()}", flush=True)
     
@@ -1039,6 +1146,7 @@ if __name__ == "__main__":
     print("🔌 Initializing bots using Bot Manager...", flush=True)
     bot_threads = []
 
+    # Khởi tạo bot chính
     for i, token in enumerate(t for t in main_tokens if t.strip()):
         bot_num = i + 1
         bot_id = f"main_{bot_num}"
@@ -1051,6 +1159,7 @@ if __name__ == "__main__":
         bot_states["reboot_settings"].setdefault(bot_id, {'enabled': False, 'delay': 3600, 'next_reboot_time': 0, 'failure_count': 0})
         bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
 
+    # Khởi tạo bot phụ
     for i, token in enumerate(t for t in tokens if t.strip()):
         bot_id = f"sub_{i}"
         thread = threading.Thread(target=initialize_and_run_bot, args=(token.strip(), bot_id, False), daemon=True)
@@ -1058,6 +1167,7 @@ if __name__ == "__main__":
         bot_states["active"].setdefault(bot_id, True)
         bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0})
 
+    # Khởi động các luồng bot
     for t in bot_threads:
         t.start()
         time.sleep(2) # Rải đều thời gian khởi động để tránh rate limit
@@ -1065,7 +1175,11 @@ if __name__ == "__main__":
     print("🔧 Starting background threads...", flush=True)
     threading.Thread(target=periodic_task, args=(1800, save_settings, "Save"), daemon=True).start()
     threading.Thread(target=periodic_task, args=(300, health_monitoring_check, "Health"), daemon=True).start()
-    threading.Thread(target=ultra_optimized_spam_loop, daemon=True).start()
+    
+    # --- CHỈNH SỬA: Khởi động hệ thống spam có lựa chọn chế độ ---
+    # Thay đổi mode="optimized" (4 luồng) hoặc mode="ultra" (1 luồng) tại đây
+    start_optimized_spam_system(mode="optimized") 
+    
     threading.Thread(target=auto_reboot_loop, daemon=True).start()
     threading.Thread(target=auto_clan_drop_loop, daemon=True).start()
     
