@@ -1,4 +1,5 @@
-discum==1.4.0
+discord.py-self==1.9.2
 flask
 python-dotenv
 requests
+asyncio
