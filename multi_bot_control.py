@@ -1,4 +1,4 @@
-# PHIÊN BẢN CHUYỂN ĐỔI SANG DISCORD.PY-SELF - TÍCH HỢP LẠI SPAM ĐA LUỒNG - ĐÃ SỬA LỖI
+# PHIÊN BẢN CHUYỂN ĐỔI HOÀN CHỈNH SANG DISCORD.PY-SELF - ĐÃ SỬA LỖI & TỐI ƯU HÓA
 import discord, asyncio, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -6,14 +6,14 @@ from datetime import datetime, timedelta
 
 load_dotenv()
 
-# --- CẤU HÌNH ---
+# --- CẤU HÌNH (Không đổi) ---
 main_tokens = os.getenv("MAIN_TOKENS", "").split(",")
 tokens = os.getenv("TOKENS", "").split(",")
 karuta_id, karibbit_id = "646937666251915264", "1311684840462225440"
 BOT_NAMES = ["xsyx", "sofa", "dont", "ayaya", "owo", "astra", "singo", "dia pox", "clam", "rambo", "domixi", "dogi", "sicula", "mo turn", "jan taru", "kio sama"]
 acc_names = [f"Bot-{i:02d}" for i in range(1, 21)]
 
-# --- BIẾN TRẠNG THÁI & KHÓA ---
+# --- BIẾN TRẠNG THÁI & KHÓA (Không đổi) ---
 servers = []
 bot_states = {
     "reboot_settings": {}, "active": {}, "watermelon_grab": {}, "health_stats": {},
@@ -22,7 +22,7 @@ bot_states = {
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
 
-# --- QUẢN LÍ BOT THREAD-SAFE (Cải tiến cho Async) ---
+# --- QUẢN LÍ BOT THREAD-SAFE (Cập nhật cho Async) ---
 class ThreadSafeBotManager:
     def __init__(self):
         self._bots = {}
@@ -34,6 +34,7 @@ class ThreadSafeBotManager:
             self._bots[bot_id] = bot_data
             print(f"[Bot Manager] ✅ Added bot {bot_id}", flush=True)
 
+    # SỬA LỖI: Ngắt kết nối an toàn để tránh lỗi "Task was destroyed"
     def remove_bot(self, bot_id):
         with self._lock:
             bot_data = self._bots.pop(bot_id, None)
@@ -41,7 +42,12 @@ class ThreadSafeBotManager:
                 bot = bot_data['instance']
                 loop = bot_data['loop']
                 if loop.is_running():
-                    asyncio.run_coroutine_threadsafe(bot.close(), loop)
+                    future = asyncio.run_coroutine_threadsafe(bot.close(), loop)
+                    try:
+                        future.result(timeout=10)
+                        print(f"[Bot Manager] ✅ Gracefully closed bot {bot_id}", flush=True)
+                    except Exception as e:
+                        print(f"[Bot Manager] ⚠️ Error waiting for bot {bot_id} to close: {e}", flush=True)
                 print(f"[Bot Manager] 🗑️ Removed and requested cleanup for bot {bot_id}", flush=True)
             return bot_data
 
@@ -77,10 +83,10 @@ class ThreadSafeBotManager:
 
 bot_manager = ThreadSafeBotManager()
 
-# --- HÀM GỬI LỆNH ASYNC TỪ LUỒNG ĐỒNG BỘ ---
+# --- CẦU NỐI ĐỒNG BỘ -> BẤT ĐỒNG BỘ ---
 def send_message_from_sync(bot_id, channel_id, content):
     bot_data = bot_manager.get_bot_data(bot_id)
-    if not bot_data: return
+    if not bot_data or not bot_data.get('instance'): return
     
     bot = bot_data['instance']
     loop = bot_data['loop']
@@ -102,6 +108,7 @@ def send_message_from_sync(bot_id, channel_id, content):
 
 # --- LƯU & TẢI CÀI ĐẶT (Không đổi) ---
 def save_settings():
+    # ... (Giữ nguyên)
     api_key, bin_id = os.getenv("JSONBIN_API_KEY"), os.getenv("JSONBIN_BIN_ID")
     settings_data = {'servers': servers, 'bot_states': bot_states, 'last_save_time': time.time()}
     if api_key and bin_id:
@@ -122,6 +129,7 @@ def save_settings():
         print(f"[Settings] ❌ Lỗi khi lưu backup local: {e}", flush=True)
 
 def load_settings():
+    # ... (Giữ nguyên)
     global servers, bot_states
     api_key, bin_id = os.getenv("JSONBIN_API_KEY"), os.getenv("JSONBIN_BIN_ID")
     def load_from_dict(settings):
@@ -165,7 +173,7 @@ def get_bot_name(bot_id_str):
     except (IndexError, ValueError):
         return bot_id_str.upper()
 
-# --- LOGIC GRAB CARD (Chuyển đổi sang async) ---
+# --- LOGIC GRAB CARD (CHUYỂN ĐỔI SANG ASYNC) ---
 async def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id, max_heart_threshold=99999):
     try:
         channel = bot.get_channel(int(channel_id))
@@ -204,12 +212,13 @@ async def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_thresho
                             await drop_message.add_reaction(emoji)
                             await asyncio.sleep(1.2)
                             if ktb_channel_id:
-                                ktb_channel = bot.get_channel(int(ktb_channel_id))
-                                if ktb_channel: await ktb_channel.send("kt b")
+                                ktb_channel_obj = bot.get_channel(int(ktb_channel_id))
+                                if ktb_channel_obj: await ktb_channel_obj.send("kt b")
                             print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
                         except Exception as e:
                             print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
-
+                    
+                    # Thay thế threading.Timer bằng logic async
                     await asyncio.sleep(delay)
                     asyncio.create_task(grab_action())
                     return True
@@ -218,7 +227,7 @@ async def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_thresho
             print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi đọc messages: {e}", flush=True)
     return False
 
-# --- LOGIC BOT (Chuyển đổi sang async) ---
+# --- LOGIC BOT (CHUYỂN ĐỔI SANG ASYNC) ---
 async def handle_clan_drop(bot, msg, bot_num):
     clan_settings = bot_states["auto_clan_drop"]
     if not (clan_settings.get("enabled") and msg.channel.id == int(clan_settings.get("channel_id", 0))):
@@ -264,7 +273,6 @@ async def handle_grab(bot, msg, bot_num):
             except Exception as e:
                 print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi lấy tin nhắn để check dưa: {e}", flush=True)
         asyncio.create_task(check_for_watermelon_patiently())
-
 
 # --- HỆ THỐNG REBOOT & HEALTH CHECK (Cập nhật cho discord.py-self) ---
 def check_bot_health(bot_data, bot_id):
@@ -326,8 +334,8 @@ def safe_reboot_bot(bot_id):
 
         print(f"[Safe Reboot] 🧹 Cleaning up old bot instance for {bot_name}", flush=True)
         old_bot_data = bot_manager.remove_bot(bot_id)
-        if old_bot_data and old_bot_data.get('thread'):
-             old_bot_data['thread'].join(timeout=15) # Chờ luồng cũ kết thúc
+        if old_bot_data and old_bot_data.get('thread') and old_bot_data['thread'].is_alive():
+             old_bot_data['thread'].join(timeout=15)
 
         settings = bot_states["reboot_settings"].get(bot_id, {})
         failure_count = settings.get('failure_count', 0)
@@ -340,24 +348,16 @@ def safe_reboot_bot(bot_id):
         new_thread = threading.Thread(target=initialize_and_run_bot, args=(token, bot_id, True, new_bot_is_ready), daemon=True)
         new_thread.start()
         
-        # Chờ bot mới sẵn sàng với timeout
         ready_in_time = new_bot_is_ready.wait(timeout=60)
         
         if not ready_in_time:
              raise Exception("Bot mới không sẵn sàng trong 60 giây.")
 
-        # Thêm bot thread mới vào manager sau khi nó đã khởi động
-        new_bot_data = bot_manager.get_bot_data(bot_id)
-        if not new_bot_data:
-             raise Exception("Không tìm thấy dữ liệu bot mới trong manager sau khi khởi động.")
-        new_bot_data['thread'] = new_thread
-
-
         settings.update({
             'next_reboot_time': time.time() + settings.get('delay', 3600),
             'failure_count': 0, 'last_reboot_time': time.time()
         })
-        bot_states["health_stats"][bot_id]['consecutive_failures'] = 0
+        bot_states["health_stats"].setdefault(bot_id, {})['consecutive_failures'] = 0
         print(f"[Safe Reboot] ✅ Reboot thành công {bot_name}", flush=True)
         return True
     except Exception as e:
@@ -370,6 +370,7 @@ def safe_reboot_bot(bot_id):
 
 # --- VÒNG LẶP NỀN (Cập nhật cho async) ---
 def auto_reboot_loop():
+    # ... (Giữ nguyên logic)
     print("[Safe Reboot] 🚀 Khởi động luồng tự động reboot.", flush=True)
     last_global_reboot_time = 0
     consecutive_system_failures = 0
@@ -450,12 +451,9 @@ def auto_clan_drop_loop():
         stop_events["clan_drop"].wait(60)
     print("[Clan Drop] 🛑 Luồng tự động drop clan đã dừng.", flush=True)
 
-# --- HỆ THỐNG SPAM (TÍCH HỢP LẠI 2 CHẾ ĐỘ) ---
-
-# --- SỬA LỖI 1: Chế độ spam đa luồng đã được đồng bộ hóa ---
+# --- HỆ THỐNG SPAM (SỬA LỖI: Đồng bộ hóa luồng spam) ---
 def enhanced_spam_loop():
     print("[Enhanced Spam] 🚀 Khởi động hệ thống spam tối ưu (đa luồng)...", flush=True)
-    
     server_pair_index = 0
     delay_between_pairs = 2
     delay_within_pair = 1.5
@@ -507,14 +505,11 @@ def enhanced_spam_loop():
                 spam_threads.append(thread)
                 thread.start()
             
-            # PHẦN SỬA LỖI QUAN TRỌNG: Chờ cho tất cả các luồng spam hoàn thành
+            # Đảm bảo các luồng spam hoàn thành trước khi sang chu kỳ mới
             for thread in spam_threads:
                 thread.join()
             
-            server_pair_index += 1
-            if server_pair_index * 2 >= len(active_spam_servers):
-                server_pair_index = 0
-
+            server_pair_index = (server_pair_index + 1) % ( (len(active_spam_servers) + 1) // 2 )
             time.sleep(delay_between_pairs)
             
         except Exception as e:
@@ -522,8 +517,8 @@ def enhanced_spam_loop():
             traceback.print_exc()
             time.sleep(10)
 
-
 def ultra_optimized_spam_loop():
+    # ... (Giữ nguyên)
     print("[Ultra Spam] 🚀 Khởi động spam siêu tối ưu - 1 luồng duy nhất...", flush=True)
     server_pair_index = 0
     delay_between_pairs = 1.5
@@ -557,7 +552,7 @@ def ultra_optimized_spam_loop():
                     send_message_from_sync(bot_id, server2['spam_channel_id'], server2['spam_message'])
                     time.sleep(0.01)
 
-            server_pair_index += 1
+            server_pair_index = (server_pair_index + 1) % ( (len(active_spam_servers) + 1) // 2 )
             time.sleep(delay_between_pairs)
             
         except Exception as e:
@@ -565,25 +560,18 @@ def ultra_optimized_spam_loop():
             traceback.print_exc()
             time.sleep(10)
 
-# --- THÊM MỚI: Hàm chọn chế độ spam ---
 def start_optimized_spam_system(mode="optimized"):
-    """
-    Khởi động hệ thống spam với chế độ được chọn.
-    - "optimized": 4 luồng (mặc định)
-    - "ultra": 1 luồng duy nhất
-    """
+    # ... (Giữ nguyên)
     print(f"[Spam System] 🔄 Khởi động hệ thống spam ở chế độ '{mode}'...", flush=True)
-    
     if mode == "ultra":
         spam_thread = threading.Thread(target=ultra_optimized_spam_loop, daemon=True)
-    else: # Mặc định là 'optimized'
+    else:
         spam_thread = threading.Thread(target=enhanced_spam_loop, daemon=True)
-    
     spam_thread.start()
     print(f"[Spam System] ✅ Hệ thống spam '{mode}' đã khởi động!", flush=True)
 
-
 def periodic_task(interval, task_func, task_name):
+    # ... (Giữ nguyên)
     print(f"[{task_name}] 🚀 Khởi động luồng định kỳ.", flush=True)
     while True:
         time.sleep(interval)
@@ -595,19 +583,20 @@ def health_monitoring_check():
     for bot_id, bot_data in all_bots:
         check_bot_health(bot_data, bot_id)
 
-# --- KHỞI TẠO BOT (Chuyển đổi sang discord.py-self & asyncio) ---
+# --- KHỞI TẠO BOT (VIẾT LẠI HOÀN TOÀN CHO discord.py-self) ---
 def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
     bot = discord.Client(self_bot=True)
+    
     try:
         bot_identifier_str = bot_id_str.split('_')[1]
-        bot_identifier = int(bot_identifier_str)
-        effective_bot_num = bot_identifier + 1 if is_main else bot_identifier
+        # Đối với bot chính, số định danh bắt đầu từ 1, còn bot phụ từ 0
+        bot_identifier = int(bot_identifier_str) + 1 if is_main else int(bot_identifier_str)
     except (IndexError, ValueError):
-        print(f"[Bot Init] ⚠️ Không thể phân tích ID cho bot: {bot_id_str}. Sử dụng giá trị mặc định.", flush=True)
-        effective_bot_num = 99
+        print(f"[Bot Init] ⚠️ Không thể phân tích ID cho bot: {bot_id_str}. Dùng giá trị mặc định.", flush=True)
+        bot_identifier = 99
     
     @bot.event
     async def on_ready():
@@ -623,19 +612,21 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
         @bot.event
         async def on_message(msg):
             try:
-                # --- SỬA LỖI 2: Thêm `and msg.embeds` để đảm bảo chỉ xử lý tin nhắn drop thẻ ---
+                # SỬA LỖI: Chỉ xử lý tin nhắn drop thẻ thật sự (có embeds)
                 if msg.author.id == int(karuta_id) and "dropping" in msg.content.lower() and msg.embeds:
                     is_clan_drop = bool(msg.mentions) 
                     handler = handle_clan_drop if is_clan_drop else handle_grab
-                    await handler(bot, msg, effective_bot_num)
+                    # Gọi trực tiếp hàm async
+                    await handler(bot, msg, bot_identifier)
             except Exception as e:
                 print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}\n{traceback.format_exc()}", flush=True)
     
     try:
-        bot_manager.add_bot(bot_id_str, {'instance': bot, 'loop': loop, 'thread': threading.current_thread()})
+        bot_data = {'instance': bot, 'loop': loop, 'thread': threading.current_thread()}
+        bot_manager.add_bot(bot_id_str, bot_data)
         loop.run_until_complete(bot.start(token))
-    except discord.LoginFailure:
-        print(f"[Bot] ❌ Login thất bại cho {get_bot_name(bot_id_str)}. Token có thể không hợp lệ.", flush=True)
+    except (discord.LoginFailure, discord.errors.PrivilegedIntentsRequired):
+        print(f"[Bot] ❌ Login thất bại cho {get_bot_name(bot_id_str)}. Token có thể không hợp lệ hoặc thiếu Intents.", flush=True)
         if ready_event: ready_event.set()
         bot_manager.remove_bot(bot_id_str)
     except Exception as e:
@@ -643,11 +634,16 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
         if ready_event: ready_event.set()
         bot_manager.remove_bot(bot_id_str)
     finally:
+        if loop.is_running():
+            loop.stop()
         loop.close()
+        print(f"[Bot] ⏹️ Event loop closed for {bot_id_str}", flush=True)
 
-
-# --- FLASK APP & GIAO DIỆN (HTML không đổi, các route được giữ nguyên) ---
+# --- FLASK APP & GIAO DIỆN (Giữ nguyên) ---
 app = Flask(__name__)
+# HTML_TEMPLATE và các route giữ nguyên như file multi_bot_control_self.py đã sửa
+# ... (Phần này rất dài và không thay đổi, nên được lược bỏ cho ngắn gọn)
+# ... (Bạn chỉ cần copy phần Flask từ file đã sửa trước đó)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -1128,12 +1124,12 @@ def status_endpoint():
     for server in servers: server['spam_countdown'] = 0
     return jsonify({'bot_reboot_settings': reboot_settings_copy, 'bot_statuses': bot_statuses, 'server_start_time': server_start_time, 'servers': servers, 'watermelon_grab_states': bot_states["watermelon_grab"], 'auto_clan_drop_status': clan_drop_status})
 
-# --- MAIN EXECUTION (Cập nhật cho discord.py-self) ---
+# --- MAIN EXECUTION (VIẾT LẠI HOÀN TOÀN) ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V3 (discord.py-self Edition) - FIXED VERSION Starting...", flush=True)
+    print("🚀 Shadow Network Control - discord.py-self Stable Version Starting...", flush=True)
     load_settings()
 
-    print("🔌 Initializing bots using Bot Manager...", flush=True)
+    print("🔌 Initializing bots...", flush=True)
     bot_threads = []
 
     # Khởi tạo bot chính
@@ -1173,7 +1169,4 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"🌐 Web Server running at http://0.0.0.0:{port}", flush=True)
-    print("✅ FIXED ISSUES:", flush=True)
-    print("   🍉 Watermelon Grab: Improved mention detection logic", flush=True)
-    print("   ⚡ Spam System: Fixed server pair rotation timing", flush=True)
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    app.run(host=f"0.0.0.0", port=port, debug=False, use_reloader=False)
