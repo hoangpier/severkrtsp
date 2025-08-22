@@ -489,8 +489,8 @@ def enhanced_spam_loop():
     print("[Enhanced Spam] 🚀 Khởi động hệ thống spam tối ưu (đa luồng)...", flush=True)
     
     server_pair_index = 0
-    delay_between_pairs = 1.5
-    delay_within_pair = 1.3
+    delay_between_pairs = 2
+    delay_within_pair = 1.5
     max_threads = 4
     
     while True:
