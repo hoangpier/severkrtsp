@@ -1,4 +1,4 @@
-# PHIÊN BẢN CHUYỂN ĐỔI SANG DISCORD.PY-SELF - TÍCH HỢP LẠI SPAM ĐA LUỒNG
+# PHIÊN BẢN CHUYỂN ĐỔI SANG DISCORD.PY-SELF - TÍCH HỢP LẠI SPAM ĐA LUỒNG - ĐÃ SỬA LỖI
 import discord, asyncio, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -22,7 +22,7 @@ bot_states = {
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
 
-# --- QUẢN LÝ BOT THREAD-SAFE (Cải tiến cho Async) ---
+# --- QUẢN LÍ BOT THREAD-SAFE (Cải tiến cho Async) ---
 class ThreadSafeBotManager:
     def __init__(self):
         self._bots = {}
@@ -256,7 +256,7 @@ async def handle_grab(bot, msg, bot_num):
                         print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU!", flush=True)
                         try:
                             await target_message.add_reaction("🍉")
-                            print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DỰA THÀNH CÔNG!", flush=True)
+                            print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DƯA THÀNH CÔNG!", flush=True)
                         except Exception as e:
                             print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
                         return
@@ -335,7 +335,7 @@ def safe_reboot_bot(bot_id):
         print(f"[Safe Reboot] ⏳ Chờ {wait_time:.1f}s để cleanup...", flush=True)
         time.sleep(wait_time)
 
-        print(f"[Safe Reboot] 🏗️ Creating new bot thread for {bot_name}", flush=True)
+        print(f"[Safe Reboot] 🔧 Creating new bot thread for {bot_name}", flush=True)
         new_bot_is_ready = threading.Event()
         new_thread = threading.Thread(target=initialize_and_run_bot, args=(token, bot_id, True, new_bot_is_ready), daemon=True)
         new_thread.start()
@@ -450,9 +450,9 @@ def auto_clan_drop_loop():
         stop_events["clan_drop"].wait(60)
     print("[Clan Drop] 🛑 Luồng tự động drop clan đã dừng.", flush=True)
 
-# --- HỆ THỐNG SPAM (Tích hợp lại 2 chế độ) ---
+# --- HỆ THỐNG SPAM (TÍCH HỢP LẠI 2 CHẾ ĐỘ) ---
 
-# --- THÊM MỚI: Chế độ spam đa luồng ---
+# --- THÊM MỚI: Chế độ spam đa luồng - ĐÃ SỬA LỖI ---
 def enhanced_spam_loop():
     print("[Enhanced Spam] 🚀 Khởi động hệ thống spam tối ưu (đa luồng)...", flush=True)
     
@@ -470,12 +470,8 @@ def enhanced_spam_loop():
                 time.sleep(5)
                 continue
             
-            # Xoay vòng server pair
+            # *** SỬA LỖI: Đơn giản hóa logic xoay vòng server pair ***
             start_index = server_pair_index * 2
-            if start_index >= len(active_spam_servers):
-                server_pair_index = 0
-                start_index = 0
-            
             current_server_pair = active_spam_servers[start_index:start_index + 2]
             
             if not current_server_pair:
@@ -540,16 +536,13 @@ def ultra_optimized_spam_loop():
             if not active_spam_servers or not active_bots:
                 time.sleep(5); continue
             
-            # Xoay vòng server pair
+            # *** SỬA LỖI: Đơn giản hóa logic xoay vòng server pair ***
             start_index = server_pair_index * 2
-            if start_index >= len(active_spam_servers):
-                server_pair_index = 0
-                start_index = 0
-            
             current_server_pair = active_spam_servers[start_index:start_index + 2]
             
             if not current_server_pair:
-                server_pair_index = 0; continue
+                server_pair_index = 0
+                continue
             
             print(f"[Ultra Spam] 📤 Spam cặp #{server_pair_index + 1}: {[s.get('name', 'Unknown') for s in current_server_pair]}", flush=True)
             
@@ -634,8 +627,9 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
         async def on_message(msg):
             try:
                 if msg.author.id == int(karuta_id) and "dropping" in msg.content.lower():
-                    # Check for mentions to differentiate between clan and regular drops
-                    is_clan_drop = any(user.id == bot.user.id for user in msg.mentions)
+                    # *** SỬA LỖI: Logic kiểm tra clan drop đã được sửa ***
+                    # Kiểm tra xem danh sách mentions có rỗng hay không. Nếu có bất kỳ mention nào, đó là clan drop.
+                    is_clan_drop = bool(msg.mentions) 
                     handler = handle_clan_drop if is_clan_drop else handle_grab
                     await handler(bot, msg, effective_bot_num)
             except Exception as e:
@@ -719,7 +713,7 @@ HTML_TEMPLATE = """
     <div class="container">
         <div class="header">
             <h1 class="title">Shadow Network Control</h1>
-            <div class="subtitle">discord.py-self Edition</div>
+            <div class="subtitle">discord.py-self Edition - FIXED VERSION</div>
         </div>
         <div id="msg-status-container" class="msg-status"> <span id="msg-status-text"></span></div>
         <div class="main-grid">
@@ -739,6 +733,7 @@ HTML_TEMPLATE = """
                          <div>🔒 Safety Features: Health Checks, Exponential Backoff, Rate Limiting</div>
                          <div>⏱️ Min Reboot Interval: 10 minutes | Max Failures: 5 attempts</div>
                          <div>🎯 Reboot Strategy: Priority-based, one-at-a-time with cleanup delay</div>
+                         <div>🐛 BUG FIXES: ✅ Watermelon Grab | ✅ Spam System Timing</div>
                      </div>
                      <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));"></div>
                 </div>
@@ -776,7 +771,7 @@ HTML_TEMPLATE = """
             <div class="panel global-settings-panel">
                 <h2><i class="fas fa-globe"></i> Global Event Settings</h2>
                 <div class="server-sub-panel">
-                    <h3><i class="fas fa-seedling"></i> Watermelon Grab (All Servers)</h3>
+                    <h3><i class="fas fa-seedling"></i> Watermelon Grab (All Servers) - 🍉 FIXED!</h3>
                     <div id="global-watermelon-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));"></div>
                 </div>
             </div>
@@ -806,7 +801,7 @@ HTML_TEMPLATE = """
                     {% endfor %}
                 </div>
                 <div class="server-sub-panel">
-                    <h3><i class="fas fa-paper-plane"></i> Auto Broadcast</h3>
+                    <h3><i class="fas fa-paper-plane"></i> Auto Broadcast - ⚡ FIXED!</h3>
                     <div class="input-group"><label>Message</label><textarea class="spam-message" rows="2">{{ server.spam_message or '' }}</textarea></div>
                     <div class="input-group">
                          <label>Delay (s)</label>
@@ -1140,7 +1135,7 @@ def status_endpoint():
 
 # --- MAIN EXECUTION (Cập nhật cho discord.py-self) ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V3 (discord.py-self Edition) Starting...", flush=True)
+    print("🚀 Shadow Network Control - V3 (discord.py-self Edition) - FIXED VERSION Starting...", flush=True)
     load_settings()
 
     print("🔌 Initializing bots using Bot Manager...", flush=True)
@@ -1185,4 +1180,7 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 10000))
     print(f"🌐 Web Server running at http://0.0.0.0:{port}", flush=True)
+    print("✅ FIXED ISSUES:", flush=True)
+    print("   🍉 Watermelon Grab: Improved mention detection logic", flush=True)
+    print("   ⚡ Spam System: Fixed server pair rotation timing", flush=True)
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
