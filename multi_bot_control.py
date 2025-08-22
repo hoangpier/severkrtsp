@@ -228,7 +228,6 @@ async def handle_clan_drop(bot, msg, bot_num):
     max_threshold = clan_settings.get("max_heart_thresholds", {}).get(bot_id_str, 99999)
     asyncio.create_task(_find_and_select_card(bot, clan_settings["channel_id"], msg.id, threshold, bot_num, clan_settings["ktb_channel_id"], max_threshold))
 
-# <<< BẮT ĐẦU PHẦN THAY THẾ >>>
 async def handle_grab(bot, msg, bot_num):
     channel_id = msg.channel.id
     target_server = next((s for s in servers if s.get('main_channel_id') == str(channel_id)), None)
@@ -238,52 +237,31 @@ async def handle_grab(bot, msg, bot_num):
     auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
     watermelon_grab_enabled = bot_states["watermelon_grab"].get(bot_id_str, False)
 
-    if not auto_grab_enabled and not watermelon_grab_enabled: return
-    
-    # Logic grab card bình thường (giữ nguyên)
-    if auto_grab_enabled and target_server.get('ktb_channel_id'):
-        threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
-        max_threshold = target_server.get(f'max_heart_threshold_{bot_num}', 99999)
-        asyncio.create_task(_find_and_select_card(bot, str(channel_id), msg.id, threshold, bot_num, target_server.get('ktb_channel_id'), max_threshold))
+    if not auto_grab_enabled and not watermelon_grab_enabled:
+    return
 
-    # --- PHẦN NHẶT DƯA ĐÃ SỬA LỖI TRIỆT ĐỂ ---
-    if watermelon_grab_enabled:
-        async def check_for_watermelon_patiently():
-            print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu canh dưa (chờ 5 giây)...", flush=True)
-            await asyncio.sleep(5) 
-            try:
-                target_message = await msg.channel.fetch_message(msg.id)
-                
-                for reaction in target_message.reactions:
-                    # SỬA: Logic kiểm tra tên emoji để tương thích cả custom emoji
-                    emoji_name = ""
-                    # Kiểm tra xem emoji là unicode (str) hay custom emoji (object)
-                    if isinstance(reaction.emoji, str):
-                        emoji_name = reaction.emoji  # Đây là emoji thường như '🍉'
-                    else:
-                        # Nếu là custom emoji, lấy thuộc tính .name
-                        emoji_name = reaction.emoji.name 
-                    
-                    # Chuyển tên về chữ thường để so sánh
-                    emoji_name_lower = emoji_name.lower()
+# Các logic khác cho auto grab (nếu có) sẽ nằm ở đây...
 
-                    if '🍉' in emoji_name_lower or 'watermelon' in emoji_name_lower or 'dua' in emoji_name_lower:
-                        print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU (Tên: {emoji_name})!", flush=True)
-                        try:
-                            # SỬA: React lại bằng chính emoji đã tìm thấy để đảm bảo chính xác
-                            await target_message.add_reaction(reaction.emoji)
-                            print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DƯA THÀNH CÔNG!", flush=True)
-                        except Exception as e:
-                            print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
-                        return # Thoát ngay sau khi xử lý xong
-                        
-                print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau khi chờ.", flush=True)
-            except Exception as e:
-                print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi lấy tin nhắn để check dưa: {e}", flush=True)
-        
-        asyncio.create_task(check_for_watermelon_patiently())
-# <<< KẾT THÚC PHẦN THAY THẾ >>>
-
+if watermelon_grab_enabled:
+    async def check_for_watermelon_patiently():
+        print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu canh dưa (chờ 5 giây)...", flush=True)
+        await asyncio.sleep(5) 
+        try:
+            target_message = await msg.channel.fetch_message(msg.id)
+            for reaction in target_message.reactions:
+                emoji_name = str(reaction.emoji).lower()
+                if '🍉' in emoji_name or 'watermelon' in emoji_name or 'dua' in emoji_name:
+                    print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU!", flush=True)
+                    try:
+                        await target_message.add_reaction("🍉")
+                        print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DƯA THÀNH CÔNG!", flush=True)
+                    except Exception as e:
+                        print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
+                    return
+            print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau khi chờ.", flush=True)
+        except Exception as e:
+            print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi lấy tin nhắn để check dưa: {e}", flush=True)
+    asyncio.create_task(check_for_watermelon_patiently())
 
 # --- HỆ THỐNG REBOOT & HEALTH CHECK (Cập nhật cho discord.py-self) ---
 def check_bot_health(bot_data, bot_id):
