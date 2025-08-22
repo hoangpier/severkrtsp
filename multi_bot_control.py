@@ -1,4 +1,4 @@
-# PHIÊN BẢN CUỐI CÙNG - SỬA LỖI NHẶT DƯA & SPAM
+# PHIÊN BẢN CUỐI CÙNG - SỬA LỖI ĐỌC NHẦM CÀI ĐẶT
 import discord, asyncio, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -34,7 +34,6 @@ class ThreadSafeBotManager:
             self._bots[bot_id] = bot_data
             print(f"[Bot Manager] ✅ Added bot {bot_id}", flush=True)
 
-    # SỬA LỖI (THÊM): Ngắt kết nối an toàn
     def remove_bot(self, bot_id):
         with self._lock:
             bot_data = self._bots.pop(bot_id, None)
@@ -471,12 +470,16 @@ def enhanced_spam_loop():
                 time.sleep(5)
                 continue
             
+            max_pairs = (len(active_spam_servers) + 1) // 2
+            if max_pairs == 0:
+                time.sleep(5)
+                continue
+
+            if server_pair_index >= max_pairs:
+                server_pair_index = 0
+            
             start_index = server_pair_index * 2
             current_server_pair = active_spam_servers[start_index:start_index + 2]
-            
-            if not current_server_pair:
-                server_pair_index = 0
-                continue
             
             print(f"[Enhanced Spam] 📤 Spam cặp #{server_pair_index + 1}: {[s.get('name', 'Unknown') for s in current_server_pair]}", flush=True)
             
@@ -507,7 +510,6 @@ def enhanced_spam_loop():
                 spam_threads.append(thread)
                 thread.start()
             
-            # Thay thế time.sleep(1.0) bằng vòng lặp join() để chờ các luồng hoàn thành
             for thread in spam_threads:
                 thread.join()
             
@@ -533,12 +535,16 @@ def ultra_optimized_spam_loop():
             if not active_spam_servers or not active_bots:
                 time.sleep(5); continue
             
+            max_pairs = (len(active_spam_servers) + 1) // 2
+            if max_pairs == 0:
+                time.sleep(5)
+                continue
+
+            if server_pair_index >= max_pairs:
+                server_pair_index = 0
+
             start_index = server_pair_index * 2
             current_server_pair = active_spam_servers[start_index:start_index + 2]
-            
-            if not current_server_pair:
-                server_pair_index = 0
-                continue
             
             print(f"[Ultra Spam] 📤 Spam cặp #{server_pair_index + 1}: {[s.get('name', 'Unknown') for s in current_server_pair]}", flush=True)
             
@@ -595,13 +601,13 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
     bot = discord.Client(self_bot=True)
     
     try:
-        # Lấy số thứ tự bot một cách chính xác
         bot_num = int(bot_id_str.split('_')[1])
-        # Cộng 1 cho bot chính để phù hợp với logic grab card cũ
-        effective_bot_num = bot_num + 1 if is_main else bot_num
+        # Cộng 1 cho bot chính để phù hợp với logic grab card
+        if is_main:
+            bot_num += 1
     except (IndexError, ValueError):
         print(f"[Bot Init] ⚠️ Không thể phân tích ID cho bot: {bot_id_str}. Sử dụng giá trị mặc định.", flush=True)
-        effective_bot_num = 99
+        bot_num = 99
     
     @bot.event
     async def on_ready():
@@ -621,7 +627,7 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
                 if msg.author.id == int(karuta_id) and "dropping" in msg.content.lower() and msg.embeds:
                     is_clan_drop = bool(msg.mentions) 
                     handler = handle_clan_drop if is_clan_drop else handle_grab
-                    await handler(bot, msg, effective_bot_num)
+                    await handler(bot, msg, bot_num)
             except Exception as e:
                 print(f"[Bot] ❌ Error in on_message for {bot_id_str}: {e}\n{traceback.format_exc()}", flush=True)
     
