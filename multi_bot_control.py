@@ -1,4 +1,4 @@
-# PHIÊN BẢN CHUYỂN ĐỔI SANG DISCORD.PY-SELF - TÍCH HỢP LẠI SPAM ĐA LUỒNG - ĐÃ SỬA LỖI
+# PHIÊN BẢN CHUYỂN ĐỔI SANG DISCORD.PY-SELF - TÍCH HỢP LẠI SPAM ĐA LUỒNG - ĐÃ SỬA LỖI HOÀN CHỈNH
 import discord, asyncio, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -167,7 +167,7 @@ def get_bot_name(bot_id_str):
     except (IndexError, ValueError):
         return bot_id_str.upper()
 
-# --- LOGIC GRAB CARD (Chuyển đổi sang async) ---
+# --- LOGIC GRAB CARD (Không đổi) ---
 async def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id, max_heart_threshold=99999):
     try:
         channel = bot.get_channel(int(channel_id))
@@ -190,7 +190,6 @@ async def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_thresho
                     
                     valid_cards = [(idx, hearts) for idx, hearts in enumerate(heart_numbers) if heart_threshold <= hearts <= max_heart_threshold]
                     if not valid_cards:
-                        # print(f"[CARD GRAB | Bot {bot_num}] No cards in range {heart_threshold}-{max_heart_threshold}. Hearts found: {heart_numbers}", flush=True)
                         continue
                     
                     max_index, max_num = max(valid_cards, key=lambda x: x[1])
@@ -204,7 +203,6 @@ async def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_thresho
 
                     async def grab_action():
                         try:
-                            # Refetch message to prevent potential cache issues
                             drop_message = await channel.fetch_message(int(last_drop_msg_id))
                             await drop_message.add_reaction(emoji)
                             await asyncio.sleep(1.2)
@@ -217,7 +215,6 @@ async def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_thresho
                         except Exception as e:
                             print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
 
-                    # Use loop.call_later for more precise async delay
                     asyncio.get_running_loop().call_later(delay, lambda: asyncio.create_task(grab_action()))
                     return True
             return False
@@ -225,7 +222,7 @@ async def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_thresho
             print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi đọc messages: {e}", flush=True)
     return False
 
-# --- LOGIC BOT (Chuyển đổi sang async) ---
+# --- LOGIC BOT (Cập nhật) ---
 async def handle_clan_drop(bot, msg, bot_num):
     clan_settings = bot_states["auto_clan_drop"]
     if not (clan_settings.get("enabled") and msg.channel.id == int(clan_settings.get("channel_id", 0))):
@@ -235,51 +232,111 @@ async def handle_clan_drop(bot, msg, bot_num):
     max_threshold = clan_settings.get("max_heart_thresholds", {}).get(bot_id_str, 99999)
     asyncio.create_task(_find_and_select_card(bot, clan_settings["channel_id"], msg.id, threshold, bot_num, clan_settings["ktb_channel_id"], max_threshold))
 
+# ==============================================================================
+# <<< HÀM HANDLE_GRAB ĐÃ ĐƯỢC THAY THẾ HOÀN TOÀN BẰNG LOGIC MỚI >>>
+# ==============================================================================
 async def handle_grab(bot, msg, bot_num):
     channel_id = msg.channel.id
     target_server = next((s for s in servers if s.get('main_channel_id') == str(channel_id)), None)
-    if not target_server: return
-    
+    if not target_server:
+        return
+
     bot_id_str = f'main_{bot_num}'
     auto_grab_enabled = target_server.get(f'auto_grab_enabled_{bot_num}', False)
     watermelon_grab_enabled = bot_states["watermelon_grab"].get(bot_id_str, False)
-    
-    # print(f"[DEBUG | Bot {bot_num}] Handling grab. AutoGrab: {auto_grab_enabled}, Watermelon: {watermelon_grab_enabled}")
 
-    if not auto_grab_enabled and not watermelon_grab_enabled: return
-    
-    if auto_grab_enabled and target_server.get('ktb_channel_id'):
-        threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
-        max_threshold = target_server.get(f'max_heart_threshold_{bot_num}', 99999)
-        asyncio.create_task(_find_and_select_card(bot, str(channel_id), msg.id, threshold, bot_num, target_server.get('ktb_channel_id'), max_threshold))
+    if not auto_grab_enabled and not watermelon_grab_enabled:
+        return
 
+    # Biến để lưu thông tin thẻ cần nhặt
+    card_to_grab = None  # Sẽ có dạng (emoji, delay)
+
+    # --- Giai đoạn 1: Tìm kiếm thông tin thẻ (chạy trong khoảng 3.5 giây) ---
+    if auto_grab_enabled:
+        print(f"[GRAB CTRL | Bot {bot_num}] Bắt đầu tìm kiếm thẻ giá trị cao...", flush=True)
+        start_time = time.monotonic()
+        try:
+            channel = bot.get_channel(int(channel_id))
+            if channel:
+                for _ in range(7):
+                    await asyncio.sleep(0.5)
+                    async for msg_item in channel.history(limit=5):
+                        if msg_item.author.id == int(karibbit_id) and msg_item.id > msg.id:
+                            if not msg_item.embeds: continue
+                            desc = msg_item.embeds[0].description
+                            if not desc or '♡' not in desc: continue
+
+                            lines = desc.split('\n')[:3]
+                            heart_numbers = [int(re.search(r'♡(\d+)', line).group(1)) if re.search(r'♡(\d+)', line) else 0 for line in lines]
+                            
+                            threshold = target_server.get(f'heart_threshold_{bot_num}', 50)
+                            max_threshold = target_server.get(f'max_heart_threshold_{bot_num}', 99999)
+                            
+                            valid_cards = [(idx, hearts) for idx, hearts in enumerate(heart_numbers) if threshold <= hearts <= max_threshold]
+                            
+                            if valid_cards:
+                                max_index, max_num = max(valid_cards, key=lambda x: x[1])
+                                delays = {1: [0.35, 1.35, 2.05], 2: [0.7, 1.8, 2.4], 3: [0.7, 1.8, 2.4], 4: [0.8, 1.9, 2.5]}
+                                bot_delays = delays.get(bot_num, [0.9, 2.0, 2.6])
+                                emoji = ["1️⃣", "2️⃣", "3️⃣"][max_index]
+                                delay = bot_delays[max_index]
+                                
+                                card_to_grab = (emoji, delay)
+                                print(f"[GRAB CTRL | Bot {bot_num}] Đã tìm thấy thẻ {max_num}♡. Sẽ nhặt sau {delay}s.", flush=True)
+                                raise StopAsyncIteration  # Thoát khỏi vòng lặp tìm kiếm
+                    if card_to_grab:
+                        break
+        except StopAsyncIteration:
+            pass  # Đây là cách để thoát khỏi cả hai vòng lặp một cách an toàn
+        except Exception as e:
+            print(f"[GRAB CTRL | Bot {bot_num}] ❌ Lỗi khi tìm thẻ: {e}", flush=True)
+        
+        # Tính toán thời gian đã dùng để tìm thẻ
+        time_spent_searching = time.monotonic() - start_time
+    else:
+        time_spent_searching = 0.0
+
+    # --- Giai đoạn 2: Canh dưa hấu ---
     if watermelon_grab_enabled:
-        async def check_for_watermelon_patiently():
-            print(f"[WATERMELON | Bot {bot_num}] 🍉 Bắt đầu canh dưa (chờ 5 giây)...", flush=True)
-            await asyncio.sleep(5) 
+        # Chờ cho đến khi đủ 5 giây kể từ lúc drop
+        wait_for_watermelon_duration = max(0, 5.0 - time_spent_searching)
+        print(f"[GRAB CTRL | Bot {bot_num}] Chờ thêm {wait_for_watermelon_duration:.1f}s để canh dưa...", flush=True)
+        await asyncio.sleep(wait_for_watermelon_duration)
+        
+        try:
+            target_message = await msg.channel.fetch_message(msg.id)
+            for reaction in target_message.reactions:
+                emoji_name = reaction.emoji if isinstance(reaction.emoji, str) else reaction.emoji.name
+                if '🍉' in emoji_name:
+                    print(f"[GRAB CTRL | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU! Tiến hành nhặt.", flush=True)
+                    await target_message.add_reaction("🍉")
+                    print(f"[GRAB CTRL | Bot {bot_num}] ✅ NHẶT DƯA THÀNH CÔNG!", flush=True)
+                    break 
+        except Exception as e:
+            print(f"[GRAB CTRL | Bot {bot_num}] ❌ Lỗi khi nhặt dưa: {e}", flush=True)
+
+    # --- Giai đoạn 3: Thực hiện nhặt thẻ (nếu đã tìm thấy) ---
+    if card_to_grab:
+        emoji_to_add, reaction_delay = card_to_grab
+        
+        async def grab_card_action():
             try:
-                # Always re-fetch the message to get the latest reaction info
-                target_message = await msg.channel.fetch_message(msg.id)
-                for reaction in target_message.reactions:
-                    # Check both standard and custom emoji representations
-                    emoji_name = reaction.emoji if isinstance(reaction.emoji, str) else reaction.emoji.name
-                    if '🍉' in emoji_name:
-                        print(f"[WATERMELON | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU!", flush=True)
-                        try:
-                            await target_message.add_reaction("🍉")
-                            print(f"[WATERMELON | Bot {bot_num}] ✅ NHẶT DƯA THÀNH CÔNG!", flush=True)
-                        except Exception as e:
-                            print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi react khi đã thấy dưa: {e}", flush=True)
-                        return # Exit after finding and reacting
-                # print(f"[WATERMELON | Bot {bot_num}] 😞 Không tìm thấy dưa hấu sau khi chờ.", flush=True)
-            except discord.errors.NotFound:
-                print(f"[WATERMELON | Bot {bot_num}] ⚠️ Message to check for watermelon was deleted.", flush=True)
+                ktb_channel_id = target_server.get('ktb_channel_id')
+                drop_message = await msg.channel.fetch_message(msg.id)
+                await drop_message.add_reaction(emoji_to_add)
+                await asyncio.sleep(1.2)
+                if ktb_channel_id:
+                    ktb_channel = bot.get_channel(int(ktb_channel_id))
+                    if ktb_channel:
+                        await ktb_channel.send("kt b")
+                print(f"[GRAB CTRL | Bot {bot_num}] ✅ NHẶT THẺ THÀNH CÔNG!", flush=True)
             except Exception as e:
-                print(f"[WATERMELON | Bot {bot_num}] ❌ Lỗi khi lấy tin nhắn để check dưa: {e}", flush=True)
-        asyncio.create_task(check_for_watermelon_patiently())
+                print(f"[GRAB CTRL | Bot {bot_num}] ❌ Lỗi khi thực hiện nhặt thẻ: {e}", flush=True)
+        
+        # Lên lịch để nhặt thẻ sau khoảng delay đã tính
+        asyncio.get_running_loop().call_later(reaction_delay, lambda: asyncio.create_task(grab_card_action()))
 
-
-# --- HỆ THỐNG REBOOT & HEALTH CHECK (Cập nhật cho discord.py-self) ---
+# --- HỆ THỐNG REBOOT & HEALTH CHECK (Không đổi) ---
 def check_bot_health(bot_data, bot_id):
     try:
         stats = bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0, 'last_check': 0})
@@ -340,7 +397,7 @@ def safe_reboot_bot(bot_id):
         print(f"[Safe Reboot] 🧹 Cleaning up old bot instance for {bot_name}", flush=True)
         old_bot_data = bot_manager.remove_bot(bot_id)
         if old_bot_data and old_bot_data.get('thread'):
-             old_bot_data['thread'].join(timeout=15) # Chờ luồng cũ kết thúc
+             old_bot_data['thread'].join(timeout=15)
 
         settings = bot_states["reboot_settings"].get(bot_id, {})
         failure_count = settings.get('failure_count', 0)
@@ -363,7 +420,6 @@ def safe_reboot_bot(bot_id):
              raise Exception("Không tìm thấy dữ liệu bot mới trong manager sau khi khởi động.")
         new_bot_data['thread'] = new_thread
 
-
         settings.update({
             'next_reboot_time': time.time() + settings.get('delay', 3600),
             'failure_count': 0, 'last_reboot_time': time.time()
@@ -379,7 +435,7 @@ def safe_reboot_bot(bot_id):
     finally:
         bot_manager.end_reboot(bot_id)
 
-# --- VÒNG LẶP NỀN (Cập nhật cho async) ---
+# --- VÒNG LẶP NỀN (Không đổi) ---
 def auto_reboot_loop():
     print("[Safe Reboot] 🚀 Khởi động luồng tự động reboot.", flush=True)
     last_global_reboot_time = 0
@@ -461,7 +517,7 @@ def auto_clan_drop_loop():
         stop_events["clan_drop"].wait(60)
     print("[Clan Drop] 🛑 Luồng tự động drop clan đã dừng.", flush=True)
 
-# --- HỆ THỐNG SPAM (TÍCH HỢP LẠI 2 CHẾ ĐỘ) ---
+# --- HỆ THỐNG SPAM (Đã sửa lỗi) ---
 def enhanced_spam_loop():
     print("[Enhanced Spam] 🚀 Khởi động hệ thống spam tối ưu (đa luồng)...", flush=True)
     
@@ -479,7 +535,6 @@ def enhanced_spam_loop():
                 time.sleep(5)
                 continue
 
-            # Logic xoay vòng server pair, đảm bảo quay lại từ đầu
             if server_pair_index * 2 >= len(active_spam_servers):
                 server_pair_index = 0
             
@@ -490,10 +545,8 @@ def enhanced_spam_loop():
                 server_pair_index = 0
                 continue
             
-            # print(f"[Enhanced Spam] 📤 Spam cặp #{server_pair_index + 1}: {[s.get('name', 'Unknown') for s in current_server_pair]}", flush=True)
-            
             bot_groups = []
-            bots_per_group = max(1, (len(active_bots) + max_threads - 1) // max_threads) # Improved grouping
+            bots_per_group = max(1, (len(active_bots) + max_threads - 1) // max_threads)
             for i in range(0, len(active_bots), bots_per_group):
                 bot_groups.append(active_bots[i:i + bots_per_group])
             
@@ -518,13 +571,9 @@ def enhanced_spam_loop():
                 thread = threading.Thread(target=group_spam_action, daemon=True)
                 spam_threads.append(thread)
                 thread.start()
-            
-            # <<< FIX 2: WAIT FOR ALL SPAM THREADS TO COMPLETE
-            # This is crucial. We must wait for the current spam wave to finish
-            # before starting the next one.
+
             for thread in spam_threads:
                 thread.join()
-            # >>> END OF FIX
             
             server_pair_index += 1
             time.sleep(delay_between_pairs)
@@ -547,7 +596,6 @@ def ultra_optimized_spam_loop():
             if not active_spam_servers or not active_bots:
                 time.sleep(5); continue
 
-            # Logic xoay vòng server pair, đảm bảo quay lại từ đầu
             if server_pair_index * 2 >= len(active_spam_servers):
                 server_pair_index = 0
             
@@ -557,8 +605,6 @@ def ultra_optimized_spam_loop():
             if not current_server_pair:
                 server_pair_index = 0
                 continue
-            
-            # print(f"[Ultra Spam] 📤 Spam cặp #{server_pair_index + 1}: {[s.get('name', 'Unknown') for s in current_server_pair]}", flush=True)
             
             server1 = current_server_pair[0]
             for bot_id in active_bots:
@@ -601,7 +647,7 @@ def health_monitoring_check():
     for bot_id, bot_data in all_bots:
         check_bot_health(bot_data, bot_id)
 
-# --- KHỞI TẠO BOT (Chuyển đổi sang discord.py-self & asyncio) ---
+# --- KHỞI TẠO BOT (Đã sửa lỗi) ---
 def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -625,22 +671,15 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
             print(f"[Bot] ❌ Error in on_ready for {bot_id_str}: {e}", flush=True)
     
     if is_main:
-        # <<< FIX 1: SOLVE THE CLOSURE BUG
-        # We pass `bot_identifier` as a default argument to the `on_message` function.
-        # This "captures" the correct value of the bot's number for each separate
-        # on_message handler, instead of all of them using the last value from the loop.
         @bot.event
         async def on_message(msg, bot_num=bot_identifier):
             try:
                 if msg.author.id == int(karuta_id) and "dropping" in msg.content.lower():
-                    # is_clan_drop is determined by whether the drop message contains any user mentions.
                     is_clan_drop = bool(msg.mentions) 
                     handler = handle_clan_drop if is_clan_drop else handle_grab
-                    # We now use the correctly captured `bot_num`.
                     await handler(bot, msg, bot_num)
             except Exception as e:
                 print(f"[Bot] ❌ Error in on_message for {bot_id_str} (Bot {bot_num}): {e}\n{traceback.format_exc()}", flush=True)
-        # >>> END OF FIX
     
     try:
         bot_manager.add_bot(bot_id_str, {'instance': bot, 'loop': loop, 'thread': threading.current_thread()})
@@ -657,7 +696,7 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
         loop.close()
 
 
-# --- FLASK APP & GIAO DIỆN (HTML không đổi, các route được giữ nguyên) ---
+# --- FLASK APP & GIAO DIỆN (Không đổi) ---
 app = Flask(__name__)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -739,7 +778,7 @@ HTML_TEMPLATE = """
                          <div>🔒 Safety Features: Health Checks, Exponential Backoff, Rate Limiting</div>
                          <div>⏱️ Min Reboot Interval: 10 minutes | Max Failures: 5 attempts</div>
                          <div>🎯 Reboot Strategy: Priority-based, one-at-a-time with cleanup delay</div>
-                         <div>🐛 BUG FIXES: ✅ Heart Thresholds | ✅ Watermelon Grab | ✅ Spam System Timing</div>
+                         <div>🐛 BUG FIXES: ✅ Logic Xung Đột Nhặt Thẻ & Dưa | ✅ Heart Thresholds | ✅ Spam System Timing</div>
                      </div>
                      <div id="bot-control-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));"></div>
                 </div>
@@ -833,13 +872,12 @@ HTML_TEMPLATE = """
                 const result = await response.json();
                 showStatusMessage(result.message, result.status !== 'success' ? 'error' : 'success');
                 if (result.status === 'success' && url !== '/api/save_settings') {
-                    // Debounce save settings call
                     if (window.saveTimeout) clearTimeout(window.saveTimeout);
                     window.saveTimeout = setTimeout(() => fetch('/api/save_settings', { method: 'POST' }), 500);
 
                     if (result.reload) { setTimeout(() => window.location.reload(), 500); }
                 }
-                setTimeout(fetchStatus, 100); // Fetch status quicker after an action
+                setTimeout(fetchStatus, 100);
                 return result;
             } catch (error) {
                 console.error('Error:', error);
@@ -1002,7 +1040,6 @@ def api_clan_drop_toggle():
         if not settings.get('channel_id') or not settings.get('ktb_channel_id'):
             settings['enabled'] = False
             return jsonify({'status': 'error', 'message': 'Clan Drop & KTB Channel ID phải được cài đặt.'})
-        # Run in a separate thread to avoid blocking
         threading.Thread(target=run_clan_drop_cycle).start()
         msg = "✅ Clan Auto Drop ENABLED & First cycle triggered."
     else:
@@ -1048,7 +1085,6 @@ def api_update_server_field():
     data = request.json
     server = find_server(data.get('server_id'))
     if not server: return jsonify({'status': 'error', 'message': 'Không tìm thấy server.'}), 404
-    # Update any field sent in the request
     for key, value in data.items():
         if key != 'server_id':
             server[key] = value
@@ -1145,9 +1181,9 @@ def status_endpoint():
     
     return jsonify({'bot_reboot_settings': reboot_settings_copy, 'bot_statuses': bot_statuses, 'server_start_time': server_start_time, 'servers': servers, 'watermelon_grab_states': bot_states["watermelon_grab"], 'auto_clan_drop_status': clan_drop_status})
 
-# --- MAIN EXECUTION (Cập nhật cho discord.py-self) ---
+# --- MAIN EXECUTION (Không đổi) ---
 if __name__ == "__main__":
-    print("🚀 Shadow Network Control - V3 (discord.py-self Edition) - FIXED VERSION Starting...", flush=True)
+    print("🚀 Shadow Network Control - V3 (discord.py-self Edition) - FINAL FIXED VERSION Starting...", flush=True)
     load_settings()
 
     print("🔌 Initializing bots using Bot Manager...", flush=True)
