@@ -1,4 +1,4 @@
-# PHIÊN BẢN CHUYỂN ĐỔI SANG DISCORD.PY-SELF - TÍCH HỢP LẠI SPAM ĐA LUỒNG - ĐÃ SỬA LỖI HOÀN CHỈNH
+# PHIÊN BẢN CHUYỂN ĐỔI SANG DISCORD.PY-SELF - TÍCH HỢP WEBHOOK VÀ SỬA LỖI HOÀN CHỈNH
 import discord, asyncio, threading, time, os, re, requests, json, random, traceback, uuid
 from flask import Flask, request, render_template_string, jsonify
 from dotenv import load_dotenv
@@ -17,12 +17,14 @@ acc_names = [f"Bot-{i:02d}" for i in range(1, 21)]
 servers = []
 bot_states = {
     "reboot_settings": {}, "active": {}, "watermelon_grab": {}, "health_stats": {},
-    "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}, "max_heart_thresholds": {}}
+    "auto_clan_drop": {"enabled": False, "channel_id": "", "ktb_channel_id": "", "last_cycle_start_time": 0, "cycle_interval": 1800, "bot_delay": 140, "heart_thresholds": {}, "max_heart_thresholds": {}},
+    "webhook_url": "", 
+    "webhook_threshold": 100
 }
 stop_events = {"reboot": threading.Event(), "clan_drop": threading.Event()}
 server_start_time = time.time()
 
-# --- QUẢN LÍ BOT THREAD-SAFE (Cải tiến cho Async) ---
+# --- QUẢN LÍ BOT THREAD-SAFE ---
 class ThreadSafeBotManager:
     def __init__(self):
         self._bots = {}
@@ -100,7 +102,7 @@ def send_message_from_sync(bot_id, channel_id, content):
         except Exception as e:
             print(f"[Async Send] ❌ Lỗi khi chờ kết quả gửi tin: {e}", flush=True)
 
-# --- LƯU & TẢI CÀI ĐẶT (Không đổi) ---
+# --- LƯU & TẢI CÀI ĐẶT ---
 def save_settings():
     api_key, bin_id = os.getenv("JSONBIN_API_KEY"), os.getenv("JSONBIN_BIN_ID")
     settings_data = {'servers': servers, 'bot_states': bot_states, 'last_save_time': time.time()}
@@ -126,12 +128,14 @@ def load_settings():
     api_key, bin_id = os.getenv("JSONBIN_API_KEY"), os.getenv("JSONBIN_BIN_ID")
     def load_from_dict(settings):
         try:
-            # Clear existing servers to prevent duplication on reload
             servers.clear()
             servers.extend(settings.get('servers', []))
-            for key, value in settings.get('bot_states', {}).items():
+            loaded_bot_states = settings.get('bot_states', {})
+            for key, value in loaded_bot_states.items():
                 if key in bot_states and isinstance(value, dict):
                     bot_states[key].update(value)
+                elif key not in bot_states: # Thêm cài đặt mới như webhook
+                    bot_states[key] = value
             return True
         except Exception as e:
             print(f"[Settings] ❌ Lỗi parse settings: {e}", flush=True)
@@ -156,7 +160,7 @@ def load_settings():
     except Exception as e:
         print(f"[Settings] ⚠️ Lỗi tải backup: {e}", flush=True)
 
-# --- HÀM TRỢ GIÚP (Không đổi) ---
+# --- HÀM TRỢ GIÚP ---
 def get_bot_name(bot_id_str):
     try:
         parts = bot_id_str.split('_')
@@ -167,7 +171,24 @@ def get_bot_name(bot_id_str):
     except (IndexError, ValueError):
         return bot_id_str.upper()
 
-# --- LOGIC GRAB CARD (Không đổi) ---
+# <<< TÍCH HỢP WEBHOOK BƯỚC 1 >>>
+# --- HÀM GỬI THÔNG BÁO WEBHOOK ---
+def send_webhook_notification(webhook_url, embed_data):
+    """Gửi một tin nhắn embed đẹp mắt đến Discord qua Webhook."""
+    if not webhook_url or not webhook_url.startswith("https://discord.com/api/webhooks/"):
+        return
+
+    payload = {
+        "username": "Karuta Alerter",
+        "avatar_url": "https://pin.it/28AJ7Qu9p",
+        "embeds": [embed_data]
+    }
+    try:
+        threading.Thread(target=requests.post, args=(webhook_url,), kwargs={'json': payload}).start()
+    except Exception as e:
+        print(f"[Webhook] ❌ Lỗi khi gửi thông báo: {e}")
+
+# --- LOGIC GRAB CARD ---
 async def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id, max_heart_threshold=99999):
     try:
         channel = bot.get_channel(int(channel_id))
@@ -211,7 +232,7 @@ async def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_thresho
                                 if ktb_channel: await ktb_channel.send("kt b")
                             print(f"[CARD GRAB | Bot {bot_num}] ✅ Đã grab và gửi kt b", flush=True)
                         except discord.errors.NotFound:
-                             print(f"[CARD GRAB | Bot {bot_num}] ⚠️ Drop message not found. Someone may have deleted it.", flush=True)
+                             print(f"[CARD GRAB | Bot {bot_num}] ⚠️ Drop message not found.", flush=True)
                         except Exception as e:
                             print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi grab: {e}", flush=True)
 
@@ -222,7 +243,7 @@ async def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_thresho
             print(f"[CARD GRAB | Bot {bot_num}] ❌ Lỗi đọc messages: {e}", flush=True)
     return False
 
-# --- LOGIC BOT (Cập nhật) ---
+# --- LOGIC BOT ---
 async def handle_clan_drop(bot, msg, bot_num):
     clan_settings = bot_states["auto_clan_drop"]
     if not (clan_settings.get("enabled") and msg.channel.id == int(clan_settings.get("channel_id", 0))):
@@ -232,8 +253,9 @@ async def handle_clan_drop(bot, msg, bot_num):
     max_threshold = clan_settings.get("max_heart_thresholds", {}).get(bot_id_str, 99999)
     asyncio.create_task(_find_and_select_card(bot, clan_settings["channel_id"], msg.id, threshold, bot_num, clan_settings["ktb_channel_id"], max_threshold))
 
+# <<< TÍCH HỢP WEBHOOK BƯỚC 3 >>>
 # ==============================================================================
-# <<< HÀM HANDLE_GRAB ĐÃ ĐƯỢC THAY THẾ HOÀN TOÀN BẰNG LOGIC MỚI >>>
+# <<< HÀM HANDLE_GRAB ĐÃ ĐƯỢC THAY THẾ HOÀN TOÀN BẰNG LOGIC NÂNG CẤP >>>
 # ==============================================================================
 async def handle_grab(bot, msg, bot_num):
     channel_id = msg.channel.id
@@ -248,12 +270,10 @@ async def handle_grab(bot, msg, bot_num):
     if not auto_grab_enabled and not watermelon_grab_enabled:
         return
 
-    # Biến để lưu thông tin thẻ cần nhặt
-    card_to_grab = None  # Sẽ có dạng (emoji, delay)
+    card_to_grab = None
+    card_info_for_webhook = {}
 
-    # --- Giai đoạn 1: Tìm kiếm thông tin thẻ (chạy trong khoảng 3.5 giây) ---
     if auto_grab_enabled:
-        #print(f"[GRAB CTRL | Bot {bot_num}] Bắt đầu tìm kiếm thẻ giá trị cao...", flush=True)
         start_time = time.monotonic()
         try:
             channel = bot.get_channel(int(channel_id))
@@ -282,25 +302,40 @@ async def handle_grab(bot, msg, bot_num):
                                 delay = bot_delays[max_index]
                                 
                                 card_to_grab = (emoji, delay)
+                                
+                                # Lấy thông tin card để chuẩn bị gửi webhook
+                                card_line = lines[max_index]
+                                card_name_match = re.search(r'\*\*`(.+?)`\*\*', card_line)
+                                series_name_match = re.search(r'\*\*(.+?)\*\*', card_line)
+                                card_name = card_name_match.group(1) if card_name_match else "Unknown Card"
+                                series_name = series_name_match.group(1) if series_name_match else "Unknown Series"
+
+                                card_info_for_webhook = {
+                                    "bot_name": get_bot_name(bot_id_str),
+                                    "card_name": card_name,
+                                    "series_name": series_name,
+                                    "hearts": max_num,
+                                    "server_name": msg.guild.name,
+                                    "channel_name": msg.channel.name,
+                                    "thumbnail_url": msg.embeds[0].image.url if msg.embeds and msg.embeds[0].image else None
+                                }
+
                                 print(f"[GRAB CTRL | Bot {bot_num}] Đã tìm thấy thẻ {max_num}♡. Sẽ nhặt sau {delay}s.", flush=True)
-                                raise StopAsyncIteration  # Thoát khỏi vòng lặp tìm kiếm
+                                raise StopAsyncIteration
                     if card_to_grab:
                         break
         except StopAsyncIteration:
-            pass  # Đây là cách để thoát khỏi cả hai vòng lặp một cách an toàn
+            pass
         except Exception as e:
             print(f"[GRAB CTRL | Bot {bot_num}] ❌ Lỗi khi tìm thẻ: {e}", flush=True)
         
-        # Tính toán thời gian đã dùng để tìm thẻ
         time_spent_searching = time.monotonic() - start_time
     else:
         time_spent_searching = 0.0
 
-    # --- Giai đoạn 2: Canh dưa hấu ---
     if watermelon_grab_enabled:
-        # Chờ cho đến khi đủ 5 giây kể từ lúc drop
         wait_for_watermelon_duration = max(0, 5.0 - time_spent_searching)
-        print(f"[GRAB CTRL | Bot {bot_num}] Chờ thêm {wait_for_watermelon_duration:.1f}s để canh dưa...", flush=True)
+        #print(f"[GRAB CTRL | Bot {bot_num}] Chờ thêm {wait_for_watermelon_duration:.1f}s để canh dưa...", flush=True)
         await asyncio.sleep(wait_for_watermelon_duration)
         
         try:
@@ -308,16 +343,34 @@ async def handle_grab(bot, msg, bot_num):
             for reaction in target_message.reactions:
                 emoji_name = reaction.emoji if isinstance(reaction.emoji, str) else reaction.emoji.name
                 if '🍉' in emoji_name:
-                    #print(f"[GRAB CTRL | Bot {bot_num}] 🎯 PHÁT HIỆN DƯA HẤU! Tiến hành nhặt.", flush=True)
                     await target_message.add_reaction("🍉")
                     print(f"[GRAB CTRL | Bot {bot_num}] ✅ NHẶT DƯA THÀNH CÔNG!", flush=True)
                     break 
         except Exception as e:
             print(f"[GRAB CTRL | Bot {bot_num}] ❌ Lỗi khi nhặt dưa: {e}", flush=True)
 
-    # --- Giai đoạn 3: Thực hiện nhặt thẻ (nếu đã tìm thấy) ---
     if card_to_grab:
         emoji_to_add, reaction_delay = card_to_grab
+        
+        # ### GỬI WEBHOOK NGAY KHI TÌM THẤY THẺ ###
+        webhook_url = bot_states.get('webhook_url')
+        webhook_threshold = bot_states.get('webhook_threshold', 100)
+        if webhook_url and card_info_for_webhook.get("hearts", 0) >= webhook_threshold:
+            print(f"[Webhook] Thẻ {card_info_for_webhook['hearts']}♡ đạt ngưỡng {webhook_threshold}♡. Đang gửi thông báo...", flush=True)
+            embed = {
+                "title": f"💎 Grab Alert: {card_info_for_webhook['card_name']}",
+                "description": f"**Series:** {card_info_for_webhook['series_name']}",
+                "color": 15258703,
+                "fields": [
+                    {"name": "Hearts", "value": f"**{card_info_for_webhook['hearts']}** ♡", "inline": True},
+                    {"name": "Grabber", "value": card_info_for_webhook['bot_name'], "inline": True},
+                    {"name": "Location", "value": f"{card_info_for_webhook['server_name']}\n#{card_info_for_webhook['channel_name']}", "inline": False}
+                ],
+                "thumbnail": {"url": card_info_for_webhook['thumbnail_url']} if card_info_for_webhook.get('thumbnail_url') else None,
+                "footer": {"text": f"Thông báo lúc: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"}
+            }
+            send_webhook_notification(webhook_url, embed)
+        # ###########################################
         
         async def grab_card_action():
             try:
@@ -333,10 +386,10 @@ async def handle_grab(bot, msg, bot_num):
             except Exception as e:
                 print(f"[GRAB CTRL | Bot {bot_num}] ❌ Lỗi khi thực hiện nhặt thẻ: {e}", flush=True)
         
-        # Lên lịch để nhặt thẻ sau khoảng delay đã tính
         asyncio.get_running_loop().call_later(reaction_delay, lambda: asyncio.create_task(grab_card_action()))
 
-# --- HỆ THỐNG REBOOT & HEALTH CHECK (Không đổi) ---
+
+# --- HỆ THỐNG REBOOT & HEALTH CHECK ---
 def check_bot_health(bot_data, bot_id):
     try:
         stats = bot_states["health_stats"].setdefault(bot_id, {'consecutive_failures': 0, 'last_check': 0})
@@ -435,7 +488,7 @@ def safe_reboot_bot(bot_id):
     finally:
         bot_manager.end_reboot(bot_id)
 
-# --- VÒNG LẶP NỀN (Không đổi) ---
+# --- VÒNG LẶP NỀN ---
 def auto_reboot_loop():
     print("[Safe Reboot] 🚀 Khởi động luồng tự động reboot.", flush=True)
     last_global_reboot_time = 0
@@ -517,7 +570,7 @@ def auto_clan_drop_loop():
         stop_events["clan_drop"].wait(60)
     print("[Clan Drop] 🛑 Luồng tự động drop clan đã dừng.", flush=True)
 
-# --- HỆ THỐNG SPAM (Đã sửa lỗi) ---
+# --- HỆ THỐNG SPAM ---
 def enhanced_spam_loop():
     print("[Enhanced Spam] 🚀 Khởi động hệ thống spam tối ưu (đa luồng)...", flush=True)
     
@@ -647,7 +700,7 @@ def health_monitoring_check():
     for bot_id, bot_data in all_bots:
         check_bot_health(bot_data, bot_id)
 
-# --- KHỞI TẠO BOT (Đã sửa lỗi) ---
+# --- KHỞI TẠO BOT ---
 def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -696,8 +749,9 @@ def initialize_and_run_bot(token, bot_id_str, is_main, ready_event=None):
         loop.close()
 
 
-# --- FLASK APP & GIAO DIỆN (Không đổi) ---
+# --- FLASK APP & GIAO DIỆN ---
 app = Flask(__name__)
+# <<< TÍCH HỢP WEBHOOK BƯỚC 2 >>>
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -815,6 +869,18 @@ HTML_TEMPLATE = """
             </div>
             <div class="panel global-settings-panel">
                 <h2><i class="fas fa-globe"></i> Global Event Settings</h2>
+                <div class="server-sub-panel">
+                    <h3><i class="fas fa-bell"></i> Webhook Notifications</h3>
+                    <div class="input-group">
+                        <label>Webhook URL</label>
+                        <input type="text" id="webhook-url" value="{{ bot_states.get('webhook_url', '') }}">
+                    </div>
+                    <div class="input-group">
+                        <label>Min Hearts Alert</label>
+                        <input type="number" id="webhook-threshold" value="{{ bot_states.get('webhook_threshold', 100) }}" style="width: 120px; flex-grow: 0;">
+                    </div>
+                    <button type="button" id="save-webhook-settings" class="btn">Save Notification Settings</button>
+                </div>
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-seedling"></i> Watermelon Grab (All Servers) - 🍉 FIXED!</h3>
                     <div id="global-watermelon-grid" class="bot-status-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));"></div>
@@ -1000,7 +1066,12 @@ HTML_TEMPLATE = """
                 'watermelon-toggle': () => postData('/api/watermelon_toggle', { node: button.dataset.node }),
                 'harvest-toggle': () => serverId && postData('/api/harvest_toggle', { server_id: serverId, node: button.dataset.node, threshold: serverPanel.querySelector(`.harvest-threshold[data-node="${button.dataset.node}"]`).value, max_threshold: serverPanel.querySelector(`.harvest-max-threshold[data-node="${button.dataset.node}"]`).value }),
                 'broadcast-toggle': () => serverId && postData('/api/broadcast_toggle', { server_id: serverId, message: serverPanel.querySelector('.spam-message').value }),
-                'btn-delete-server': () => serverId && confirm('Are you sure you want to delete this server?') && postData('/api/delete_server', { server_id: serverId })
+                'btn-delete-server': () => serverId && confirm('Are you sure you want to delete this server?') && postData('/api/delete_server', { server_id: serverId }),
+                'save-webhook-settings': () => {
+                    const url = document.getElementById('webhook-url').value;
+                    const threshold = parseInt(document.getElementById('webhook-threshold').value, 10);
+                    postData('/api/update_webhook_settings', { webhook_url: url, webhook_threshold: threshold });
+                },
             };
             for (const cls in actions) { if (button.classList.contains(cls) || button.id === cls) { e.preventDefault(); actions[cls](); return; } }
         });
@@ -1030,7 +1101,12 @@ def index():
     main_bots_info.sort(key=lambda x: x['id'])
     if "max_heart_thresholds" not in bot_states["auto_clan_drop"]:
         bot_states["auto_clan_drop"]["max_heart_thresholds"] = {}
-    return render_template_string(HTML_TEMPLATE, servers=sorted(servers, key=lambda s: s.get('name', '')), main_bots_info=main_bots_info, auto_clan_drop=bot_states["auto_clan_drop"])
+    return render_template_string(HTML_TEMPLATE, 
+        servers=sorted(servers, key=lambda s: s.get('name', '')), 
+        main_bots_info=main_bots_info, 
+        auto_clan_drop=bot_states["auto_clan_drop"],
+        bot_states=bot_states
+    )
 
 @app.route("/api/clan_drop_toggle", methods=['POST'])
 def api_clan_drop_toggle():
@@ -1152,6 +1228,15 @@ def api_toggle_bot_state():
         return jsonify({'status': 'success', 'message': f"Bot {get_bot_name(target)} đã được set thành {state_text}"})
     return jsonify({'status': 'error', 'message': 'Không tìm thấy target.'}), 404
 
+# <<< TÍCH HỢP WEBHOOK BƯỚC 2 (tiếp) >>>
+@app.route("/api/update_webhook_settings", methods=['POST'])
+def api_update_webhook_settings():
+    data = request.get_json()
+    bot_states['webhook_url'] = data.get('webhook_url', '').strip()
+    bot_states['webhook_threshold'] = data.get('webhook_threshold', 100)
+    save_settings()
+    return jsonify({'status': 'success', 'message': '💾 Webhook settings saved.'})
+
 @app.route("/api/save_settings", methods=['POST'])
 def api_save_settings(): save_settings(); return jsonify({'status': 'success', 'message': '💾 Settings saved.'})
 
@@ -1181,7 +1266,7 @@ def status_endpoint():
     
     return jsonify({'bot_reboot_settings': reboot_settings_copy, 'bot_statuses': bot_statuses, 'server_start_time': server_start_time, 'servers': servers, 'watermelon_grab_states': bot_states["watermelon_grab"], 'auto_clan_drop_status': clan_drop_status})
 
-# --- MAIN EXECUTION (Không đổi) ---
+# --- MAIN EXECUTION ---
 if __name__ == "__main__":
     print("🚀 Shadow Network Control - V3 (discord.py-self Edition) - FINAL FIXED VERSION Starting...", flush=True)
     load_settings()
