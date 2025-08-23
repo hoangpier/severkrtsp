@@ -1297,7 +1297,9 @@ if __name__ == "__main__":
 
     for t in bot_threads:
         t.start()
-        time.sleep(2)
+        delay = random.uniform(10, 15) 
+        print(f"[Bot Init] ⏳ Waiting for {delay:.2f} seconds before starting next bot...", flush=True)
+        time.sleep(delay)
 
     print("🔧 Starting background threads...", flush=True)
     threading.Thread(target=periodic_task, args=(1800, save_settings, "Save"), daemon=True).start()
