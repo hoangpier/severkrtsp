@@ -174,19 +174,36 @@ def get_bot_name(bot_id_str):
 # <<< TÍCH HỢP WEBHOOK BƯỚC 1 >>>
 # --- HÀM GỬI THÔNG BÁO WEBHOOK ---
 def send_webhook_notification(webhook_url, embed_data):
-    """Gửi một tin nhắn embed đẹp mắt đến Discord qua Webhook."""
+    """Gửi một tin nhắn embed đẹp mắt đến Discord qua Webhook, có kiểm tra thumbnail."""
     if not webhook_url or not webhook_url.startswith("https://discord.com/api/webhooks/"):
         return
 
+    # --- KIỂM TRA LINK THUMBNAIL ---
+    thumbnail = embed_data.get("thumbnail", {})
+    if thumbnail and thumbnail.get("url"):
+        # Kiểm tra xem link có kết thúc bằng đuôi ảnh phổ biến không
+        if not re.search(r'\.(png|jpg|jpeg|gif|webp)$', thumbnail["url"], re.IGNORECASE):
+            print(f"[Webhook] ⚠️ URL thumbnail không hợp lệ, loại bỏ để đảm bảo gửi được: {thumbnail['url']}", flush=True)
+            # Nếu link không hợp lệ, loại bỏ nó khỏi embed
+            del embed_data["thumbnail"]
+    # --------------------------------
+
     payload = {
         "username": "Karuta Alerter",
-        "avatar_url": "https://pin.it/28AJ7Qu9p",
+        "avatar_url": "https://i.imgur.com/vQ20ZgE.png",
         "embeds": [embed_data]
     }
-    try:
-        threading.Thread(target=requests.post, args=(webhook_url,), kwargs={'json': payload}).start()
-    except Exception as e:
-        print(f"[Webhook] ❌ Lỗi khi gửi thông báo: {e}")
+    
+    def send_request():
+        try:
+            response = requests.post(webhook_url, json=payload, timeout=10)
+            if response.status_code not in [200, 204]:
+                print(f"[Webhook] ❌ Gửi thông báo thất bại: {response.status_code} - {response.text}", flush=True)
+        except Exception as e:
+            print(f"[Webhook] ❌ Lỗi khi gửi thông báo: {e}", flush=True)
+
+    # Dùng threading để gửi webhook không làm chậm bot chính
+    threading.Thread(target=send_request).start()
 
 # --- LOGIC GRAB CARD ---
 async def _find_and_select_card(bot, channel_id, last_drop_msg_id, heart_threshold, bot_num, ktb_channel_id, max_heart_threshold=99999):
