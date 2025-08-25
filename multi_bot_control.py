@@ -868,6 +868,27 @@ HTML_TEMPLATE = """
                 <button type="button" id="clan-drop-save-btn" class="btn" style="margin-top: 20px;">Save Clan Drop Settings</button>
             </div>
             <div class="panel global-settings-panel">
+                <h2><i class="fas fa-globe-americas"></i> Global Soul Harvest Control</h2>
+                <div class="server-sub-panel">
+                    <h3><i class="fas fa-cogs"></i> Master Heart Thresholds</h3>
+                    <p style="color: var(--text-secondary); font-size: 0.9em; margin-bottom: 20px;">
+                        Chỉnh sửa giá trị tại đây và nhấn "Save & Apply" để cập nhật giới hạn nhặt thẻ cho bot tương ứng trên <strong>TẤT CẢ</strong> các server.
+                    </p>
+                    {% for bot in main_bots_info %}
+                    <div class="grab-section">
+                        <h3>{{ bot.name }}</h3>
+                        <div class="input-group">
+                            <input type="number" class="global-harvest-threshold heart-input" data-node="main_{{ bot.id }}" value="{{ (servers[0]['heart_threshold_' + bot.id|string]) if servers else 50 }}" min="0" max="99999" placeholder="Min ♡">
+                            <input type="number" class="global-harvest-max-threshold heart-input" data-node="main_{{ bot.id }}" value="{{ (servers[0]['max_heart_threshold_' + bot.id|string]) if servers else 99999 }}" min="0" max="99999" placeholder="Max ♡">
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <button type="button" id="save-global-harvest-settings" class="btn" style="margin-top: 20px; background-color: var(--necro-green);">
+                    <i class="fas fa-save"></i> Save & Apply to All Servers
+                </button>
+            </div>
+            <div class="panel global-settings-panel">
                 <h2><i class="fas fa-globe"></i> Global Event Settings</h2>
                 <div class="server-sub-panel">
                     <h3><i class="fas fa-bell"></i> Webhook Notifications</h3>
@@ -1072,6 +1093,22 @@ HTML_TEMPLATE = """
                     const threshold = parseInt(document.getElementById('webhook-threshold').value, 10);
                     postData('/api/update_webhook_settings', { webhook_url: url, webhook_threshold: threshold });
                 },
+                'save-global-harvest-settings': () => {
+                    const payload = {};
+                    document.querySelectorAll('.global-harvest-threshold').forEach(input => {
+                        const botId = input.dataset.node;
+                        if (!payload[botId]) payload[botId] = {};
+                        payload[botId]['min'] = parseInt(input.value, 10) || 50;
+                    });
+                    document.querySelectorAll('.global-harvest-max-threshold').forEach(input => {
+                        const botId = input.dataset.node;
+                        if (!payload[botId]) payload[botId] = {};
+                        payload[botId]['max'] = parseInt(input.value, 10) || 99999;
+                    });
+                    if (confirm('Bạn có chắc muốn áp dụng các cài đặt này cho TẤT CẢ các server không?')) {
+                        postData('/api/update_global_harvest_settings', { thresholds: payload });
+                    }
+                },
             };
             for (const cls in actions) { if (button.classList.contains(cls) || button.id === cls) { e.preventDefault(); actions[cls](); return; } }
         });
@@ -1228,6 +1265,37 @@ def api_toggle_bot_state():
         return jsonify({'status': 'success', 'message': f"Bot {get_bot_name(target)} đã được set thành {state_text}"})
     return jsonify({'status': 'error', 'message': 'Không tìm thấy target.'}), 404
 
+@app.route("/api/update_global_harvest_settings", methods=['POST'])
+def api_update_global_harvest_settings():
+    data = request.get_json()
+    thresholds_data = data.get('thresholds', {})
+    
+    if not thresholds_data:
+        return jsonify({'status': 'error', 'message': 'Không có dữ liệu để cập nhật.'}), 400
+
+    updated_count = 0
+    # Lặp qua tất cả server hiện có
+    for server in servers:
+        # Lặp qua từng bot và giá trị ngưỡng được gửi lên
+        for bot_id, new_thresholds in thresholds_data.items():
+            try:
+                # bot_id có dạng 'main_1', 'main_2',...
+                bot_num_str = bot_id.split('_')[1]
+                min_val = int(new_thresholds.get('min', 50))
+                max_val = int(new_thresholds.get('max', 99999))
+
+                # Cập nhật các key tương ứng trong từ điển của server
+                server[f'heart_threshold_{bot_num_str}'] = min_val
+                server[f'max_heart_threshold_{bot_num_str}'] = max_val
+            except (IndexError, ValueError) as e:
+                print(f"[Global Update] Lỗi xử lý cho bot_id {bot_id}: {e}")
+                continue # Bỏ qua nếu bot_id không hợp lệ
+        updated_count += 1
+        
+    save_settings() # Lưu lại thay đổi
+    
+    return jsonify({'status': 'success', 'message': f'✅ Đã cập nhật thành công cài đặt cho {len(thresholds_data)} bot trên {updated_count} server.', 'reload': True})
+
 # <<< TÍCH HỢP WEBHOOK BƯỚC 2 (tiếp) >>>
 @app.route("/api/update_webhook_settings", methods=['POST'])
 def api_update_webhook_settings():
@@ -1297,7 +1365,7 @@ if __name__ == "__main__":
 
     for t in bot_threads:
         t.start()
-        delay = random.uniform(10, 15) 
+        delay = random.uniform(3, 5) 
         print(f"[Bot Init] ⏳ Waiting for {delay:.2f} seconds before starting next bot...", flush=True)
         time.sleep(delay)
 
